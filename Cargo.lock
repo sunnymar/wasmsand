@@ -11,6 +11,10 @@ name = "echo-args-wasm"
 version = "0.1.0"
 
 [[package]]
+name = "false-cmd-wasm"
+version = "0.1.0"
+
+[[package]]
 name = "hello-wasm"
 version = "0.1.0"
 
@@ -97,6 +101,10 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "true-cmd-wasm"
+version = "0.1.0"
 
 [[package]]
 name = "unicode-ident"

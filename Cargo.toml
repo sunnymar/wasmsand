@@ -6,5 +6,7 @@ members = [
   "packages/test-fixtures/echo-args",
   "packages/test-fixtures/cat-stdin",
   "packages/test-fixtures/wc-bytes",
+  "packages/test-fixtures/true-cmd",
+  "packages/test-fixtures/false-cmd",
 ]
 resolver = "2"
