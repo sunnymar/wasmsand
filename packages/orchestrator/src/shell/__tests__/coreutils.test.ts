@@ -18,6 +18,7 @@ const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
   'ls', 'mkdir', 'rm', 'cp', 'mv', 'touch', 'tee', 'tr', 'cut',
   'basename', 'dirname', 'env', 'printf',
+  'find', 'sed', 'awk', 'jq',
   'true', 'false',
 ];
 
@@ -249,6 +250,114 @@ describe('Coreutils Integration', () => {
     });
   });
 
+  describe('find', () => {
+    it('finds files by name', async () => {
+      await runner.run('mkdir -p /home/user/docs');
+      vfs.writeFile('/home/user/docs/readme.txt', new TextEncoder().encode(''));
+      vfs.writeFile('/home/user/docs/notes.txt', new TextEncoder().encode(''));
+      vfs.writeFile('/home/user/docs/image.png', new TextEncoder().encode(''));
+      const result = await runner.run('find /home/user/docs -name *.txt');
+      expect(result.stdout).toContain('readme.txt');
+      expect(result.stdout).toContain('notes.txt');
+      expect(result.stdout).not.toContain('image.png');
+    });
+
+    it('finds directories with -type d', async () => {
+      await runner.run('mkdir -p /home/user/project/src');
+      vfs.writeFile('/home/user/project/src/main.rs', new TextEncoder().encode(''));
+      const result = await runner.run('find /home/user/project -type d');
+      expect(result.stdout).toContain('/home/user/project');
+      expect(result.stdout).toContain('src');
+    });
+  });
+
+  describe('sed', () => {
+    it('performs substitution', async () => {
+      const result = await runner.run('echo hello world | sed s/hello/goodbye/');
+      expect(result.stdout.trim()).toBe('goodbye world');
+    });
+
+    it('performs global substitution', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('aaa bbb aaa\n'));
+      const result = await runner.run('sed s/aaa/xxx/g /home/user/data.txt');
+      expect(result.stdout.trim()).toBe('xxx bbb xxx');
+    });
+
+    it('deletes matching lines', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('keep\ndelete this\nkeep too\n'));
+      const result = await runner.run('sed /delete/d /home/user/data.txt');
+      expect(result.stdout).toBe('keep\nkeep too\n');
+    });
+  });
+
+  describe('awk', () => {
+    it('prints specific field', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('alice 30\nbob 25\n'));
+      const result = await runner.run("awk '{print $1}' /home/user/data.txt");
+      expect(result.stdout).toBe('alice\nbob\n');
+    });
+
+    it('supports -F flag for field separator', async () => {
+      vfs.writeFile('/home/user/data.csv', new TextEncoder().encode('alice,30\nbob,25\n'));
+      const result = await runner.run("awk -F , '{print $2}' /home/user/data.csv");
+      expect(result.stdout).toBe('30\n25\n');
+    });
+
+    it('supports pattern matching', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('alice 30\nbob 25\ncharlie 35\n'));
+      const result = await runner.run("awk '$2 > 28 {print $1}' /home/user/data.txt");
+      expect(result.stdout).toBe('alice\ncharlie\n');
+    });
+
+    it('supports BEGIN/END blocks', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('10\n20\n30\n'));
+      const result = await runner.run("awk 'BEGIN {sum=0} {sum += $1} END {print sum}' /home/user/data.txt");
+      expect(result.stdout.trim()).toBe('60');
+    });
+
+    it('works in a pipeline', async () => {
+      const result = await runner.run("echo hello world | awk '{print $2}'");
+      expect(result.stdout.trim()).toBe('world');
+    });
+  });
+
+  describe('jq', () => {
+    it('extracts a field', async () => {
+      const result = await runner.run('echo \'{"name":"test","value":42}\' | jq .name');
+      expect(result.stdout.trim()).toBe('"test"');
+    });
+
+    it('extracts nested field', async () => {
+      const result = await runner.run('echo \'{"a":{"b":123}}\' | jq .a.b');
+      expect(result.stdout.trim()).toBe('123');
+    });
+
+    it('filters array with select', async () => {
+      vfs.writeFile('/home/user/data.json', new TextEncoder().encode('[{"n":1},{"n":2},{"n":3}]'));
+      const result = await runner.run('cat /home/user/data.json | jq ".[] | select(.n > 1) | .n"');
+      const lines = result.stdout.trim().split('\n');
+      expect(lines).toEqual(['2', '3']);
+    });
+
+    it('supports keys', async () => {
+      const result = await runner.run('echo \'{"b":2,"a":1}\' | jq keys');
+      expect(result.stdout.trim()).toContain('"a"');
+      expect(result.stdout.trim()).toContain('"b"');
+    });
+
+    it('supports map', async () => {
+      const result = await runner.run('echo \'[1,2,3]\' | jq "map(. + 10)"');
+      expect(result.stdout).toContain('11');
+      expect(result.stdout).toContain('12');
+      expect(result.stdout).toContain('13');
+    });
+
+    it('supports raw output with -r', async () => {
+      const result = await runner.run('echo \'{"name":"test"}\' | jq -r .name');
+      expect(result.stdout.trim()).toBe('test');
+    });
+  });
+
   describe('pipelines with real tools', () => {
     it('sort | uniq pipeline', async () => {
       vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('b\na\nb\nc\na\n'));
@@ -266,6 +375,17 @@ describe('Coreutils Integration', () => {
       vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('cherry\napple\nbanana\ndate\nelderberry\n'));
       const result = await runner.run('cat /home/user/data.txt | sort | head -n 3');
       expect(result.stdout).toBe('apple\nbanana\ncherry\n');
+    });
+
+    it('echo | sed | awk pipeline', async () => {
+      const result = await runner.run("echo hello-world | sed s/hello-// | awk '{print $1}'");
+      expect(result.stdout.trim()).toBe('world');
+    });
+
+    it('cat | awk | sort pipeline', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('charlie 35\nalice 30\nbob 25\n'));
+      const result = await runner.run("cat /home/user/data.txt | awk '{print $1}' | sort");
+      expect(result.stdout).toBe('alice\nbob\ncharlie\n');
     });
   });
 });
