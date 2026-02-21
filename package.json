@@ -1,0 +1,11 @@
+{
+  "name": "wasmsand",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "vitest run",
+    "build": "npm run build:rust && npm run build:ts",
+    "build:ts": "tsup --config packages/orchestrator/tsup.config.ts",
+    "build:rust": "cargo build --target wasm32-wasip1 --release"
+  }
+}

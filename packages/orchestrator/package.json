@@ -1,0 +1,16 @@
+{
+  "name": "@wasmsand/orchestrator",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsup"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "vitest": "^3.0",
+    "tsup": "^8.0"
+  }
+}
