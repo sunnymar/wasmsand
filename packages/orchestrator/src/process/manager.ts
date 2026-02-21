@@ -46,11 +46,18 @@ export class ProcessManager {
     const wasmPath = this.resolveTool(command);
     const module = await this.loadModule(wasmPath);
 
+    // Collect stdin data: prefer explicit stdinData, otherwise drain the stdin pipe
+    let stdinData: Uint8Array | undefined = opts.stdinData;
+    if (stdinData === undefined && opts.stdin !== undefined) {
+      stdinData = drainReadEnd(opts.stdin);
+    }
+
     const host = new WasiHost({
       vfs: this.vfs,
       args: [command, ...opts.args],
       env: opts.env,
       preopens: { '/': '/' },
+      stdin: stdinData,
     });
 
     const instance = await this.adapter.instantiate(module, host.getImports());
@@ -82,4 +89,37 @@ export class ProcessManager {
     this.moduleCache.set(wasmPath, module);
     return module;
   }
+}
+
+/** Drain all available bytes from a pipe read end into a single Uint8Array. */
+function drainReadEnd(readEnd: { read(buf: Uint8Array): number }): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  const tmp = new Uint8Array(4096);
+
+  for (;;) {
+    const n = readEnd.read(tmp);
+    if (n === 0) {
+      break;
+    }
+    chunks.push(tmp.slice(0, n));
+  }
+
+  if (chunks.length === 0) {
+    return new Uint8Array(0);
+  }
+  if (chunks.length === 1) {
+    return chunks[0];
+  }
+
+  let totalLen = 0;
+  for (const chunk of chunks) {
+    totalLen += chunk.byteLength;
+  }
+  const result = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }

@@ -47,6 +47,7 @@ export interface WasiHostOptions {
   args: string[];
   env: Record<string, string>;
   preopens: Record<string, string>;
+  stdin?: Uint8Array;
 }
 
 interface PreopenEntry {
@@ -109,6 +110,8 @@ export class WasiHost {
   private memory: WebAssembly.Memory | null = null;
   private stdoutBuf: Uint8Array[] = [];
   private stderrBuf: Uint8Array[] = [];
+  private stdinData: Uint8Array | undefined;
+  private stdinOffset = 0;
   private exitCode: number | null = null;
   private encoder = new TextEncoder();
   private decoder = new TextDecoder();
@@ -123,6 +126,7 @@ export class WasiHost {
     this.envPairs = Object.entries(options.env).map(
       ([k, v]) => `${k}=${v}`,
     );
+    this.stdinData = options.stdin;
     this.preopens = [];
 
     // Set up preopened directories starting at fd 3.
@@ -382,8 +386,20 @@ export class WasiHost {
 
     for (const iov of iovecs) {
       if (fd === 0) {
-        // stdin: no input available in sandbox mode
-        break;
+        if (this.stdinData === undefined || this.stdinOffset >= this.stdinData.byteLength) {
+          // No stdin data or all consumed: return EOF
+          break;
+        }
+        const remaining = this.stdinData.byteLength - this.stdinOffset;
+        const toRead = Math.min(iov.len, remaining);
+        const bytes = this.getBytes();
+        bytes.set(this.stdinData.subarray(this.stdinOffset, this.stdinOffset + toRead), iov.buf);
+        this.stdinOffset += toRead;
+        totalRead += toRead;
+        if (toRead < iov.len) {
+          break; // EOF reached mid-iovec
+        }
+        continue;
       }
 
       try {

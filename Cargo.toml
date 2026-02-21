@@ -4,5 +4,7 @@ members = [
   "packages/coreutils",
   "packages/test-fixtures/hello",
   "packages/test-fixtures/echo-args",
+  "packages/test-fixtures/cat-stdin",
+  "packages/test-fixtures/wc-bytes",
 ]
 resolver = "2"

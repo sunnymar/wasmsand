@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "cat-stdin-wasm"
+version = "0.1.0"
+
+[[package]]
 name = "echo-args-wasm"
 version = "0.1.0"
 
@@ -16,4 +20,8 @@ version = "0.1.0"
 
 [[package]]
 name = "wasmsand-shell"
+version = "0.1.0"
+
+[[package]]
+name = "wc-bytes-wasm"
 version = "0.1.0"

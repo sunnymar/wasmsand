@@ -10,6 +10,7 @@ export interface SpawnOptions {
   args: string[];
   env: Record<string, string>;
   stdin?: { read(buf: Uint8Array): number };
+  stdinData?: Uint8Array;
   cwd?: string;
 }
 
