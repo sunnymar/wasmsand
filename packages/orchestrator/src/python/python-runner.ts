@@ -49,7 +49,15 @@ export class PythonRunner {
 
     try {
       const monty = new Monty(code, { externalFunctions: EXTERNAL_FUNCTIONS });
-      let progress = monty.start({ printCallback });
+      let progress = monty.start({
+        printCallback,
+        limits: {
+          maxDurationSecs: 5,
+          maxAllocations: 1_000_000,
+          maxMemory: 64 * 1024 * 1024, // 64MB
+          maxRecursionDepth: 500,
+        },
+      });
 
       while (progress instanceof MontySnapshot) {
         const fnName = progress.functionName;

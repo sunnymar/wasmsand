@@ -129,4 +129,34 @@ describe('PythonRunner', () => {
       expect(result.stdout).toBe('True\nFalse\n');
     });
   });
+
+  describe('stdin piping', () => {
+    it('reads stdin data', async () => {
+      const result = await runner.run({
+        args: ['-c', 'data = read_stdin()\nprint(data.strip())'],
+        env: {},
+        stdinData: new TextEncoder().encode('piped input\n'),
+      });
+      expect(result.stdout).toBe('piped input\n');
+    });
+
+    it('handles empty stdin', async () => {
+      const result = await runner.run({
+        args: ['-c', 'data = read_stdin()\nprint(len(data))'],
+        env: {},
+      });
+      expect(result.stdout).toBe('0\n');
+    });
+  });
+
+  describe('resource limits', () => {
+    it('terminates infinite loops', { timeout: 10000 }, async () => {
+      const result = await runner.run({
+        args: ['-c', 'while True:\n  pass'],
+        env: {},
+      });
+      // Should fail with a resource limit error, not hang
+      expect(result.exitCode).not.toBe(0);
+    });
+  });
 });
