@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "echo-args-wasm"
+version = "0.1.0"
+
+[[package]]
+name = "hello-wasm"
+version = "0.1.0"
+
+[[package]]
 name = "wasmsand-coreutils"
 version = "0.1.0"
 

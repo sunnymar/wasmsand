@@ -158,6 +158,31 @@ export class WasiHost {
     return this.exitCode;
   }
 
+  /**
+   * Run a WASI instance's _start export.
+   *
+   * Handles the two possible outcomes:
+   * - _start returns normally (exit code 0)
+   * - _start calls proc_exit which throws WasiExitError
+   *
+   * Non-zero exit codes are returned without throwing. Other errors
+   * (e.g. traps) are re-thrown to the caller.
+   */
+  start(instance: WebAssembly.Instance): number {
+    this.setMemory(instance.exports.memory as WebAssembly.Memory);
+    try {
+      (instance.exports._start as Function)();
+      // Normal return from _start means exit code 0
+      this.exitCode = 0;
+      return 0;
+    } catch (e: unknown) {
+      if (e instanceof WasiExitError) {
+        return e.code;
+      }
+      throw e;
+    }
+  }
+
   /** Return the import object to pass to WebAssembly.instantiate(). */
   getImports(): { wasi_snapshot_preview1: Record<string, Function> } {
     return {

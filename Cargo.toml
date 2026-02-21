@@ -1,3 +1,8 @@
 [workspace]
-members = ["packages/shell", "packages/coreutils"]
+members = [
+  "packages/shell",
+  "packages/coreutils",
+  "packages/test-fixtures/hello",
+  "packages/test-fixtures/echo-args",
+]
 resolver = "2"
