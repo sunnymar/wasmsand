@@ -1,7 +1,9 @@
+use serde::Serialize;
+
 use crate::token::RedirectType;
 
 /// A word that may contain variable references or command substitutions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum WordPart {
     Literal(String),
     Variable(String),
@@ -9,7 +11,7 @@ pub enum WordPart {
 }
 
 /// A shell word composed of one or more parts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Word {
     pub parts: Vec<WordPart>,
 }
@@ -29,20 +31,20 @@ impl Word {
 }
 
 /// An I/O redirection attached to a command.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Redirect {
     pub redirect_type: RedirectType,
 }
 
 /// A variable assignment preceding a command (e.g. `FOO=bar cmd`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Assignment {
     pub name: String,
     pub value: String,
 }
 
 /// The operator joining two commands in a list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ListOp {
     And, // &&
     Or,  // ||
@@ -50,7 +52,7 @@ pub enum ListOp {
 }
 
 /// A shell command AST node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Command {
     /// A simple command: words + redirects + optional assignments.
     Simple {

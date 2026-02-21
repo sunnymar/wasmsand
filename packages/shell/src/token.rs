@@ -39,7 +39,7 @@ pub enum Token {
 }
 
 /// The kind of I/O redirection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum RedirectType {
     /// > file
     StdoutOverwrite(String),
