@@ -14,7 +14,7 @@ cp "$SHELL_FIXTURES/wasmsand-shell.wasm" "$OUT/"
 cp "$FIXTURES/python3.wasm" "$OUT/"
 
 # Coreutils
-for tool in cat echo head tail wc sort uniq grep ls mkdir rm cp mv touch tee tr cut basename dirname env printf find sed awk jq; do
+for tool in cat echo head tail wc sort uniq grep ls mkdir rm cp mv touch tee tr cut basename dirname env printf find sed awk jq uname whoami id printenv yes rmdir sleep seq ln readlink realpath mktemp tac xargs expr diff; do
   cp "$FIXTURES/${tool}.wasm" "$OUT/"
 done
 

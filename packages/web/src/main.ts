@@ -8,6 +8,9 @@ const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
   'ls', 'mkdir', 'rm', 'cp', 'mv', 'touch', 'tee', 'tr', 'cut',
   'basename', 'dirname', 'env', 'printf', 'find', 'sed', 'awk', 'jq',
+  'uname', 'whoami', 'id', 'printenv', 'yes', 'rmdir', 'sleep', 'seq',
+  'ln', 'readlink', 'realpath', 'mktemp', 'tac',
+  'xargs', 'expr', 'diff',
 ];
 
 /** Map tool name to wasm filename. */
