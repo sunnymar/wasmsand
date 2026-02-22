@@ -14,4 +14,11 @@ export interface PlatformAdapter {
     module: WebAssembly.Module,
     imports: WebAssembly.Imports,
   ): Promise<WebAssembly.Instance>;
+
+  /**
+   * Scan a directory (Node) or URL base (browser) for .wasm tool binaries.
+   * Returns a map of tool name → wasm path/URL.
+   * Excludes shell parser and python binaries (registered separately).
+   */
+  scanTools(wasmDir: string): Promise<Map<string, string>>;
 }
