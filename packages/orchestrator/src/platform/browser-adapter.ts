@@ -17,6 +17,9 @@ export class BrowserAdapter implements PlatformAdapter {
     module: WebAssembly.Module,
     imports: WebAssembly.Imports,
   ): Promise<WebAssembly.Instance> {
-    return new WebAssembly.Instance(module, imports);
+    // Must use async instantiate — sync `new WebAssembly.Instance()` is
+    // disallowed on the main thread for modules larger than 8 MB.
+    const result = await WebAssembly.instantiate(module, imports);
+    return result;
   }
 }
