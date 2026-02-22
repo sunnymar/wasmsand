@@ -116,16 +116,59 @@ fn file_type_char(metadata: &fs::Metadata) -> char {
     }
 }
 
-fn permissions_str(metadata: &fs::Metadata) -> String {
+/// Read permissions from the WASI filestat dev field for a given path.
+/// Our WASI host encodes Unix permissions in the dev field.
+fn permissions_str_for_path(path: &Path, metadata: &fs::Metadata) -> String {
     let ft = file_type_char(metadata);
-    // WASI doesn't expose Unix permissions in a portable way,
-    // so we show a placeholder based on file type.
-    let perms = if metadata.is_dir() {
-        "rwxr-xr-x"
-    } else {
-        "rw-r--r--"
-    };
+    let mode = read_wasi_permissions(path, metadata);
+    let perms = format_permissions(mode);
     format!("{}{}", ft, perms)
+}
+
+fn read_wasi_permissions(path: &Path, metadata: &fs::Metadata) -> u32 {
+    // Try to read WASI filestat which has permissions in the dev field.
+    // The dev field is the first u64 in the filestat structure.
+    #[cfg(target_os = "wasi")]
+    {
+        if let Ok(path_str) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
+            // Use path_filestat_get via raw WASI call
+            let mut buf = [0u8; 64];
+            let ret = unsafe {
+                // fd=3 is the preopened root dir, flags=1 for follow symlinks
+                wasi_path_filestat_get(3, 1, path_str.as_ptr() as *const u8, path_str.as_bytes().len(), buf.as_mut_ptr())
+            };
+            if ret == 0 {
+                // dev is the first u64 (little-endian)
+                let dev = u64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]]);
+                if dev > 0 && dev <= 0o7777 {
+                    return dev as u32;
+                }
+            }
+        }
+    }
+    // Fallback: default permissions based on file type
+    let _ = path; // suppress unused warning on non-wasi
+    if metadata.is_dir() { 0o755 } else { 0o644 }
+}
+
+#[cfg(target_os = "wasi")]
+#[link(wasm_import_module = "wasi_snapshot_preview1")]
+extern "C" {
+    #[link_name = "path_filestat_get"]
+    fn wasi_path_filestat_get(fd: i32, flags: i32, path: *const u8, path_len: usize, buf: *mut u8) -> i32;
+}
+
+fn format_permissions(mode: u32) -> String {
+    let mut s = String::with_capacity(9);
+    let flags = [
+        (0o400, 'r'), (0o200, 'w'), (0o100, 'x'),
+        (0o040, 'r'), (0o020, 'w'), (0o010, 'x'),
+        (0o004, 'r'), (0o002, 'w'), (0o001, 'x'),
+    ];
+    for &(bit, ch) in &flags {
+        s.push(if mode & bit != 0 { ch } else { '-' });
+    }
+    s
 }
 
 fn list_dir(path: &Path, opts: &Options, show_header: bool) -> i32 {
@@ -168,7 +211,8 @@ fn list_dir(path: &Path, opts: &Options, show_header: bool) -> i32 {
 
     if opts.long {
         for (name, metadata) in &names {
-            let perms = permissions_str(metadata);
+            let entry_path = path.join(name);
+            let perms = permissions_str_for_path(&entry_path, metadata);
             let size = format_size(metadata.len());
             let time = format_time(metadata.modified());
             println!("{} {} {} {}", perms, size, time, name);
@@ -218,7 +262,7 @@ fn main() {
         if path.is_file() {
             if opts.long {
                 let metadata = fs::metadata(path).unwrap();
-                let perms = permissions_str(&metadata);
+                let perms = permissions_str_for_path(path, &metadata);
                 let size = format_size(metadata.len());
                 let time = format_time(metadata.modified());
                 println!("{} {} {} {}", perms, size, time, p);

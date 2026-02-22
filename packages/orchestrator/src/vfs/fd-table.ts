@@ -159,6 +159,11 @@ export class FdTable {
     return this.entries.has(fd);
   }
 
+  /** Return the VFS path for an open fd, or undefined if not open. */
+  getPath(fd: number): string | undefined {
+    return this.entries.get(fd)?.path;
+  }
+
   /** Clone the entire fd table (for fork simulation). Returns a new independent table. */
   clone(): FdTable {
     const cloned = new FdTable(this.vfs);

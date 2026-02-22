@@ -28,6 +28,16 @@ export class ProcessManager {
     this.registry.set(name, wasmPath);
   }
 
+  /** Return the names of all registered tools. */
+  getRegisteredTools(): string[] {
+    return Array.from(this.registry.keys());
+  }
+
+  /** Check if a tool name is registered. */
+  hasTool(name: string): boolean {
+    return this.registry.has(name);
+  }
+
   /** Resolve a tool name to its .wasm path, or throw if not registered. */
   resolveTool(name: string): string {
     const path = this.registry.get(name);

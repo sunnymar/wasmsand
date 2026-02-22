@@ -13,4 +13,5 @@ rustpython = { git = "https://github.com/RustPython/RustPython", default-feature
   "importlib",
   "stdio",
   "encodings",
+  "host_env",
 ] }

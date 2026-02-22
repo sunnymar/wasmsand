@@ -335,6 +335,12 @@ export class VFS {
     parent.children.set(name, createSymlinkInode(target));
   }
 
+  chmod(path: string, mode: number): void {
+    const inode = this.resolve(path);
+    inode.metadata.permissions = mode;
+    inode.metadata.ctime = new Date();
+  }
+
   readlink(path: string): string {
     const inode = this.resolve(path, false);
 

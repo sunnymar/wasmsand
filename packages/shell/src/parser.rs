@@ -96,23 +96,21 @@ impl Parser {
         self.parse_list()
     }
 
-    /// list = pipeline ((AND | OR | SEMI) pipeline)*
+    /// list = pipeline ((AND | OR | SEMI | NEWLINE) pipeline)*
     ///
-    /// Left-associative. Semicolons followed by a list terminator or end-of-input
-    /// are trailing separators, not sequence operators.
+    /// Left-associative. Semicolons and newlines followed by a list terminator
+    /// or end-of-input are trailing separators, not sequence operators.
     fn parse_list(&mut self) -> Command {
         let mut left = self.parse_pipeline();
 
         loop {
-            self.skip_newlines();
-
             let op = match self.peek() {
                 Some(Token::And) => ListOp::And,
                 Some(Token::Or) => ListOp::Or,
-                Some(Token::Semi) => {
+                Some(Token::Semi) | Some(Token::Newline) => {
                     // Peek ahead: if the next meaningful token is a terminator
-                    // or EOF, this semicolon is just a trailing separator.
-                    self.advance(); // consume the semicolon
+                    // or EOF, this semicolon/newline is just a trailing separator.
+                    self.advance(); // consume the semicolon/newline
                     self.skip_newlines();
                     if self.at_list_terminator() || !self.at_command_start() {
                         break;

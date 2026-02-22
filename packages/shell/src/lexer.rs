@@ -282,17 +282,75 @@ fn read_double_quoted(chars: &[char], pos: &mut usize) -> String {
 }
 
 /// Read an unquoted word, handling backslash escapes.
+///
+/// When the word contains `=` (making it an assignment like `X=value`), the
+/// value portion may include `$(cmd)` or `$VAR` which should be kept inline
+/// so that `classify_word` produces a single `Assignment` token.
 fn read_word(chars: &[char], pos: &mut usize) -> String {
     let mut word = String::new();
+    let mut seen_eq = false;
     while *pos < chars.len() {
         let ch = chars[*pos];
 
-        // Stop at word boundaries
+        // Stop at word boundaries (but handle $ specially after = for assignments)
         if ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '|' || ch == '&'
-            || ch == '>' || ch == '<' || ch == '(' || ch == ')' || ch == '$' || ch == '`'
+            || ch == '>' || ch == '<' || ch == '(' || ch == ')'
             || ch == '\'' || ch == '"'
         {
             break;
+        }
+
+        // Track = for assignment detection
+        if ch == '=' && !seen_eq {
+            seen_eq = true;
+            word.push(ch);
+            *pos += 1;
+            continue;
+        }
+
+        // $ and ` are word boundaries unless we're in the value of an assignment
+        if (ch == '$' || ch == '`') && !seen_eq {
+            break;
+        }
+
+        // If in assignment value and we see $( or $VAR, include inline
+        if ch == '$' && seen_eq {
+            if *pos + 1 < chars.len() && chars[*pos + 1] == '(' {
+                // Include $(cmd) in the word
+                word.push('$');
+                word.push('(');
+                *pos += 2;
+                let content = read_balanced_parens(chars, pos);
+                word.push_str(&content);
+                word.push(')');
+                continue;
+            }
+            if *pos + 1 < chars.len() && chars[*pos + 1] == '{' {
+                // Include ${VAR} in the word
+                word.push('$');
+                word.push('{');
+                *pos += 2;
+                let content = read_until_char(chars, pos, '}');
+                word.push_str(&content);
+                word.push('}');
+                continue;
+            }
+            // Simple $VAR
+            word.push('$');
+            *pos += 1;
+            let var_name = read_var_name(chars, pos);
+            word.push_str(&var_name);
+            continue;
+        }
+
+        // Backtick in assignment value
+        if ch == '`' && seen_eq {
+            word.push('`');
+            *pos += 1;
+            let content = read_until_char(chars, pos, '`');
+            word.push_str(&content);
+            word.push('`');
+            continue;
         }
 
         // Backslash escape

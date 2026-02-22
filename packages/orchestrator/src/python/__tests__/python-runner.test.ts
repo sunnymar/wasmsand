@@ -91,14 +91,7 @@ describe('PythonRunner', () => {
   });
 
   describe('VFS file I/O via standard Python', () => {
-    // RustPython WASI does not support Python-level open() for file I/O.
-    // The WASI host correctly implements path_open / fd_read / fd_write,
-    // but RustPython's io module cannot obtain a FileIO object on this
-    // platform ("Couldn't get FileIO, io.open likely isn't supported").
-    // The os module also fails to load ("no os specific module found").
-    // These tests are skipped until RustPython WASI adds FileIO support.
-
-    it.skip('reads a file from VFS', async () => {
+    it('reads a file from VFS', async () => {
       vfs.writeFile(
         '/home/user/data.txt',
         new TextEncoder().encode('file content'),
@@ -110,7 +103,7 @@ describe('PythonRunner', () => {
       expect(result.stdout).toBe('file content');
     });
 
-    it.skip('writes a file to VFS', async () => {
+    it('writes a file to VFS', async () => {
       const result = await runner.run({
         args: ['-c', 'open("/home/user/out.txt", "w").write("from python")'],
         env: {},
@@ -121,7 +114,7 @@ describe('PythonRunner', () => {
       );
     });
 
-    it.skip('lists directory contents', async () => {
+    it('lists directory contents', async () => {
       vfs.writeFile('/home/user/a.txt', new TextEncoder().encode(''));
       vfs.writeFile('/home/user/b.txt', new TextEncoder().encode(''));
       const result = await runner.run({
@@ -135,7 +128,7 @@ describe('PythonRunner', () => {
       expect(result.stdout).toContain('b.txt');
     });
 
-    it.skip('checks file existence', async () => {
+    it('checks file existence', async () => {
       vfs.writeFile('/home/user/exists.txt', new TextEncoder().encode(''));
       const result = await runner.run({
         args: [
@@ -149,21 +142,9 @@ describe('PythonRunner', () => {
   });
 
   describe('stdin piping', () => {
-    // RustPython WASI uses _SandboxStdio for sys.stdin, which supports
-    // readline() and input() but not read(). Tests use input() instead.
-
-    it('reads stdin line via input()', async () => {
+    it('reads stdin data', async () => {
       const result = await runner.run({
-        args: ['-c', 'line = input()\nprint(line)'],
-        env: {},
-        stdinData: new TextEncoder().encode('piped input\n'),
-      });
-      expect(result.stdout).toBe('piped input\n');
-    });
-
-    it('reads stdin via sys.stdin.readline()', async () => {
-      const result = await runner.run({
-        args: ['-c', 'import sys\nline = sys.stdin.readline()\nprint(line.strip())'],
+        args: ['-c', 'import sys\ndata = sys.stdin.read()\nprint(data.strip())'],
         env: {},
         stdinData: new TextEncoder().encode('piped input\n'),
       });
@@ -172,7 +153,7 @@ describe('PythonRunner', () => {
 
     it('handles empty stdin', async () => {
       const result = await runner.run({
-        args: ['-c', 'import sys\nline = sys.stdin.readline()\nprint(len(line))'],
+        args: ['-c', 'import sys\nprint(len(sys.stdin.read()))'],
         env: {},
       });
       expect(result.stdout).toBe('0\n');

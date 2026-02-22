@@ -540,6 +540,12 @@ export class WasiHost {
       return this.writeCharDeviceStat(bufPtr);
     }
 
+    // For regular file fds opened via path_open
+    const filePath = this.fdTable.getPath(fd);
+    if (filePath !== undefined) {
+      return this.writeFilestat(bufPtr, filePath);
+    }
+
     return WASI_EBADF;
   }
 
@@ -572,6 +578,21 @@ export class WasiHost {
         const entrySize = 24 + nameBytes.byteLength;
 
         if (offset + entrySize > bufLen) {
+          // Per WASI spec: write as much of the entry as fits so that
+          // bufUsed == bufLen, signaling that there are more entries.
+          const remaining = bufLen - offset;
+          if (remaining > 0) {
+            // Build the full entry in a temp buffer, then copy what fits
+            const tmp = new Uint8Array(entrySize);
+            const tmpView = new DataView(tmp.buffer);
+            tmpView.setBigUint64(0, BigInt(i + 1), true);     // d_next
+            tmpView.setBigUint64(8, BigInt(i + 1), true);     // d_ino
+            tmpView.setUint32(16, nameBytes.byteLength, true); // d_namlen
+            tmpView.setUint8(20, inodeTypeToWasiFiletype(entry.type)); // d_type
+            tmp.set(nameBytes, 24);                            // name
+            bytes.set(tmp.subarray(0, remaining), bufPtr + offset);
+            offset += remaining;
+          }
           break;
         }
 
@@ -861,7 +882,7 @@ export class WasiHost {
       //   u64 mtim         (offset 48)
       //   u64 ctim         (offset 56)
 
-      view.setBigUint64(bufPtr, BigInt(0), true); // dev
+      view.setBigUint64(bufPtr, BigInt(stat.permissions), true); // dev (stores Unix permissions)
       view.setBigUint64(bufPtr + 8, BigInt(0), true); // ino
       view.setUint8(bufPtr + 16, inodeTypeToWasiFiletype(stat.type)); // filetype
       // padding bytes 17-23

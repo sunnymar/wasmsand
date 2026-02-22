@@ -47,10 +47,8 @@ describe('Python via ShellRunner', () => {
   });
 
   it('python in a pipeline (stdin)', async () => {
-    // RustPython WASI stdin supports readline() and input() but not read().
-    // Use input() to read the piped line.
     const result = await runner.run(
-      'echo hello world | python3 -c "line = input(); print(line.upper())"',
+      'echo hello world | python3 -c "import sys; print(sys.stdin.read().upper().strip())"',
     );
     expect(result.stdout.trim()).toBe('HELLO WORLD');
   });
@@ -62,12 +60,7 @@ describe('Python via ShellRunner', () => {
     expect(result.stdout).toBe('apple\nbanana\ncherry\n');
   });
 
-  // RustPython WASI does not support Python-level open() for file I/O.
-  // The io module cannot obtain a FileIO object ("Couldn't get FileIO,
-  // io.open likely isn't supported on your platform"). These tests are
-  // skipped until RustPython WASI adds FileIO support.
-
-  it.skip('python reads VFS file', async () => {
+  it('python reads VFS file', async () => {
     vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('42'));
     const result = await runner.run(
       'python3 -c "val = open(\'/home/user/data.txt\').read(); print(int(val) * 2)"',
@@ -75,7 +68,7 @@ describe('Python via ShellRunner', () => {
     expect(result.stdout.trim()).toBe('84');
   });
 
-  it.skip('python writes VFS file', async () => {
+  it('python writes VFS file', async () => {
     await runner.run(
       'python3 -c "open(\'/home/user/out.txt\', \'w\').write(\'written by python\')"',
     );
