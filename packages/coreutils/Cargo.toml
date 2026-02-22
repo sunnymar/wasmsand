@@ -155,4 +155,12 @@ path = "src/bin/mktemp.rs"
 name = "tac"
 path = "src/bin/tac.rs"
 
+[[bin]]
+name = "xargs"
+path = "src/bin/xargs.rs"
+
+[[bin]]
+name = "expr"
+path = "src/bin/expr.rs"
+
 [dependencies]

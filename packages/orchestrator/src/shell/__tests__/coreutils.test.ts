@@ -22,6 +22,7 @@ const TOOLS = [
   'true', 'false',
   'uname', 'whoami', 'id', 'printenv', 'yes', 'rmdir', 'sleep', 'seq',
   'ln', 'readlink', 'realpath', 'mktemp', 'tac',
+  'xargs', 'expr',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */
@@ -1000,6 +1001,43 @@ describe('Coreutils Integration', () => {
     it('tac from stdin', async () => {
       const result = await runner.run('printf "1\\n2\\n3\\n" | tac');
       expect(result.stdout).toBe('3\n2\n1\n');
+    });
+  });
+
+  describe('xargs and expr', () => {
+    it('xargs concatenates stdin lines', async () => {
+      const result = await runner.run('printf "a\\nb\\nc\\n" | xargs');
+      expect(result.stdout.trim()).toBe('a b c');
+    });
+
+    it('xargs with echo', async () => {
+      const result = await runner.run('printf "hello\\nworld\\n" | xargs echo');
+      expect(result.stdout.trim()).toBe('echo hello world');
+    });
+
+    it('xargs -n 1 one per line', async () => {
+      const result = await runner.run('printf "a\\nb\\nc\\n" | xargs -n 1');
+      expect(result.stdout).toBe('a\nb\nc\n');
+    });
+
+    it('expr arithmetic', async () => {
+      const result = await runner.run('expr 3 + 4');
+      expect(result.stdout.trim()).toBe('7');
+    });
+
+    it('expr subtraction', async () => {
+      const result = await runner.run('expr 10 - 3');
+      expect(result.stdout.trim()).toBe('7');
+    });
+
+    it('expr string length', async () => {
+      const result = await runner.run('expr length "hello"');
+      expect(result.stdout.trim()).toBe('5');
+    });
+
+    it('expr equality', async () => {
+      const result = await runner.run('expr 5 = 5');
+      expect(result.stdout.trim()).toBe('1');
     });
   });
 
