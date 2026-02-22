@@ -1,5 +1,6 @@
 // @wasmsand/orchestrator - WASM AI Sandbox
 export { VFS } from './vfs/vfs.js';
+export type { VfsOptions } from './vfs/vfs.js';
 export { ProcessManager } from './process/manager.js';
 export { ShellRunner } from './shell/shell-runner.js';
 export { PythonRunner } from './python/python-runner.js';

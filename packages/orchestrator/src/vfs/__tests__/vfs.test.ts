@@ -84,3 +84,43 @@ describe('VFS', () => {
     expect(() => vfs.mkdir('/home/user/file.txt/sub')).toThrow(/ENOTDIR/);
   });
 });
+
+describe('VFS size limit', () => {
+  it('allows writes within limit', () => {
+    const vfs = new VFS({ fsLimitBytes: 1024 });
+    const data = new Uint8Array(500);
+    vfs.writeFile('/tmp/a.txt', data);
+    expect(vfs.stat('/tmp/a.txt').size).toBe(500);
+  });
+
+  it('rejects writes exceeding limit', () => {
+    const vfs = new VFS({ fsLimitBytes: 1024 });
+    vfs.writeFile('/tmp/a.txt', new Uint8Array(800));
+    expect(() => {
+      vfs.writeFile('/tmp/b.txt', new Uint8Array(300));
+    }).toThrow(/ENOSPC/);
+  });
+
+  it('reclaims space on overwrite', () => {
+    const vfs = new VFS({ fsLimitBytes: 1024 });
+    vfs.writeFile('/tmp/a.txt', new Uint8Array(800));
+    vfs.writeFile('/tmp/a.txt', new Uint8Array(100));
+    vfs.writeFile('/tmp/b.txt', new Uint8Array(900));
+    expect(vfs.stat('/tmp/b.txt').size).toBe(900);
+  });
+
+  it('reclaims space on unlink', () => {
+    const vfs = new VFS({ fsLimitBytes: 1024 });
+    vfs.writeFile('/tmp/a.txt', new Uint8Array(800));
+    vfs.unlink('/tmp/a.txt');
+    vfs.writeFile('/tmp/b.txt', new Uint8Array(800));
+    expect(vfs.stat('/tmp/b.txt').size).toBe(800);
+  });
+
+  it('no limit by default', () => {
+    const vfs = new VFS();
+    const data = new Uint8Array(10_000_000);
+    vfs.writeFile('/tmp/big.txt', data);
+    expect(vfs.stat('/tmp/big.txt').size).toBe(10_000_000);
+  });
+});

@@ -17,6 +17,11 @@ import { deepCloneRoot } from './snapshot.js';
 
 const MAX_SYMLINK_DEPTH = 40;
 
+export interface VfsOptions {
+  /** Maximum total bytes stored in the VFS. Undefined = no limit. */
+  fsLimitBytes?: number;
+}
+
 /**
  * Split an absolute path into its component segments,
  * resolving '.' and '..' along the way.
@@ -46,9 +51,12 @@ export class VFS {
   private root: DirInode;
   private snapshots: Map<string, DirInode> = new Map();
   private nextSnapId = 1;
+  private totalBytes = 0;
+  private fsLimitBytes: number | undefined;
 
-  constructor() {
+  constructor(options?: VfsOptions) {
     this.root = createDirInode();
+    this.fsLimitBytes = options?.fsLimitBytes;
     this.initDefaultLayout();
   }
 
@@ -58,6 +66,8 @@ export class VFS {
     vfs.root = root;
     vfs.snapshots = new Map();
     vfs.nextSnapId = 1;
+    vfs.totalBytes = 0;
+    vfs.fsLimitBytes = undefined;
     return vfs;
   }
 
@@ -223,12 +233,21 @@ export class VFS {
       throw new VfsError('EISDIR', `is a directory: ${path}`);
     }
 
+    const oldSize = (existing !== undefined && existing.type === 'file') ? existing.content.byteLength : 0;
+    const newSize = data.byteLength;
+    const delta = newSize - oldSize;
+
+    if (this.fsLimitBytes !== undefined && this.totalBytes + delta > this.fsLimitBytes) {
+      throw new VfsError('ENOSPC', `no space left on device (limit: ${this.fsLimitBytes} bytes)`);
+    }
+
     if (existing !== undefined && existing.type === 'file') {
       existing.content = data;
       existing.metadata.mtime = new Date();
     } else {
       parent.children.set(name, createFileInode(data));
     }
+    this.totalBytes += delta;
   }
 
   mkdir(path: string): void {
@@ -291,6 +310,9 @@ export class VFS {
       throw new VfsError('EISDIR', `is a directory: ${path}`);
     }
 
+    if (child.type === 'file') {
+      this.totalBytes -= child.content.byteLength;
+    }
     parent.children.delete(name);
   }
 

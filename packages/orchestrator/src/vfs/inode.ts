@@ -29,7 +29,7 @@ export interface SymlinkInode {
 
 export type Inode = FileInode | DirInode | SymlinkInode;
 
-export type Errno = 'ENOENT' | 'EEXIST' | 'ENOTDIR' | 'EISDIR' | 'ENOTEMPTY';
+export type Errno = 'ENOENT' | 'EEXIST' | 'ENOTDIR' | 'EISDIR' | 'ENOTEMPTY' | 'ENOSPC';
 
 export class VfsError extends Error {
   errno: Errno;
