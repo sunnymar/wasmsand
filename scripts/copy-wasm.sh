@@ -4,8 +4,10 @@
 set -euo pipefail
 
 TARGET="${1:?Usage: copy-wasm.sh <target-dir>}"
-FIXTURES="packages/orchestrator/src/platform/__tests__/fixtures"
-SHELL_FIXTURES="packages/orchestrator/src/shell/__tests__/fixtures"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FIXTURES="$ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
+SHELL_FIXTURES="$ROOT/packages/orchestrator/src/shell/__tests__/fixtures"
 
 mkdir -p "$TARGET"
 
