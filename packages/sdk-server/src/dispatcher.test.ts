@@ -61,6 +61,14 @@ describe('Dispatcher', () => {
         code: -32602,
       });
     });
+
+    it('rejects command exceeding 64KB', async () => {
+      const huge = 'echo ' + 'x'.repeat(70_000);
+      await expect(dispatcher.dispatch('run', { command: huge })).rejects.toMatchObject({
+        code: -32602,
+        message: expect.stringContaining('too large'),
+      });
+    });
   });
 
   describe('files.write', () => {
