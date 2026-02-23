@@ -62,7 +62,9 @@ export class FdTable {
 
     const offset = mode === 'a' ? buffer.byteLength : 0;
 
-    const fd = this.nextFd++;
+    let fd = this.nextFd++;
+    // Skip fd 1023 — reserved as CONTROL_FD for the Python socket shim
+    if (fd === 1023) fd = this.nextFd++;
     this.entries.set(fd, {
       path,
       mode,

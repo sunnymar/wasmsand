@@ -193,6 +193,10 @@ describe('Sandbox', () => {
       const content = new TextDecoder().decode(data);
       expect(content).toContain('CONTROL_FD');
       expect(content).toContain('class socket:');
+
+      const siteData = sandbox.readFile('/usr/lib/python/sitecustomize.py');
+      const siteContent = new TextDecoder().decode(siteData);
+      expect(siteContent).toContain('sys.modules["socket"]');
     });
 
     it('sets PYTHONPATH when network is configured', async () => {

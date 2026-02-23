@@ -200,6 +200,8 @@ class socket:
             "headers": headers,
             "body": body,
         })
+        if not resp.get("ok"):
+            raise OSError(resp.get("error", "request failed"))
         status = resp.get("status", 200)
         resp_headers = resp.get("headers", {})
         resp_body = resp.get("body", "")

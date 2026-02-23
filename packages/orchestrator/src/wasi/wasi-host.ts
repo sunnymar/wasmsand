@@ -475,7 +475,11 @@ export class WasiHost {
         const bytes = this.getBytes();
         bytes.set(this.controlResponseBuf.subarray(0, toRead), iov.buf);
         totalRead += toRead;
-        this.controlResponseBuf = null; // consumed
+        if (toRead < remaining) {
+          this.controlResponseBuf = this.controlResponseBuf.subarray(toRead);
+        } else {
+          this.controlResponseBuf = null;
+        }
         break;
       }
 
