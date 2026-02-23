@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { resolve } from 'node:path';
 import { PythonRunner } from '../python-runner.js';
 import { ProcessManager } from '../../process/manager.js';

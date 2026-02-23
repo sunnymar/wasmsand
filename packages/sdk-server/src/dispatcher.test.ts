@@ -1,23 +1,23 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { Dispatcher } from './dispatcher.js';
 import type { SandboxLike } from './dispatcher.js';
 
 function createMockSandbox(): SandboxLike {
   return {
-    run: vi.fn(async (_cmd: string) => ({
+    run: mock(async (_cmd: string) => ({
       exitCode: 0,
       stdout: 'hello\n',
       stderr: '',
       executionTimeMs: 5,
     })),
-    readFile: vi.fn((_path: string) => new TextEncoder().encode('file content')),
-    writeFile: vi.fn((_path: string, _data: Uint8Array) => {}),
-    readDir: vi.fn((_path: string) => [
+    readFile: mock((_path: string) => new TextEncoder().encode('file content')),
+    writeFile: mock((_path: string, _data: Uint8Array) => {}),
+    readDir: mock((_path: string) => [
       { name: 'a.txt', type: 'file' as const },
       { name: 'sub', type: 'dir' as const },
     ]),
-    mkdir: vi.fn((_path: string) => {}),
-    stat: vi.fn((path: string) => ({
+    mkdir: mock((_path: string) => {}),
+    stat: mock((path: string) => ({
       type: 'file' as const,
       size: 12,
       permissions: 0o644,
@@ -25,10 +25,10 @@ function createMockSandbox(): SandboxLike {
       ctime: new Date('2025-01-01'),
       atime: new Date('2025-01-01'),
     })),
-    rm: vi.fn((_path: string) => {}),
-    setEnv: vi.fn((_name: string, _value: string) => {}),
-    getEnv: vi.fn((name: string) => (name === 'FOO' ? 'bar' : undefined)),
-    destroy: vi.fn(() => {}),
+    rm: mock((_path: string) => {}),
+    setEnv: mock((_name: string, _value: string) => {}),
+    getEnv: mock((name: string) => (name === 'FOO' ? 'bar' : undefined)),
+    destroy: mock(() => {}),
   };
 }
 
@@ -72,7 +72,7 @@ describe('Dispatcher', () => {
         expect.any(Uint8Array),
       );
       // Verify the decoded content
-      const written = (sandbox.writeFile as ReturnType<typeof vi.fn>).mock.calls[0][1] as Uint8Array;
+      const written = (sandbox.writeFile as ReturnType<typeof mock>).mock.calls[0][1] as Uint8Array;
       expect(new TextDecoder().decode(written)).toBe('hello world');
       expect(result).toEqual({ ok: true });
     });
@@ -251,7 +251,7 @@ describe('Dispatcher', () => {
     it('wraps sandbox errors with code 1', async () => {
       // Simulate a VfsError-like error
       const err = new Error('ENOENT: file not found: /missing.txt');
-      (sandbox.readFile as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      (sandbox.readFile as ReturnType<typeof mock>).mockImplementation(() => {
         throw err;
       });
 
@@ -264,7 +264,7 @@ describe('Dispatcher', () => {
     });
 
     it('wraps sandbox errors from async methods with code 1', async () => {
-      (sandbox.run as ReturnType<typeof vi.fn>).mockRejectedValue(
+      (sandbox.run as ReturnType<typeof mock>).mockRejectedValue(
         new Error('something went wrong'),
       );
 

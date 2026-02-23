@@ -4,7 +4,7 @@
  * Exercises the full public API: create, run, file operations, env,
  * destroy, timeout, and VFS size limits.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'bun:test';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';

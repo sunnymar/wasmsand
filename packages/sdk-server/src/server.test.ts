@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -8,7 +8,7 @@ const WASM_DIR = resolve(import.meta.dirname, '../../orchestrator/src/platform/_
 const SHELL_WASM = resolve(import.meta.dirname, '../../orchestrator/src/shell/__tests__/fixtures/wasmsand-shell.wasm');
 
 function startServer() {
-  const proc = spawn('node', ['--import', 'tsx', SERVER_PATH], {
+  const proc = spawn('bun', [SERVER_PATH], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const rl = createInterface({ input: proc.stdout! });

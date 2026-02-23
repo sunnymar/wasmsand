@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { VFS } from '../vfs.js';
 import { FdTable } from '../fd-table.js';
 import { createPipe } from '../pipe.js';

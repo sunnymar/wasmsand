@@ -3,7 +3,7 @@
  *
  * These tests exercise the full stack: shell parser → AST executor → ProcessManager → WASI host → coreutils wasm.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { resolve } from 'node:path';
 
 import { ShellRunner } from '../shell-runner.js';
