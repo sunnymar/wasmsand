@@ -235,6 +235,31 @@ describe('Sandbox', () => {
     });
   });
 
+  describe('output limits', () => {
+    it('truncates stdout at configured limit', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { stdoutBytes: 20 } },
+      });
+      const result = await sandbox.run('yes hello | head -100');
+      expect(result.stdout.length).toBeLessThanOrEqual(70); // 20 + truncation marker
+      expect(result.truncated?.stdout).toBe(true);
+    });
+
+    it('does not truncate when under limit', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { stdoutBytes: 10000 } },
+      });
+      const result = await sandbox.run('echo hello');
+      expect(result.truncated?.stdout).toBeFalsy();
+    });
+  });
+
   describe('SecurityOptions', () => {
     it('accepts security options on create', async () => {
       sandbox = await Sandbox.create({

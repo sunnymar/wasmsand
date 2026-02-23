@@ -56,6 +56,8 @@ export interface WasiHostOptions {
   preopens: Record<string, string>;
   stdin?: Uint8Array;
   networkBridge?: NetworkBridge;
+  stdoutLimit?: number;
+  stderrLimit?: number;
 }
 
 interface PreopenEntry {
@@ -132,6 +134,13 @@ export class WasiHost {
   private controlResponseBuf: Uint8Array | null = null;
   private nextControlConnId = 0;
 
+  private stdoutTotal = 0;
+  private stderrTotal = 0;
+  private stdoutTruncated = false;
+  private stderrTruncated = false;
+  private stdoutLimit: number;
+  private stderrLimit: number;
+
   constructor(options: WasiHostOptions) {
     this.vfs = options.vfs;
     this.fdTable = new FdTable(options.vfs);
@@ -141,6 +150,8 @@ export class WasiHost {
     );
     this.stdinData = options.stdin;
     this.networkBridge = options.networkBridge ?? null;
+    this.stdoutLimit = options.stdoutLimit ?? Infinity;
+    this.stderrLimit = options.stderrLimit ?? Infinity;
     this.preopens = [];
 
     // Set up preopened directories starting at fd 3.
@@ -172,6 +183,14 @@ export class WasiHost {
 
   getStderr(): string {
     return this.decoder.decode(concatBuffers(this.stderrBuf));
+  }
+
+  isStdoutTruncated(): boolean {
+    return this.stdoutTruncated;
+  }
+
+  isStderrTruncated(): boolean {
+    return this.stderrTruncated;
   }
 
   getExitCode(): number | null {
@@ -408,10 +427,26 @@ export class WasiHost {
       const data = bytes.slice(iov.buf, iov.buf + iov.len);
 
       if (fd === 1) {
-        this.stdoutBuf.push(data);
+        if (this.stdoutTotal < this.stdoutLimit) {
+          const remaining = this.stdoutLimit - this.stdoutTotal;
+          const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
+          this.stdoutBuf.push(slice);
+          if (data.byteLength > remaining) this.stdoutTruncated = true;
+        } else {
+          this.stdoutTruncated = true;
+        }
+        this.stdoutTotal += data.byteLength;
         totalWritten += data.byteLength;
       } else if (fd === 2) {
-        this.stderrBuf.push(data);
+        if (this.stderrTotal < this.stderrLimit) {
+          const remaining = this.stderrLimit - this.stderrTotal;
+          const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
+          this.stderrBuf.push(slice);
+          if (data.byteLength > remaining) this.stderrTruncated = true;
+        } else {
+          this.stderrTruncated = true;
+        }
+        this.stderrTotal += data.byteLength;
         totalWritten += data.byteLength;
       } else if (fd === CONTROL_FD) {
         // Control fd: parse JSON command, buffer response

@@ -12,6 +12,8 @@ export interface SpawnOptions {
   stdin?: { read(buf: Uint8Array): number };
   stdinData?: Uint8Array;
   cwd?: string;
+  stdoutLimit?: number;
+  stderrLimit?: number;
 }
 
 export interface SpawnResult {
@@ -19,4 +21,5 @@ export interface SpawnResult {
   stdout: string;
   stderr: string;
   executionTimeMs: number;
+  truncated?: { stdout: boolean; stderr: boolean };
 }

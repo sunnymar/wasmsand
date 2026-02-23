@@ -108,6 +108,11 @@ export class Sandbox {
     const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/wasmsand-shell.wasm`;
     const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
 
+    // Apply output limits from security options
+    if (options.security?.limits) {
+      runner.setOutputLimits(options.security.limits.stdoutBytes, options.security.limits.stderrBytes);
+    }
+
     // Bootstrap Python socket shim when networking is enabled
     if (bridge) {
       vfs.withWriteAccess(() => {

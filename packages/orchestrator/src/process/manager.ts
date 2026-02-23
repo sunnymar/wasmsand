@@ -72,6 +72,8 @@ export class ProcessManager {
       preopens: { '/': '/' },
       stdin: stdinData,
       networkBridge: this.networkBridge ?? undefined,
+      stdoutLimit: opts.stdoutLimit,
+      stderrLimit: opts.stderrLimit,
     });
 
     const instance = await this.adapter.instantiate(module, host.getImports());
@@ -80,11 +82,15 @@ export class ProcessManager {
     const exitCode = host.start(instance);
     const executionTimeMs = performance.now() - startTime;
 
+    const stdoutTruncated = host.isStdoutTruncated();
+    const stderrTruncated = host.isStderrTruncated();
+
     return {
       exitCode,
       stdout: host.getStdout(),
       stderr: host.getStderr(),
       executionTimeMs,
+      truncated: (stdoutTruncated || stderrTruncated) ? { stdout: stdoutTruncated, stderr: stderrTruncated } : undefined,
     };
   }
 

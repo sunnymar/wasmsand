@@ -111,6 +111,8 @@ export class ShellRunner {
   private pythonRunner: PythonRunner | null = null;
   private gateway: NetworkGateway | null = null;
   private env: Map<string, string> = new Map();
+  private stdoutLimit: number | undefined;
+  private stderrLimit: number | undefined;
   /** Current command substitution nesting depth. */
   private substitutionDepth = 0;
   /** Exit code of the last executed command (for $?). */
@@ -179,6 +181,12 @@ export class ShellRunner {
   /** Replace all env vars (for restore). */
   setEnvMap(env: Map<string, string>): void {
     this.env = new Map(env);
+  }
+
+  /** Set output byte limits for stdout/stderr truncation. */
+  setOutputLimits(stdoutBytes?: number, stderrBytes?: number): void {
+    this.stdoutLimit = stdoutBytes;
+    this.stderrLimit = stderrBytes;
   }
 
   /** Resolve a path relative to PWD. Absolute paths pass through unchanged. */
@@ -870,6 +878,8 @@ export class ShellRunner {
       env: Object.fromEntries(this.env),
       stdinData,
       cwd: this.env.get('PWD'),
+      stdoutLimit: this.stdoutLimit,
+      stderrLimit: this.stderrLimit,
     });
   }
 
