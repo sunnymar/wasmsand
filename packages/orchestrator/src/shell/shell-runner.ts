@@ -16,7 +16,7 @@ import { PythonRunner } from '../python/python-runner.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
-const SHELL_BUILTINS = new Set(['which', 'chmod', 'test', '[', 'pwd']);
+const SHELL_BUILTINS = new Set(['which', 'chmod', 'test', '[', 'pwd', 'cd']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */
 const PYTHON_INTERPRETERS = new Set(['python3', 'python']);
@@ -300,6 +300,9 @@ export class ShellRunner {
     }
     if (cmdName === 'pwd') {
       return this.builtinPwd();
+    }
+    if (cmdName === 'cd') {
+      return this.builtinCd(args);
     }
 
     // Handle stdin redirect
@@ -825,6 +828,40 @@ export class ShellRunner {
     return { exitCode: 0, stdout: cwd + '\n', stderr: '', executionTimeMs: 0 };
   }
 
+  /** Builtin: cd — change working directory. */
+  private builtinCd(args: string[]): RunResult {
+    let target: string;
+
+    if (args.length === 0) {
+      target = '/home/user';
+    } else if (args[0] === '-') {
+      const oldPwd = this.env.get('OLDPWD');
+      if (!oldPwd) {
+        return { exitCode: 1, stdout: '', stderr: 'cd: OLDPWD not set\n', executionTimeMs: 0 };
+      }
+      target = oldPwd;
+    } else {
+      target = this.resolvePath(args[0]);
+    }
+
+    // Normalize the path (resolve . and .. segments)
+    target = normalizePath(target);
+
+    try {
+      const stat = this.vfs.stat(target);
+      if (stat.type !== 'dir') {
+        return { exitCode: 1, stdout: '', stderr: `cd: ${args[0] ?? target}: not a directory\n`, executionTimeMs: 0 };
+      }
+    } catch {
+      return { exitCode: 1, stdout: '', stderr: `cd: ${args[0] ?? target}: no such file or directory\n`, executionTimeMs: 0 };
+    }
+
+    const oldPwd = this.env.get('PWD') || '/';
+    this.env.set('OLDPWD', oldPwd);
+    this.env.set('PWD', target);
+    return { ...EMPTY_RESULT };
+  }
+
   /** Builtin: test / [ — evaluate conditional expressions. */
   private builtinTest(args: string[], isBracket: boolean): RunResult {
     // If [ syntax, require and strip trailing ]
@@ -1021,6 +1058,24 @@ function parseShebang(firstLine: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * Normalize an absolute path by resolving `.` and `..` segments.
+ * E.g. "/home/user/.." → "/home", "/home/./user" → "/home/user".
+ */
+function normalizePath(path: string): string {
+  const parts = path.split('/');
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      resolved.pop();
+    } else {
+      resolved.push(part);
+    }
+  }
+  return '/' + resolved.join('/');
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

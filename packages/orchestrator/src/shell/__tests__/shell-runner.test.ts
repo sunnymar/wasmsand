@@ -159,4 +159,47 @@ describe('ShellRunner', () => {
       expect(result.stdout).toBe('sub\n');
     });
   });
+
+  describe('cd builtin', () => {
+    it('changes PWD to an existing directory', async () => {
+      vfs.mkdir('/home/user/projects');
+      await runner.run('cd /home/user/projects');
+      expect(runner.getEnv('PWD')).toBe('/home/user/projects');
+    });
+
+    it('cd with no args goes to /home/user', async () => {
+      runner.setEnv('PWD', '/tmp');
+      await runner.run('cd');
+      expect(runner.getEnv('PWD')).toBe('/home/user');
+    });
+
+    it('cd - goes to OLDPWD', async () => {
+      runner.setEnv('PWD', '/home/user');
+      await runner.run('cd /tmp');
+      expect(runner.getEnv('PWD')).toBe('/tmp');
+      expect(runner.getEnv('OLDPWD')).toBe('/home/user');
+      await runner.run('cd -');
+      expect(runner.getEnv('PWD')).toBe('/home/user');
+      expect(runner.getEnv('OLDPWD')).toBe('/tmp');
+    });
+
+    it('cd to non-existent dir returns exit code 1', async () => {
+      const result = await runner.run('cd /nonexistent');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('no such file or directory');
+    });
+
+    it('cd to a file returns exit code 1', async () => {
+      vfs.writeFile('/tmp/file.txt', new TextEncoder().encode('x'));
+      const result = await runner.run('cd /tmp/file.txt');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not a directory');
+    });
+
+    it('cd .. resolves parent directory', async () => {
+      runner.setEnv('PWD', '/home/user');
+      await runner.run('cd ..');
+      expect(runner.getEnv('PWD')).toBe('/home');
+    });
+  });
 });
