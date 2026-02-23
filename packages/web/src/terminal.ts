@@ -38,7 +38,9 @@ export function createTerminal(
 
   function printBanner(): void {
     term.writeln('wasmsand — WebAssembly sandbox shell');
-    term.writeln('Type shell commands. Python: python3 -c "print(1+1)"');
+    term.writeln('Try: for i in 1 2 3; do echo "hello $i"; done');
+    term.writeln('     case $USER in u*) echo "matched";; esac');
+    term.writeln('     python3 -c "print(1+1)"');
     term.writeln('');
   }
 
