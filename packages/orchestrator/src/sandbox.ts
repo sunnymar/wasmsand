@@ -15,6 +15,7 @@ import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge } from './network/bridge.js';
+import { SOCKET_SHIM_SOURCE } from './network/socket-shim.js';
 
 export interface SandboxOptions {
   /** Directory (Node) or URL base (browser) containing .wasm files. */
@@ -100,6 +101,13 @@ export class Sandbox {
     // Shell parser wasm
     const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/wasmsand-shell.wasm`;
     const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
+
+    // Bootstrap Python socket shim when networking is enabled
+    if (bridge) {
+      vfs.mkdirp('/usr/lib/python');
+      vfs.writeFile('/usr/lib/python/socket.py', new TextEncoder().encode(SOCKET_SHIM_SOURCE));
+      runner.setEnv('PYTHONPATH', '/usr/lib/python');
+    }
 
     return new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network);
   }

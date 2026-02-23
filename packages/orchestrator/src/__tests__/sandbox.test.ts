@@ -180,4 +180,54 @@ describe('Sandbox', () => {
       }
     });
   });
+
+  describe('socket shim bootstrap', () => {
+    it('writes socket.py to VFS when network is configured', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        network: { allowedHosts: ['example.com'] },
+      });
+      const data = sandbox.readFile('/usr/lib/python/socket.py');
+      const content = new TextDecoder().decode(data);
+      expect(content).toContain('CONTROL_FD');
+      expect(content).toContain('class socket:');
+    });
+
+    it('sets PYTHONPATH when network is configured', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        network: { allowedHosts: ['example.com'] },
+      });
+      expect(sandbox.getEnv('PYTHONPATH')).toBe('/usr/lib/python');
+    });
+
+    it('does not write socket.py when network is not configured', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+      });
+      expect(() => sandbox.readFile('/usr/lib/python/socket.py')).toThrow();
+    });
+
+    it('forked sandbox inherits socket.py', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        network: { allowedHosts: ['example.com'] },
+      });
+      const child = await sandbox.fork();
+      try {
+        const data = child.readFile('/usr/lib/python/socket.py');
+        expect(new TextDecoder().decode(data)).toContain('CONTROL_FD');
+      } finally {
+        child.destroy();
+      }
+    });
+  });
 });
