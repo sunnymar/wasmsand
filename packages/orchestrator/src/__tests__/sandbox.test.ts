@@ -340,6 +340,42 @@ describe('Sandbox', () => {
     });
   });
 
+  describe('tool allowlist', () => {
+    it('blocks tools not in allowlist', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { toolAllowlist: ['echo', 'cat'] },
+      });
+      const result = await sandbox.run('grep hello /tmp/f.txt');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('not allowed');
+    });
+
+    it('allows tools in allowlist', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { toolAllowlist: ['echo', 'cat'] },
+      });
+      // echo is a builtin, always available
+      const result = await sandbox.run('echo hello');
+      expect(result.stdout.trim()).toBe('hello');
+    });
+
+    it('no allowlist means all tools allowed', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+      });
+      const result = await sandbox.run('uname');
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
   describe('SecurityOptions', () => {
     it('accepts security options on create', async () => {
       sandbox = await Sandbox.create({

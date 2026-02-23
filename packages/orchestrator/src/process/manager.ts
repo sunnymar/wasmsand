@@ -20,11 +20,13 @@ export class ProcessManager {
   private moduleCache: Map<string, WebAssembly.Module> = new Map();
   private networkBridge: NetworkBridge | null;
   private currentHost: WasiHost | null = null;
+  private toolAllowlist: Set<string> | null = null;
 
-  constructor(vfs: VFS, adapter: PlatformAdapter, networkBridge?: NetworkBridge) {
+  constructor(vfs: VFS, adapter: PlatformAdapter, networkBridge?: NetworkBridge, toolAllowlist?: string[]) {
     this.vfs = vfs;
     this.adapter = adapter;
     this.networkBridge = networkBridge ?? null;
+    this.toolAllowlist = toolAllowlist ? new Set(toolAllowlist) : null;
   }
 
   /** Register a tool name to a .wasm file path. */
@@ -62,6 +64,14 @@ export class ProcessManager {
    * return the captured output.
    */
   async spawn(command: string, opts: SpawnOptions): Promise<SpawnResult> {
+    if (this.toolAllowlist && !this.toolAllowlist.has(command)) {
+      return {
+        exitCode: 126,
+        stdout: '',
+        stderr: `${command}: tool not allowed by security policy\n`,
+        executionTimeMs: 0,
+      };
+    }
     const wasmPath = this.resolveTool(command);
     const module = await this.loadModule(wasmPath);
 

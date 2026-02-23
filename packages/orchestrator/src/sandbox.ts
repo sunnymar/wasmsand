@@ -92,7 +92,7 @@ export class Sandbox {
       await bridge.start();
     }
 
-    const mgr = new ProcessManager(vfs, adapter, bridge);
+    const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
 
     // Discover and register tools
     const tools = await adapter.scanTools(options.wasmDir);
@@ -244,7 +244,7 @@ export class Sandbox {
       await childBridge.start();
     }
 
-    const childMgr = new ProcessManager(childVfs, this.adapter, childBridge);
+    const childMgr = new ProcessManager(childVfs, this.adapter, childBridge, this.security?.toolAllowlist);
 
     // Re-register tools from the same wasmDir
     const tools = await this.adapter.scanTools(this.wasmDir);
