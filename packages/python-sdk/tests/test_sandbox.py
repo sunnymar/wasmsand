@@ -20,7 +20,7 @@ class TestSandbox:
 
 class TestSandboxEndToEnd:
     """End-to-end tests exercising the full stack:
-    Python SDK -> RPC client -> Node subprocess -> SDK server -> Sandbox -> WASM tools.
+    Python SDK -> RPC client -> Bun subprocess -> SDK server -> Sandbox -> WASM tools.
 
     These tests focus on cross-layer integration: combining file operations
     with command execution, sequential operations, and verifying data flows
