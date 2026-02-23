@@ -23,6 +23,9 @@ export interface WorkerConfig {
   shellWasmPath: string;
   toolRegistry: [string, string][];
   networkEnabled?: boolean;
+  stdoutBytes?: number;
+  stderrBytes?: number;
+  toolAllowlist?: string[];
 }
 
 export class WorkerExecutor {
@@ -33,6 +36,7 @@ export class WorkerExecutor {
   private pendingResolve: ((r: RunResult) => void) | null = null;
   private timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private lastEnv: Map<string, string> | null = null;
 
   constructor(config: WorkerConfig) {
     this.config = config;
@@ -83,6 +87,11 @@ export class WorkerExecutor {
     return this.running;
   }
 
+  /** Return the env map from the last completed run, or null. */
+  getLastEnv(): Map<string, string> | null {
+    return this.lastEnv;
+  }
+
   dispose(): void {
     if (this.timeoutTimer) {
       clearTimeout(this.timeoutTimer);
@@ -113,6 +122,10 @@ export class WorkerExecutor {
         if (this.timeoutTimer) {
           clearTimeout(this.timeoutTimer);
           this.timeoutTimer = null;
+        }
+        // Capture env changes from Worker
+        if (msg.env) {
+          this.lastEnv = new Map(msg.env as [string, string][]);
         }
         if (this.pendingResolve) {
           const resolve = this.pendingResolve;
@@ -149,6 +162,9 @@ export class WorkerExecutor {
       shellWasmPath: this.config.shellWasmPath,
       toolRegistry: this.config.toolRegistry,
       networkEnabled: this.config.networkEnabled ?? false,
+      stdoutBytes: this.config.stdoutBytes,
+      stderrBytes: this.config.stderrBytes,
+      toolAllowlist: this.config.toolAllowlist,
     });
 
     await readyPromise;

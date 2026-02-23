@@ -22,6 +22,9 @@ interface InitMessage {
   shellWasmPath: string;
   toolRegistry: [string, string][];
   networkEnabled: boolean;
+  stdoutBytes?: number;
+  stderrBytes?: number;
+  toolAllowlist?: string[];
 }
 
 interface RunMessage {
@@ -41,7 +44,7 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
     const adapter = new NodeAdapter();
 
     const vfs = new VfsProxy(sab, { parentPort: parentPort! });
-    const mgr = new ProcessManager(vfs, adapter);
+    const mgr = new ProcessManager(vfs, adapter, undefined, msg.toolAllowlist);
 
     for (const [name, path] of toolRegistry) {
       mgr.registerTool(name, path);
@@ -50,6 +53,10 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
     runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, undefined, {
       skipPopulateBin: true,
     });
+
+    if (msg.stdoutBytes !== undefined || msg.stderrBytes !== undefined) {
+      runner.setOutputLimits(msg.stdoutBytes, msg.stderrBytes);
+    }
 
     parentPort!.postMessage({ type: 'ready' });
     return;

@@ -18,6 +18,8 @@ import { NetworkBridge } from './network/bridge.js';
 import { SOCKET_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
+import { WorkerExecutor } from './execution/worker-executor.js';
+import type { WorkerConfig } from './execution/worker-executor.js';
 
 export interface SandboxOptions {
   /** Directory (Node) or URL base (browser) containing .wasm files. */
@@ -54,6 +56,7 @@ export class Sandbox {
   private security: SecurityOptions | undefined;
   private sessionId: string;
   private auditHandler: AuditEventHandler | undefined;
+  private workerExecutor: WorkerExecutor | null = null;
 
   private constructor(
     vfs: VFS,
@@ -66,6 +69,7 @@ export class Sandbox {
     bridge?: NetworkBridge,
     networkPolicy?: NetworkPolicy,
     security?: SecurityOptions,
+    workerExecutor?: WorkerExecutor,
   ) {
     this.vfs = vfs;
     this.runner = runner;
@@ -79,6 +83,7 @@ export class Sandbox {
     this.security = security;
     this.sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
     this.auditHandler = security?.onAuditEvent;
+    this.workerExecutor = workerExecutor ?? null;
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -141,7 +146,30 @@ export class Sandbox {
       runner.setEnv('PYTHONPATH', '/usr/lib/python');
     }
 
-    const sb = new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network, options.security);
+    // Create WorkerExecutor for hard-kill support on platforms that support Workers.
+    // Skip when networking is enabled — the bridge requires main-thread access.
+    let workerExecutor: WorkerExecutor | undefined;
+    if (adapter.supportsWorkerExecution && !bridge) {
+      const toolRegistry: [string, string][] = [];
+      for (const [name, path] of tools) {
+        toolRegistry.push([name, path]);
+      }
+      if (!tools.has('python3')) {
+        toolRegistry.push(['python3', `${options.wasmDir}/python3.wasm`]);
+      }
+      workerExecutor = new WorkerExecutor({
+        vfs,
+        wasmDir: options.wasmDir,
+        shellWasmPath,
+        toolRegistry,
+        networkEnabled: !!options.network,
+        stdoutBytes: options.security?.limits?.stdoutBytes,
+        stderrBytes: options.security?.limits?.stderrBytes,
+        toolAllowlist: options.security?.toolAllowlist,
+      });
+    }
+
+    const sb = new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network, options.security, workerExecutor);
     sb.audit('sandbox.create');
     return sb;
   }
@@ -174,46 +202,61 @@ export class Sandbox {
     this.audit('command.start', { command });
 
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
-    this.runner.resetCancel(effectiveTimeout);
     const startTime = performance.now();
 
-    try {
-      const result = await this.runner.run(command);
-      const executionTimeMs = performance.now() - startTime;
+    let result: RunResult;
 
-      // Emit truncation events
+    if (this.workerExecutor) {
+      // Worker-based execution (Node) — hard kill on timeout via worker.terminate()
+      result = await this.workerExecutor.run(command, this.runner.getEnvMap(), effectiveTimeout);
+
+      // Sync env changes from Worker back to main-thread runner
+      const lastEnv = this.workerExecutor.getLastEnv();
+      if (lastEnv) {
+        this.runner.setEnvMap(lastEnv);
+      }
+    } else {
+      // Fallback (browser) — cooperative cancel + Promise.race
+      this.runner.resetCancel(effectiveTimeout);
+      try {
+        result = await this.runner.run(command);
+      } catch (e) {
+        if (e instanceof CancelledError) {
+          const executionTimeMs = performance.now() - startTime;
+          result = {
+            exitCode: 124,
+            stdout: '',
+            stderr: `command ${e.reason.toLowerCase()}\n`,
+            executionTimeMs,
+            errorClass: e.reason,
+          };
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    const executionTimeMs = performance.now() - startTime;
+
+    // Post-execution audit
+    if (result.errorClass === 'TIMEOUT') {
+      this.audit('command.timeout', { command, executionTimeMs });
+    } else if (result.errorClass === 'CANCELLED') {
+      this.audit('command.cancelled', { command, executionTimeMs });
+    } else {
       if (result.truncated?.stdout) {
         this.audit('limit.exceeded', { subtype: 'stdout', command });
       }
       if (result.truncated?.stderr) {
         this.audit('limit.exceeded', { subtype: 'stderr', command });
       }
-
-      // Emit capability denied for tool allowlist blocks
       if (result.stderr?.includes('not allowed by security policy')) {
         this.audit('capability.denied', { command, reason: result.stderr.trim() });
       }
-
       this.audit('command.complete', { command, exitCode: result.exitCode, executionTimeMs });
-      return result;
-    } catch (e) {
-      if (e instanceof CancelledError) {
-        const executionTimeMs = performance.now() - startTime;
-        if (e.reason === 'TIMEOUT') {
-          this.audit('command.timeout', { command, executionTimeMs });
-        } else {
-          this.audit('command.cancelled', { command, executionTimeMs });
-        }
-        return {
-          exitCode: 124,
-          stdout: '',
-          stderr: `command ${e.reason.toLowerCase()}\n`,
-          executionTimeMs,
-          errorClass: e.reason,
-        };
-      }
-      throw e;
     }
+
+    return result;
   }
 
   readFile(path: string): Uint8Array {
@@ -304,23 +347,50 @@ export class Sandbox {
       childRunner.setEnv(k, v);
     }
 
+    // Create WorkerExecutor for child if parent has one (skip when networking)
+    let childWorkerExecutor: WorkerExecutor | undefined;
+    if (this.adapter.supportsWorkerExecution && !childBridge) {
+      const toolRegistry: [string, string][] = [];
+      for (const [name, path] of tools) {
+        toolRegistry.push([name, path]);
+      }
+      if (!tools.has('python3')) {
+        toolRegistry.push(['python3', `${this.wasmDir}/python3.wasm`]);
+      }
+      childWorkerExecutor = new WorkerExecutor({
+        vfs: childVfs,
+        wasmDir: this.wasmDir,
+        shellWasmPath: this.shellWasmPath,
+        toolRegistry,
+        networkEnabled: !!this.networkPolicy,
+        stdoutBytes: this.security?.limits?.stdoutBytes,
+        stderrBytes: this.security?.limits?.stderrBytes,
+        toolAllowlist: this.security?.toolAllowlist,
+      });
+    }
+
     return new Sandbox(
       childVfs, childRunner, this.timeoutMs,
       this.adapter, this.wasmDir, this.shellWasmPath,
       childMgr, childBridge, this.networkPolicy, this.security,
+      childWorkerExecutor,
     );
   }
 
   /** Cancel the currently running command. */
   cancel(): void {
-    this.runner.cancel('CANCELLED');
-    // Set deadline to now so Date.now() checks in fdWrite/fdRead fire immediately
-    this.runner.setDeadlineNow();
-    this.mgr.cancelCurrent();
+    if (this.workerExecutor) {
+      this.workerExecutor.kill();
+    } else {
+      this.runner.cancel('CANCELLED');
+      this.runner.setDeadlineNow();
+      this.mgr.cancelCurrent();
+    }
   }
 
   destroy(): void {
     this.audit('sandbox.destroy');
+    this.workerExecutor?.dispose();
     this.destroyed = true;
     this.bridge?.dispose();
   }

@@ -490,6 +490,66 @@ describe('Sandbox', () => {
     });
   });
 
+  describe('hard kill via Worker', () => {
+    it('timeout terminates execution via worker.terminate()', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { timeoutMs: 200 } },
+      });
+      const start = performance.now();
+      const result = await sandbox.run('seq 1 999999999');
+      const elapsed = performance.now() - start;
+      expect(result.errorClass).toBe('TIMEOUT');
+      expect(result.exitCode).toBe(124);
+      expect(elapsed).toBeLessThan(5000);
+    });
+
+    it('cancel() immediately kills Worker execution', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        timeoutMs: 30000,
+      });
+      const promise = sandbox.run('seq 1 999999999');
+      await new Promise(r => setTimeout(r, 100));
+      sandbox.cancel();
+      const result = await promise;
+      expect(result.errorClass).toBe('CANCELLED');
+      expect(result.exitCode).toBe(125);
+    });
+
+    it('next run after timeout works correctly', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { timeoutMs: 100 } },
+      });
+      const r1 = await sandbox.run('seq 1 999999999');
+      expect(r1.errorClass).toBe('TIMEOUT');
+      const r2 = await sandbox.run('echo recovered');
+      expect(r2.exitCode).toBe(0);
+      expect(r2.stdout.trim()).toBe('recovered');
+    });
+
+    it('VFS is consistent after timeout kill', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { timeoutMs: 100 } },
+      });
+      sandbox.writeFile('/tmp/pre.txt', new TextEncoder().encode('before'));
+      const r1 = await sandbox.run('seq 1 999999999');
+      expect(r1.errorClass).toBe('TIMEOUT');
+      const content = sandbox.readFile('/tmp/pre.txt');
+      expect(new TextDecoder().decode(content)).toBe('before');
+    });
+  });
+
   describe('audit logging', () => {
     it('emits events for command lifecycle', async () => {
       const events: any[] = [];
