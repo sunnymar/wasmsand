@@ -342,4 +342,176 @@ describe('ShellRunner', () => {
       expect(result.stdout).toContain('downloaded from');
     });
   });
+
+  describe('comments', () => {
+    it('ignores comments after command', async () => {
+      const result = await runner.run('echo-args hello # this is a comment');
+      expect(result.stdout).toBe('hello\n');
+    });
+
+    it('ignores full line comments', async () => {
+      const result = await runner.run('# full line comment\necho-args hi');
+      expect(result.stdout).toBe('hi\n');
+    });
+  });
+
+  describe('$? exit code', () => {
+    it('tracks $? after command', async () => {
+      await runner.run('false');
+      const result = await runner.run('echo-args $?');
+      expect(result.stdout).toBe('1\n');
+    });
+
+    it('tracks $? as 0 after success', async () => {
+      await runner.run('true');
+      const result = await runner.run('echo-args $?');
+      expect(result.stdout).toBe('0\n');
+    });
+  });
+
+  describe('subshell isolation', () => {
+    it('subshell does not leak env to parent', async () => {
+      runner.setEnv('X', 'outer');
+      await runner.run('( X=inner )');
+      expect(runner.getEnv('X')).toBe('outer');
+    });
+  });
+
+  describe('tilde expansion', () => {
+    it('expands ~ to HOME', async () => {
+      const result = await runner.run('echo-args ~');
+      expect(result.stdout).toBe('/home/user\n');
+    });
+
+    it('expands ~/path to HOME/path', async () => {
+      const result = await runner.run('echo-args ~/docs');
+      expect(result.stdout).toBe('/home/user/docs\n');
+    });
+  });
+
+  describe('stderr redirects', () => {
+    it('redirects stderr with 2>', async () => {
+      const result = await runner.run('echo-args hello 2> /tmp/err.txt');
+      expect(result.stdout).toBe('hello\n');
+    });
+  });
+
+  describe('PYTHONPATH', () => {
+    it('has PYTHONPATH set', async () => {
+      const result = await runner.run('echo-args $PYTHONPATH');
+      expect(result.stdout).toContain('/usr/lib/python');
+    });
+  });
+
+  describe('break and continue', () => {
+    it('break exits for loop early', async () => {
+      const result = await runner.run('for x in a b c d; do if [ "$x" = "c" ]; then break; fi; echo-args $x; done');
+      expect(result.stdout).toBe('a\nb\n');
+    });
+
+    it('continue skips iteration', async () => {
+      const result = await runner.run('for x in a b c d; do if [ "$x" = "b" ]; then continue; fi; echo-args $x; done');
+      expect(result.stdout).toBe('a\nc\nd\n');
+    });
+  });
+
+  describe('pipeline negation', () => {
+    it('negates exit code of true', async () => {
+      const result = await runner.run('! true');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('negates exit code of false', async () => {
+      const result = await runner.run('! false');
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe('exit builtin', () => {
+    it('exit stops script execution', async () => {
+      const result = await runner.run('echo-args before ; exit 42 ; echo-args after');
+      expect(result.stdout).toBe('before\n');
+      expect(result.exitCode).toBe(42);
+    });
+
+    it('exit with no args uses last exit code', async () => {
+      await runner.run('false');
+      const result = await runner.run('exit');
+      expect(result.exitCode).toBe(1);
+    });
+  });
+
+  describe('parameter expansion', () => {
+    it('${var:-default} returns default when unset', async () => {
+      const result = await runner.run('echo-args ${UNSET:-fallback}');
+      expect(result.stdout).toBe('fallback\n');
+    });
+
+    it('${var:-default} returns value when set', async () => {
+      runner.setEnv('FOO', 'bar');
+      const result = await runner.run('echo-args ${FOO:-fallback}');
+      expect(result.stdout).toBe('bar\n');
+    });
+
+    it('${var:+alt} returns alt when set', async () => {
+      runner.setEnv('FOO', 'bar');
+      const result = await runner.run('echo-args ${FOO:+alternate}');
+      expect(result.stdout).toBe('alternate\n');
+    });
+
+    it('${var:+alt} returns empty when unset', async () => {
+      const result = await runner.run('echo ${UNSET:+alternate}');
+      expect(result.stdout).toBe('\n');
+    });
+  });
+
+  describe('case/esac', () => {
+    it('case matches literal', async () => {
+      const result = await runner.run('case hello in hello) echo-args matched;; esac');
+      expect(result.stdout).toBe('matched\n');
+    });
+
+    it('case matches wildcard', async () => {
+      const result = await runner.run('case hello in h*) echo-args glob;; esac');
+      expect(result.stdout).toBe('glob\n');
+    });
+
+    it('case falls through to default', async () => {
+      const result = await runner.run('case xyz in a) echo-args a;; *) echo-args default;; esac');
+      expect(result.stdout).toBe('default\n');
+    });
+  });
+
+  describe('here-documents', () => {
+    it('here-document provides stdin', async () => {
+      const result = await runner.run('cat-stdin <<EOF\nhello world\nEOF');
+      expect(result.stdout).toBe('hello world\n');
+    });
+  });
+
+  describe('function definitions', () => {
+    it('defines and calls a function', async () => {
+      await runner.run('greet() { echo-args hello $1; }');
+      const result = await runner.run('greet world');
+      expect(result.stdout).toBe('hello\nworld\n');
+    });
+  });
+
+  describe('arithmetic expansion', () => {
+    it('evaluates arithmetic expansion', async () => {
+      const result = await runner.run('echo-args $((2 + 3))');
+      expect(result.stdout).toBe('5\n');
+    });
+
+    it('arithmetic with variables', async () => {
+      runner.setEnv('X', '10');
+      const result = await runner.run('echo-args $((X * 2))');
+      expect(result.stdout).toBe('20\n');
+    });
+
+    it('arithmetic with subtraction and division', async () => {
+      const result = await runner.run('echo-args $((10 - 3))');
+      expect(result.stdout).toBe('7\n');
+    });
+  });
 });

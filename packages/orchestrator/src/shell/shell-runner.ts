@@ -18,7 +18,7 @@ import { WasiHost } from '../wasi/wasi-host.js';
 import { NetworkGateway, NetworkAccessDenied } from '../network/gateway.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
-const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget']);
+const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */
 const PYTHON_INTERPRETERS = new Set(['python3', 'python']);
@@ -32,7 +32,9 @@ interface Word {
 type WordPart =
   | { Literal: string }
   | { Variable: string }
-  | { CommandSub: string };
+  | { CommandSub: string }
+  | { ParamExpansion: { var: string; op: string; default: string } }
+  | { ArithmeticExpansion: string };
 
 interface Redirect {
   redirect_type: RedirectType;
@@ -45,11 +47,18 @@ type RedirectType =
   | { StderrOverwrite: string }
   | { StderrAppend: string }
   | 'StderrToStdout'
-  | { BothOverwrite: string };
+  | { BothOverwrite: string }
+  | { Heredoc: string }
+  | { HeredocStrip: string };
 
 interface Assignment {
   name: string;
   value: string;
+}
+
+interface CaseItem {
+  patterns: Word[];
+  body: Command;
 }
 
 type Command =
@@ -59,7 +68,12 @@ type Command =
   | { If: { condition: Command; then_body: Command; else_body: Command | null } }
   | { For: { var: string; words: Word[]; body: Command } }
   | { While: { condition: Command; body: Command } }
-  | { Subshell: { body: Command } };
+  | { Subshell: { body: Command } }
+  | 'Break'
+  | 'Continue'
+  | { Negate: { body: Command } }
+  | { Function: { name: string; body: Command } }
+  | { Case: { word: Word; items: CaseItem[] } };
 
 type ListOp = 'And' | 'Or' | 'Seq';
 
@@ -79,6 +93,12 @@ const EMPTY_RESULT: RunResult = {
 
 const MAX_SUBSTITUTION_DEPTH = 50;
 
+class BreakSignal { constructor(public depth: number = 1) {} }
+class ContinueSignal { constructor(public depth: number = 1) {} }
+class ExitSignal {
+  constructor(public code: number, public stdout: string = '', public stderr: string = '') {}
+}
+
 export class ShellRunner {
   private vfs: VFS;
   private mgr: ProcessManager;
@@ -90,6 +110,10 @@ export class ShellRunner {
   private env: Map<string, string> = new Map();
   /** Current command substitution nesting depth. */
   private substitutionDepth = 0;
+  /** Exit code of the last executed command (for $?). */
+  private lastExitCode = 0;
+  /** User-defined shell functions. */
+  private functions: Map<string, Command> = new Map();
 
   constructor(
     vfs: VFS,
@@ -113,6 +137,7 @@ export class ShellRunner {
     this.env.set('PWD', '/home/user');
     this.env.set('USER', 'user');
     this.env.set('PATH', '/bin:/usr/bin');
+    this.env.set('PYTHONPATH', '/usr/lib/python');
   }
 
   /** Write executable stub files into /bin and /usr/bin for all registered tools + python. */
@@ -226,9 +251,18 @@ export class ShellRunner {
     if (ast === null) {
       return EMPTY_RESULT;
     }
-    const result = await this.execCommand(ast);
-    result.executionTimeMs = performance.now() - startTime;
-    return result;
+    try {
+      const result = await this.execCommand(ast);
+      this.lastExitCode = result.exitCode;
+      result.executionTimeMs = performance.now() - startTime;
+      return result;
+    } catch (e) {
+      if (e instanceof ExitSignal) {
+        this.lastExitCode = e.code;
+        return { exitCode: e.code, stdout: e.stdout, stderr: e.stderr, executionTimeMs: performance.now() - startTime };
+      }
+      throw e;
+    }
   }
 
   /**
@@ -310,6 +344,12 @@ export class ShellRunner {
   // ---- AST execution ----
 
   private async execCommand(cmd: Command): Promise<RunResult> {
+    // Handle string-typed commands (Break, Continue)
+    if (typeof cmd === 'string') {
+      if (cmd === 'Break') throw new BreakSignal();
+      if (cmd === 'Continue') throw new ContinueSignal();
+      return EMPTY_RESULT;
+    }
     if ('Simple' in cmd) {
       return this.execSimple(cmd.Simple);
     }
@@ -329,7 +369,23 @@ export class ShellRunner {
       return this.execWhile(cmd.While);
     }
     if ('Subshell' in cmd) {
-      return this.execCommand(cmd.Subshell.body);
+      const savedEnv = new Map(this.env);
+      const result = await this.execCommand(cmd.Subshell.body);
+      this.env = savedEnv;
+      return result;
+    }
+    // Break/Continue already handled as string type above
+    if ('Negate' in cmd) {
+      const result = await this.execCommand((cmd as { Negate: { body: Command } }).Negate.body);
+      return { ...result, exitCode: result.exitCode === 0 ? 1 : 0 };
+    }
+    if ('Function' in cmd) {
+      const fn = (cmd as { Function: { name: string; body: Command } }).Function;
+      this.functions.set(fn.name, fn.body);
+      return { ...EMPTY_RESULT };
+    }
+    if ('Case' in cmd) {
+      return this.execCase((cmd as { Case: { word: Word; items: CaseItem[] } }).Case);
     }
     return EMPTY_RESULT;
   }
@@ -389,15 +445,52 @@ export class ShellRunner {
       result = await this.builtinCurl(args);
     } else if (cmdName === 'wget') {
       result = await this.builtinWget(args);
+    } else if (cmdName === 'exit') {
+      const code = args.length > 0 ? parseInt(args[0], 10) || 0 : this.lastExitCode;
+      throw new ExitSignal(code);
+    } else if (cmdName === 'true') {
+      result = { ...EMPTY_RESULT };
+    } else if (cmdName === 'false') {
+      result = { exitCode: 1, stdout: '', stderr: '', executionTimeMs: 0 };
     }
 
     if (!result) {
-      // Handle stdin redirect
+      // Check if it's a user-defined function
+      const fn = this.functions.get(cmdName);
+      if (fn) {
+        // Set positional parameters
+        const savedPositionals: Map<string, string | undefined> = new Map();
+        savedPositionals.set('#', this.env.get('#'));
+        for (let i = 0; i < Math.max(args.length, 9); i++) {
+          savedPositionals.set(String(i + 1), this.env.get(String(i + 1)));
+        }
+        for (let i = 0; i < args.length; i++) {
+          this.env.set(String(i + 1), args[i]);
+        }
+        this.env.set('#', String(args.length));
+        try {
+          result = await this.execCommand(fn);
+        } finally {
+          // Restore positional parameters
+          for (const [key, val] of savedPositionals) {
+            if (val !== undefined) this.env.set(key, val);
+            else this.env.delete(key);
+          }
+        }
+      }
+    }
+
+    if (!result) {
+      // Handle stdin redirect / heredoc
       let stdinData: Uint8Array | undefined;
       for (const redirect of simple.redirects) {
         const rt = redirect.redirect_type;
         if (typeof rt === 'object' && 'StdinFrom' in rt) {
           stdinData = this.vfs.readFile(this.resolvePath(rt.StdinFrom));
+        } else if (typeof rt === 'object' && 'Heredoc' in rt) {
+          stdinData = new TextEncoder().encode(rt.Heredoc);
+        } else if (typeof rt === 'object' && 'HeredocStrip' in rt) {
+          stdinData = new TextEncoder().encode(rt.HeredocStrip);
         }
       }
 
@@ -437,6 +530,23 @@ export class ShellRunner {
           );
           this.vfs.writeFile(resolved, combined);
           stdout = '';
+        } else if (typeof rt === 'object' && 'StderrOverwrite' in rt) {
+          this.vfs.writeFile(this.resolvePath(rt.StderrOverwrite), new TextEncoder().encode(stderr));
+          stderr = '';
+        } else if (typeof rt === 'object' && 'StderrAppend' in rt) {
+          const resolved = this.resolvePath(rt.StderrAppend);
+          const existing = this.tryReadFile(resolved);
+          const combined = concatBytes(existing, new TextEncoder().encode(stderr));
+          this.vfs.writeFile(resolved, combined);
+          stderr = '';
+        } else if (rt === 'StderrToStdout') {
+          stdout += stderr;
+          stderr = '';
+        } else if (typeof rt === 'object' && 'BothOverwrite' in rt) {
+          const combined = stdout + stderr;
+          this.vfs.writeFile(this.resolvePath(rt.BothOverwrite), new TextEncoder().encode(combined));
+          stdout = '';
+          stderr = '';
         }
       } catch (err: unknown) {
         if (err instanceof VfsError) {
@@ -518,7 +628,13 @@ export class ShellRunner {
     op: ListOp;
     right: Command;
   }): Promise<RunResult> {
-    const leftResult = await this.execCommand(list.left);
+    let leftResult: RunResult;
+    try {
+      leftResult = await this.execCommand(list.left);
+    } catch (e) {
+      if (e instanceof ExitSignal) throw e; // propagate directly
+      throw e;
+    }
 
     switch (list.op) {
       case 'And': {
@@ -548,14 +664,26 @@ export class ShellRunner {
         return leftResult;
       }
       case 'Seq': {
-        const rightResult = await this.execCommand(list.right);
-        return {
-          exitCode: rightResult.exitCode,
-          stdout: leftResult.stdout + rightResult.stdout,
-          stderr: leftResult.stderr + rightResult.stderr,
-          executionTimeMs:
-            leftResult.executionTimeMs + rightResult.executionTimeMs,
-        };
+        try {
+          const rightResult = await this.execCommand(list.right);
+          return {
+            exitCode: rightResult.exitCode,
+            stdout: leftResult.stdout + rightResult.stdout,
+            stderr: leftResult.stderr + rightResult.stderr,
+            executionTimeMs:
+              leftResult.executionTimeMs + rightResult.executionTimeMs,
+          };
+        } catch (e) {
+          if (e instanceof ExitSignal) {
+            // Accumulate output from left side, then re-throw
+            throw new ExitSignal(
+              e.code,
+              leftResult.stdout + e.stdout,
+              leftResult.stderr + e.stderr,
+            );
+          }
+          throw e;
+        }
       }
     }
   }
@@ -590,11 +718,17 @@ export class ShellRunner {
 
     for (const word of expandedWords) {
       this.env.set(forCmd.var, word);
-      const result = await this.execCommand(forCmd.body);
-      combinedStdout += result.stdout;
-      combinedStderr += result.stderr;
-      lastExitCode = result.exitCode;
-      totalTime += result.executionTimeMs;
+      try {
+        const result = await this.execCommand(forCmd.body);
+        combinedStdout += result.stdout;
+        combinedStderr += result.stderr;
+        lastExitCode = result.exitCode;
+        totalTime += result.executionTimeMs;
+      } catch (e) {
+        if (e instanceof BreakSignal) break;
+        if (e instanceof ContinueSignal) continue;
+        throw e;
+      }
     }
 
     return {
@@ -621,11 +755,17 @@ export class ShellRunner {
       if (condResult.exitCode !== 0) {
         break;
       }
-      const bodyResult = await this.execCommand(whileCmd.body);
-      combinedStdout += bodyResult.stdout;
-      combinedStderr += bodyResult.stderr;
-      lastExitCode = bodyResult.exitCode;
-      totalTime += bodyResult.executionTimeMs;
+      try {
+        const bodyResult = await this.execCommand(whileCmd.body);
+        combinedStdout += bodyResult.stdout;
+        combinedStderr += bodyResult.stderr;
+        lastExitCode = bodyResult.exitCode;
+        totalTime += bodyResult.executionTimeMs;
+      } catch (e) {
+        if (e instanceof BreakSignal) break;
+        if (e instanceof ContinueSignal) { iterations++; continue; }
+        throw e;
+      }
       iterations++;
     }
 
@@ -652,9 +792,13 @@ export class ShellRunner {
 
   private async expandWordPart(part: WordPart): Promise<string> {
     if ('Literal' in part) {
-      return part.Literal;
+      const s = part.Literal;
+      if (s === '~') return this.env.get('HOME') ?? '/home/user';
+      if (s.startsWith('~/')) return (this.env.get('HOME') ?? '/home/user') + s.slice(1);
+      return s;
     }
     if ('Variable' in part) {
+      if (part.Variable === '?') return String(this.lastExitCode);
       return this.env.get(part.Variable) ?? '';
     }
     if ('CommandSub' in part) {
@@ -669,6 +813,31 @@ export class ShellRunner {
       } finally {
         this.substitutionDepth--;
       }
+    }
+    if ('ParamExpansion' in part) {
+      const { var: name, op, default: operand } = part.ParamExpansion;
+      const val = this.env.get(name);
+      switch (op) {
+        case ':-': return (val !== undefined && val !== '') ? val : operand;
+        case ':=': {
+          if (val === undefined || val === '') {
+            this.env.set(name, operand);
+            return operand;
+          }
+          return val;
+        }
+        case ':+': return (val !== undefined && val !== '') ? operand : '';
+        case ':?': {
+          if (val === undefined || val === '') {
+            throw new Error(`${name}: ${operand || 'parameter null or not set'}`);
+          }
+          return val;
+        }
+        default: return val ?? '';
+      }
+    }
+    if ('ArithmeticExpansion' in part) {
+      return String(this.evalArithmetic(part.ArithmeticExpansion));
     }
     return '';
   }
@@ -923,6 +1092,41 @@ export class ShellRunner {
     } catch {
       return [];
     }
+  }
+
+  private async execCase(caseCmd: { word: Word; items: CaseItem[] }): Promise<RunResult> {
+    const value = await this.expandWord(caseCmd.word);
+    for (const item of caseCmd.items) {
+      for (const pattern of item.patterns) {
+        const patStr = await this.expandWord(pattern);
+        if (this.caseGlobMatch(value, patStr)) {
+          return this.execCommand(item.body);
+        }
+      }
+    }
+    return { ...EMPTY_RESULT };
+  }
+
+  /** Match a string against a shell glob pattern (for case statements). */
+  private caseGlobMatch(value: string, pattern: string): boolean {
+    if (pattern === '*') return true;
+    const regexStr = '^' + pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.')
+      + '$';
+    return new RegExp(regexStr).test(value);
+  }
+
+  /** Evaluate a shell arithmetic expression. */
+  private evalArithmetic(expr: string): number {
+    // Expand $VAR references and bare variable names
+    let expanded = expr.replace(/\$(\w+)/g, (_, name) => this.env.get(name) ?? '0');
+    // Replace bare variable names (not already a number)
+    expanded = expanded.replace(/\b([a-zA-Z_]\w*)\b/g, (match) => {
+      return this.env.get(match) ?? '0';
+    });
+    return safeEvalArithmetic(expanded);
   }
 
   /** Builtin: pwd — print working directory. */
@@ -1363,6 +1567,87 @@ function formatDate(d: Date, format: string): string {
       default: return `%${code}`;
     }
   });
+}
+
+/**
+ * Safe arithmetic evaluator using recursive descent.
+ * Supports: +, -, *, /, %, parentheses, comparisons (==, !=, <, >, <=, >=).
+ */
+function safeEvalArithmetic(expr: string): number {
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < expr.length) {
+    if (expr[i] === ' ' || expr[i] === '\t') { i++; continue; }
+    if ('0123456789'.includes(expr[i])) {
+      let num = '';
+      while (i < expr.length && '0123456789'.includes(expr[i])) { num += expr[i++]; }
+      tokens.push(num);
+    } else if ('+-*/%()'.includes(expr[i])) {
+      tokens.push(expr[i++]);
+    } else if (expr[i] === '<' || expr[i] === '>' || expr[i] === '=' || expr[i] === '!') {
+      let op = expr[i++];
+      if (i < expr.length && expr[i] === '=') { op += expr[i++]; }
+      tokens.push(op);
+    } else {
+      i++; // skip unknown
+    }
+  }
+  let pos = 0;
+  function peek(): string | undefined { return tokens[pos]; }
+  function next(): string { return tokens[pos++]; }
+  function parseExpr(): number { return parseComparison(); }
+  function parseComparison(): number {
+    let left = parseAddSub();
+    while (peek() === '==' || peek() === '!=' || peek() === '<' || peek() === '>' || peek() === '<=' || peek() === '>=') {
+      const op = next();
+      const right = parseAddSub();
+      switch (op) {
+        case '==': left = left === right ? 1 : 0; break;
+        case '!=': left = left !== right ? 1 : 0; break;
+        case '<': left = left < right ? 1 : 0; break;
+        case '>': left = left > right ? 1 : 0; break;
+        case '<=': left = left <= right ? 1 : 0; break;
+        case '>=': left = left >= right ? 1 : 0; break;
+      }
+    }
+    return left;
+  }
+  function parseAddSub(): number {
+    let left = parseMulDiv();
+    while (peek() === '+' || peek() === '-') {
+      const op = next();
+      const right = parseMulDiv();
+      left = op === '+' ? left + right : left - right;
+    }
+    return left;
+  }
+  function parseMulDiv(): number {
+    let left = parseUnary();
+    while (peek() === '*' || peek() === '/' || peek() === '%') {
+      const op = next();
+      const right = parseUnary();
+      if (op === '*') left = left * right;
+      else if (op === '/') left = right !== 0 ? Math.trunc(left / right) : 0;
+      else left = right !== 0 ? left % right : 0;
+    }
+    return left;
+  }
+  function parseUnary(): number {
+    if (peek() === '-') { next(); return -parsePrimary(); }
+    if (peek() === '+') { next(); return parsePrimary(); }
+    return parsePrimary();
+  }
+  function parsePrimary(): number {
+    if (peek() === '(') {
+      next(); // skip (
+      const val = parseExpr();
+      if (peek() === ')') next();
+      return val;
+    }
+    const tok = next();
+    return tok !== undefined ? parseInt(tok, 10) || 0 : 0;
+  }
+  return parseExpr();
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

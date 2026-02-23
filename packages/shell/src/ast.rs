@@ -8,6 +8,12 @@ pub enum WordPart {
     Literal(String),
     Variable(String),
     CommandSub(String),
+    ParamExpansion {
+        var: String,
+        op: String,
+        default: String,
+    },
+    ArithmeticExpansion(String),
 }
 
 /// A shell word composed of one or more parts.
@@ -87,4 +93,21 @@ pub enum Command {
     },
     /// Subshell: ( commands ).
     Subshell { body: Box<Command> },
+    /// Break out of a loop.
+    Break,
+    /// Continue to next loop iteration.
+    Continue,
+    /// Negate exit code of a pipeline.
+    Negate { body: Box<Command> },
+    /// Function definition.
+    Function { name: String, body: Box<Command> },
+    /// Case statement.
+    Case { word: Word, items: Vec<CaseItem> },
+}
+
+/// A single arm of a case statement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CaseItem {
+    pub patterns: Vec<Word>,
+    pub body: Box<Command>,
 }

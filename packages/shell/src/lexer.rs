@@ -22,8 +22,21 @@ pub fn lex(input: &str) -> Vec<Token> {
             continue;
         }
 
-        // Semicolon
+        // Comments — skip from # to end of line
+        if chars[pos] == '#' {
+            while pos < len && chars[pos] != '\n' {
+                pos += 1;
+            }
+            continue; // don't consume newline, let normal processing handle it
+        }
+
+        // Semicolon or ;;
         if chars[pos] == ';' {
+            if pos + 1 < len && chars[pos + 1] == ';' {
+                tokens.push(Token::DoubleSemi);
+                pos += 2;
+                continue;
+            }
             tokens.push(Token::Semi);
             pos += 1;
             continue;
@@ -39,6 +52,40 @@ pub fn lex(input: &str) -> Vec<Token> {
             tokens.push(Token::RParen);
             pos += 1;
             continue;
+        }
+
+        // Braces
+        if chars[pos] == '{' {
+            tokens.push(Token::LBrace);
+            pos += 1;
+            continue;
+        }
+        if chars[pos] == '}' {
+            tokens.push(Token::RBrace);
+            pos += 1;
+            continue;
+        }
+
+        // Bang (pipeline negation) — standalone ! at command start position
+        // Only emit Bang if it's the first token or follows a pipe/semi/newline/&&/||/(
+        if chars[pos] == '!' && (pos + 1 >= len || chars[pos + 1] == ' ' || chars[pos + 1] == '\t') {
+            let mut is_command_start = tokens.is_empty();
+            if !is_command_start {
+                if let Some(last) = tokens.last() {
+                    is_command_start = matches!(
+                        last,
+                        Token::Pipe | Token::And | Token::Or | Token::Semi
+                            | Token::Newline | Token::LParen | Token::Do | Token::Then
+                            | Token::Else | Token::LBrace | Token::DoubleSemi
+                    );
+                }
+            }
+            if is_command_start {
+                tokens.push(Token::Bang);
+                pos += 1;
+                continue;
+            }
+            // Otherwise fall through to be read as a word
         }
 
         // && or &> or lone &
@@ -114,6 +161,44 @@ pub fn lex(input: &str) -> Vec<Token> {
             continue;
         }
         if chars[pos] == '<' {
+            if pos + 1 < len && chars[pos + 1] == '<' {
+                // Here-document: <<EOF or <<-EOF
+                pos += 2;
+                let strip_tabs = pos < len && chars[pos] == '-';
+                if strip_tabs { pos += 1; }
+                skip_whitespace(&chars, &mut pos);
+
+                // Read delimiter (may be quoted with ' or ")
+                let (delimiter, _quoted) = read_heredoc_delimiter(&chars, &mut pos);
+
+                // Skip to next newline, then read content lines until delimiter
+                while pos < len && chars[pos] != '\n' { pos += 1; }
+                if pos < len { pos += 1; } // skip newline
+
+                let mut content = String::new();
+                loop {
+                    if pos >= len { break; }
+                    let line_start = pos;
+                    while pos < len && chars[pos] != '\n' { pos += 1; }
+                    let line: String = chars[line_start..pos].iter().collect();
+                    let trimmed = if strip_tabs { line.trim_start_matches('\t') } else { &line };
+                    if trimmed.trim() == delimiter {
+                        if pos < len { pos += 1; } // skip delimiter newline
+                        break;
+                    }
+                    content.push_str(&line);
+                    content.push('\n');
+                    if pos < len { pos += 1; } else { break; }
+                }
+
+                let rtype = if strip_tabs {
+                    RedirectType::HeredocStrip(content)
+                } else {
+                    RedirectType::Heredoc(content)
+                };
+                tokens.push(Token::Redirect(rtype));
+                continue;
+            }
             pos += 1;
             skip_whitespace(&chars, &mut pos);
             let target = read_redirect_target(&chars, &mut pos);
@@ -121,10 +206,29 @@ pub fn lex(input: &str) -> Vec<Token> {
             continue;
         }
 
-        // $ — variable or command substitution
+        // $ — variable, command substitution, or arithmetic
         if chars[pos] == '$' {
             pos += 1;
             if pos < len && chars[pos] == '(' {
+                if pos + 1 < len && chars[pos + 1] == '(' {
+                    // Arithmetic: $((...))
+                    pos += 2;
+                    let mut depth = 1;
+                    let mut expr = String::new();
+                    while pos < len && depth > 0 {
+                        if chars[pos] == '(' { depth += 1; }
+                        if chars[pos] == ')' {
+                            depth -= 1;
+                            if depth == 0 { break; }
+                        }
+                        expr.push(chars[pos]);
+                        pos += 1;
+                    }
+                    if pos < len { pos += 1; } // skip inner )
+                    if pos < len && chars[pos] == ')' { pos += 1; } // skip outer )
+                    tokens.push(Token::DoubleQuoted(vec![WordPart::ArithmeticExpansion(expr)]));
+                    continue;
+                }
                 // Command substitution: $(...)
                 pos += 1; // skip '('
                 let content = read_balanced_parens(&chars, &mut pos);
@@ -135,9 +239,11 @@ pub fn lex(input: &str) -> Vec<Token> {
                 // Braced variable: ${...}
                 pos += 1; // skip '{'
                 let var = read_until_char(&chars, &mut pos, '}');
-                // Strip the modifier portion for simple names: ${VAR} -> "VAR"
-                // For ${VAR:-default}, preserve the full content
-                tokens.push(Token::Variable(var));
+                let part = parse_braced_var(&var);
+                match part {
+                    WordPart::Variable(_) => tokens.push(Token::Variable(match part { WordPart::Variable(v) => v, _ => unreachable!() })),
+                    _ => tokens.push(Token::DoubleQuoted(vec![part])),
+                }
                 continue;
             }
             // Special variables: $?, $$, $!, $#, $@, $*, $0-$9
@@ -293,6 +399,25 @@ fn lex_double_quoted(chars: &[char], pos: &mut usize) -> Vec<WordPart> {
             }
             *pos += 1;
             if *pos < chars.len() && chars[*pos] == '(' {
+                if *pos + 1 < chars.len() && chars[*pos + 1] == '(' {
+                    // Arithmetic: $((...))
+                    *pos += 2;
+                    let mut depth = 1;
+                    let mut expr = String::new();
+                    while *pos < chars.len() && depth > 0 {
+                        if chars[*pos] == '(' { depth += 1; }
+                        if chars[*pos] == ')' {
+                            depth -= 1;
+                            if depth == 0 { break; }
+                        }
+                        expr.push(chars[*pos]);
+                        *pos += 1;
+                    }
+                    if *pos < chars.len() { *pos += 1; } // skip inner )
+                    if *pos < chars.len() && chars[*pos] == ')' { *pos += 1; } // skip outer )
+                    parts.push(WordPart::ArithmeticExpansion(expr));
+                    continue;
+                }
                 // Command substitution: $(...)
                 *pos += 1;
                 let content = read_balanced_parens(chars, pos);
@@ -303,7 +428,7 @@ fn lex_double_quoted(chars: &[char], pos: &mut usize) -> Vec<WordPart> {
                 // Braced variable: ${...}
                 *pos += 1;
                 let var = read_until_char(chars, pos, '}');
-                parts.push(WordPart::Variable(var));
+                parts.push(parse_braced_var(&var));
                 continue;
             }
             // Special variables: $?, $$, $!, $#, $@, $*
@@ -457,6 +582,10 @@ fn classify_word(word: String) -> Token {
         "do" => Token::Do,
         "done" => Token::Done,
         "while" => Token::While,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
+        "case" => Token::Case,
+        "esac" => Token::Esac,
         _ => {
             if let Some(eq_pos) = word.find('=') {
                 let name = &word[..eq_pos];
@@ -467,6 +596,39 @@ fn classify_word(word: String) -> Token {
             }
             Token::Word(word)
         }
+    }
+}
+
+/// Parse the content of `${...}` into a WordPart.
+/// Detects parameter expansion operators like `:-`, `:=`, `:+`, `:?`.
+fn parse_braced_var(content: &str) -> WordPart {
+    for op in &[":-", ":=", ":+", ":?", "##", "#", "%%", "%", "//", "/"] {
+        if let Some(idx) = content.find(op) {
+            return WordPart::ParamExpansion {
+                var: content[..idx].to_string(),
+                op: op.to_string(),
+                default: content[idx + op.len()..].to_string(),
+            };
+        }
+    }
+    WordPart::Variable(content.to_string())
+}
+
+/// Read a here-document delimiter. May be quoted with ' or ".
+/// Returns (delimiter, was_quoted).
+fn read_heredoc_delimiter(chars: &[char], pos: &mut usize) -> (String, bool) {
+    if *pos < chars.len() && (chars[*pos] == '\'' || chars[*pos] == '"') {
+        let quote = chars[*pos];
+        *pos += 1;
+        let delim = read_until_char(chars, pos, quote);
+        (delim, true)
+    } else {
+        let mut delim = String::new();
+        while *pos < chars.len() && !chars[*pos].is_whitespace() && chars[*pos] != '\n' {
+            delim.push(chars[*pos]);
+            *pos += 1;
+        }
+        (delim, false)
     }
 }
 
@@ -707,6 +869,52 @@ mod tests {
             vec![
                 Token::Word("echo".into()),
                 Token::Word("hello world".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_after_command() {
+        let tokens = lex("echo hello # comment");
+        assert_eq!(
+            tokens,
+            vec![Token::Word("echo".into()), Token::Word("hello".into()),]
+        );
+    }
+
+    #[test]
+    fn full_line_comment() {
+        let tokens = lex("# full line comment\necho hi");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Newline,
+                Token::Word("echo".into()),
+                Token::Word("hi".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_inside_single_quotes() {
+        let tokens = lex("echo 'hello # not comment'");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Word("echo".into()),
+                Token::Word("hello # not comment".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_inside_double_quotes() {
+        let tokens = lex("echo \"hello # not comment\"");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Word("echo".into()),
+                Token::Word("hello # not comment".into()),
             ]
         );
     }

@@ -40,6 +40,18 @@ pub enum Token {
     Do,
     Done,
     While,
+    Break,
+    Continue,
+    Case,
+    Esac,
+    /// `;;` — case item terminator.
+    DoubleSemi,
+    /// `!` — pipeline negation.
+    Bang,
+    /// `{`
+    LBrace,
+    /// `}`
+    RBrace,
 }
 
 /// The kind of I/O redirection.
@@ -59,4 +71,8 @@ pub enum RedirectType {
     StderrToStdout,
     /// &> file  (both stdout and stderr)
     BothOverwrite(String),
+    /// <<EOF ... content ... EOF
+    Heredoc(String),
+    /// <<-EOF (strip leading tabs)
+    HeredocStrip(String),
 }

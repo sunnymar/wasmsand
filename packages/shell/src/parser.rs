@@ -1,4 +1,4 @@
-use crate::ast::{Assignment, Command, ListOp, Redirect, Word, WordPart};
+use crate::ast::{Assignment, CaseItem, Command, ListOp, Redirect, Word, WordPart};
 use crate::lexer::lex;
 use crate::token::Token;
 
@@ -63,6 +63,9 @@ impl Parser {
                     | Token::Do
                     | Token::Done
                     | Token::RParen
+                    | Token::RBrace
+                    | Token::Esac
+                    | Token::DoubleSemi
             ),
         }
     }
@@ -83,6 +86,10 @@ impl Parser {
                     | Token::For
                     | Token::While
                     | Token::LParen
+                    | Token::Break
+                    | Token::Continue
+                    | Token::Bang
+                    | Token::Case
             ),
         }
     }
@@ -145,8 +152,11 @@ impl Parser {
         }
     }
 
-    /// pipeline = command (PIPE command)*
+    /// pipeline = [BANG] command (PIPE command)*
     fn parse_pipeline(&mut self) -> Command {
+        let negated = matches!(self.peek(), Some(Token::Bang));
+        if negated { self.advance(); }
+
         let first = self.parse_command();
         let mut commands = vec![first];
 
@@ -156,21 +166,48 @@ impl Parser {
             commands.push(self.parse_command());
         }
 
-        if commands.len() == 1 {
+        let result = if commands.len() == 1 {
             commands.remove(0)
         } else {
             Command::Pipeline { commands }
+        };
+
+        if negated {
+            Command::Negate { body: Box::new(result) }
+        } else {
+            result
         }
     }
 
-    /// command = if_clause | for_clause | while_clause | subshell | simple_command
+    /// command = if_clause | for_clause | while_clause | case_clause | subshell | function_def | simple_command
     fn parse_command(&mut self) -> Command {
         match self.peek() {
             Some(Token::If) => self.parse_if(),
             Some(Token::For) => self.parse_for(),
             Some(Token::While) => self.parse_while(),
+            Some(Token::Case) => self.parse_case(),
             Some(Token::LParen) => self.parse_subshell(),
-            _ => self.parse_simple_command(),
+            Some(Token::Break) => { self.advance(); Command::Break }
+            Some(Token::Continue) => { self.advance(); Command::Continue }
+            _ => {
+                // Check for function: name() { ... }
+                if let Some(Token::Word(name)) = self.peek() {
+                    if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1] == Token::LParen {
+                        if self.pos + 2 < self.tokens.len() && self.tokens[self.pos + 2] == Token::RParen {
+                            let name = name.clone();
+                            self.pos += 3; // consume name ( )
+                            self.skip_separators();
+                            self.expect(&Token::LBrace);
+                            self.skip_separators();
+                            let body = self.parse_list();
+                            self.skip_separators();
+                            self.expect(&Token::RBrace);
+                            return Command::Function { name, body: Box::new(body) };
+                        }
+                    }
+                }
+                self.parse_simple_command()
+            }
         }
     }
 
@@ -364,6 +401,71 @@ impl Parser {
 
         Command::Subshell {
             body: Box::new(body),
+        }
+    }
+
+    /// case_clause = CASE word IN (case_item)* ESAC
+    /// case_item = pattern (PIPE pattern)* RPAREN list DOUBLE_SEMI
+    fn parse_case(&mut self) -> Command {
+        self.expect(&Token::Case);
+        let word = self.parse_word_token();
+        self.expect(&Token::In);
+        self.skip_separators();
+
+        let mut items = Vec::new();
+        while !matches!(self.peek(), Some(Token::Esac) | None) {
+            // Parse patterns: pattern1 | pattern2 )
+            let mut patterns = Vec::new();
+            // Skip optional leading (
+            if matches!(self.peek(), Some(Token::LParen)) {
+                self.advance();
+            }
+            patterns.push(self.parse_word_token());
+            while matches!(self.peek(), Some(Token::Pipe)) {
+                self.advance();
+                patterns.push(self.parse_word_token());
+            }
+            self.expect(&Token::RParen);
+            self.skip_separators();
+
+            // Parse body (may be empty)
+            let body = if !matches!(self.peek(), Some(Token::DoubleSemi) | Some(Token::Esac) | None) {
+                self.parse_list()
+            } else {
+                Command::Simple { words: vec![], redirects: vec![], assignments: vec![] }
+            };
+
+            items.push(CaseItem { patterns, body: Box::new(body) });
+
+            // Expect ;; (or esac)
+            if matches!(self.peek(), Some(Token::DoubleSemi)) {
+                self.advance();
+                self.skip_separators();
+            }
+        }
+
+        self.expect(&Token::Esac);
+        Command::Case { word, items }
+    }
+
+    /// Parse a single word token (Word, Variable, DoubleQuoted, CommandSub).
+    fn parse_word_token(&mut self) -> Word {
+        match self.peek() {
+            Some(Token::Word(_)) => {
+                if let Token::Word(w) = self.advance() { Word::literal(&w) } else { unreachable!() }
+            }
+            Some(Token::Variable(_)) => {
+                if let Token::Variable(v) = self.advance() { Word::variable(&v) } else { unreachable!() }
+            }
+            Some(Token::DoubleQuoted(_)) => {
+                if let Token::DoubleQuoted(parts) = self.advance() { Word { parts } } else { unreachable!() }
+            }
+            Some(Token::CommandSub(_)) => {
+                if let Token::CommandSub(c) = self.advance() {
+                    Word { parts: vec![WordPart::CommandSub(c)] }
+                } else { unreachable!() }
+            }
+            other => panic!("expected word, got {:?}", other),
         }
     }
 }
