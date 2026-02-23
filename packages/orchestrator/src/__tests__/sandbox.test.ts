@@ -181,6 +181,95 @@ describe('Sandbox', () => {
     });
   });
 
+  describe('resource limits', () => {
+    it('rejects command exceeding commandBytes limit', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        limits: { commandBytes: 10 },
+      });
+      const result = await sandbox.run('echo this is a long command that exceeds the limit');
+      expect(result.exitCode).toBe(1);
+      expect(result.errorClass).toBe('LIMIT_EXCEEDED');
+      expect(result.stderr).toContain('command too long');
+    });
+
+    it('truncates stdout exceeding stdoutBytes limit', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        limits: { stdoutBytes: 5 },
+      });
+      const result = await sandbox.run('echo hello world');
+      expect(result.stdout.length).toBeLessThanOrEqual(5);
+      expect(result.truncated).toEqual({ stdout: true, stderr: false });
+    });
+
+    it('truncates stderr exceeding stderrBytes limit', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        limits: { stderrBytes: 5 },
+      });
+      const result = await sandbox.run('echo error message >&2');
+      expect(result.stderr.length).toBeLessThanOrEqual(5);
+      expect(result.truncated).toEqual({ stdout: false, stderr: true });
+    });
+
+    it('passes fileCount limit to VFS', async () => {
+      // ShellRunner writes tool stubs to /bin and /usr/bin during init,
+      // consuming ~130 file slots. Use a tight limit that allows one
+      // more user file but not two.
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        limits: { fileCount: 200 },
+      });
+      sandbox.writeFile('/tmp/a.txt', new Uint8Array(1));
+      // Fill remaining slots to trigger the limit
+      let hitLimit = false;
+      for (let i = 0; i < 200; i++) {
+        try {
+          sandbox.writeFile(`/tmp/fill-${i}.txt`, new Uint8Array(1));
+        } catch (e: unknown) {
+          if (e instanceof Error && e.message.includes('ENOSPC')) {
+            hitLimit = true;
+            break;
+          }
+          throw e;
+        }
+      }
+      expect(hitLimit).toBe(true);
+    });
+
+    it('sets errorClass TIMEOUT on timeout', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        timeoutMs: 1,
+      });
+      const result = await sandbox.run('yes hello | head -1000');
+      expect(result.exitCode).toBe(124);
+      expect(result.errorClass).toBe('TIMEOUT');
+    });
+
+    it('no truncation when output is within limits', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        limits: { stdoutBytes: 1_000_000 },
+      });
+      const result = await sandbox.run('echo hello');
+      expect(result.truncated).toBeUndefined();
+    });
+  });
+
   describe('socket shim bootstrap', () => {
     it('writes socket.py to VFS when network is configured', async () => {
       sandbox = await Sandbox.create({

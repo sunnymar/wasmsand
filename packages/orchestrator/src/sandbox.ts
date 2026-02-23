@@ -30,10 +30,20 @@ export interface SandboxOptions {
   shellWasmPath?: string;
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
+  /** Resource limits for commands, output, and file count. */
+  limits?: {
+    stdoutBytes?: number;
+    stderrBytes?: number;
+    commandBytes?: number;
+    fileCount?: number;
+  };
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_FS_LIMIT = 256 * 1024 * 1024; // 256 MB
+const DEFAULT_STDOUT_LIMIT = 1_048_576;  // 1 MB
+const DEFAULT_STDERR_LIMIT = 1_048_576;  // 1 MB
+const DEFAULT_COMMAND_LIMIT = 65_536;    // 64 KB
 
 export class Sandbox {
   private vfs: VFS;
@@ -47,6 +57,7 @@ export class Sandbox {
   private envSnapshots: Map<string, Map<string, string>> = new Map();
   private bridge: NetworkBridge | null = null;
   private networkPolicy: NetworkPolicy | undefined;
+  private limits: { stdoutBytes: number; stderrBytes: number; commandBytes: number };
 
   private constructor(
     vfs: VFS,
@@ -56,6 +67,7 @@ export class Sandbox {
     wasmDir: string,
     shellWasmPath: string,
     mgr: ProcessManager,
+    limits: { stdoutBytes: number; stderrBytes: number; commandBytes: number },
     bridge?: NetworkBridge,
     networkPolicy?: NetworkPolicy,
   ) {
@@ -66,6 +78,7 @@ export class Sandbox {
     this.wasmDir = wasmDir;
     this.shellWasmPath = shellWasmPath;
     this.mgr = mgr;
+    this.limits = limits;
     this.bridge = bridge ?? null;
     this.networkPolicy = networkPolicy;
   }
@@ -75,7 +88,7 @@ export class Sandbox {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fsLimitBytes = options.fsLimitBytes ?? DEFAULT_FS_LIMIT;
 
-    const vfs = new VFS({ fsLimitBytes });
+    const vfs = new VFS({ fsLimitBytes, maxFileCount: options.limits?.fileCount });
     const gateway = options.network ? new NetworkGateway(options.network) : undefined;
 
     // Create bridge for WASI socket access when network policy exists
@@ -115,7 +128,13 @@ export class Sandbox {
       runner.setEnv('PYTHONPATH', '/usr/lib/python');
     }
 
-    return new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network);
+    const limits = {
+      stdoutBytes: options.limits?.stdoutBytes ?? DEFAULT_STDOUT_LIMIT,
+      stderrBytes: options.limits?.stderrBytes ?? DEFAULT_STDERR_LIMIT,
+      commandBytes: options.limits?.commandBytes ?? DEFAULT_COMMAND_LIMIT,
+    };
+
+    return new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, limits, bridge, options.network);
   }
 
   private static async detectAdapter(): Promise<PlatformAdapter> {
@@ -129,15 +148,43 @@ export class Sandbox {
 
   async run(command: string): Promise<RunResult> {
     this.assertAlive();
+
+    if (Buffer.byteLength(command) > this.limits.commandBytes) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `command too long (${Buffer.byteLength(command)} bytes, limit: ${this.limits.commandBytes})\n`,
+        executionTimeMs: 0,
+        errorClass: 'LIMIT_EXCEEDED',
+      };
+    }
+
     const timer = new Promise<RunResult>((resolve) => {
       setTimeout(() => resolve({
         exitCode: 124,
         stdout: '',
         stderr: 'command timed out\n',
         executionTimeMs: this.timeoutMs,
+        errorClass: 'TIMEOUT',
       }), this.timeoutMs);
     });
-    return Promise.race([this.runner.run(command), timer]);
+
+    const result = await Promise.race([this.runner.run(command), timer]);
+    return this.applyOutputLimits(result);
+  }
+
+  private applyOutputLimits(result: RunResult): RunResult {
+    const stdoutOver = result.stdout.length > this.limits.stdoutBytes;
+    const stderrOver = result.stderr.length > this.limits.stderrBytes;
+
+    if (!stdoutOver && !stderrOver) return result;
+
+    return {
+      ...result,
+      stdout: stdoutOver ? result.stdout.slice(0, this.limits.stdoutBytes) : result.stdout,
+      stderr: stderrOver ? result.stderr.slice(0, this.limits.stderrBytes) : result.stderr,
+      truncated: { stdout: stdoutOver, stderr: stderrOver },
+    };
   }
 
   readFile(path: string): Uint8Array {
@@ -231,7 +278,7 @@ export class Sandbox {
     return new Sandbox(
       childVfs, childRunner, this.timeoutMs,
       this.adapter, this.wasmDir, this.shellWasmPath,
-      childMgr, childBridge, this.networkPolicy,
+      childMgr, this.limits, childBridge, this.networkPolicy,
     );
   }
 
