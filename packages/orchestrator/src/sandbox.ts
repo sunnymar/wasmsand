@@ -12,6 +12,8 @@ import { ShellRunner } from './shell/shell-runner.js';
 import type { RunResult } from './shell/shell-runner.js';
 import type { PlatformAdapter } from './platform/adapter.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
+import { NetworkGateway } from './network/gateway.js';
+import type { NetworkPolicy } from './network/gateway.js';
 
 export interface SandboxOptions {
   /** Directory (Node) or URL base (browser) containing .wasm files. */
@@ -24,6 +26,8 @@ export interface SandboxOptions {
   fsLimitBytes?: number;
   /** Path to the shell parser wasm. Defaults to `${wasmDir}/wasmsand-shell.wasm`. */
   shellWasmPath?: string;
+  /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
+  network?: NetworkPolicy;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -79,7 +83,8 @@ export class Sandbox {
 
     // Shell parser wasm
     const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/wasmsand-shell.wasm`;
-    const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath);
+    const gateway = options.network ? new NetworkGateway(options.network) : undefined;
+    const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
 
     return new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr);
   }

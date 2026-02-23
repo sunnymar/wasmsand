@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { resolve } from 'node:path';
 
 import { ShellRunner } from '../shell-runner.js';
 import { ProcessManager } from '../../process/manager.js';
 import { VFS } from '../../vfs/vfs.js';
 import { NodeAdapter } from '../../platform/node-adapter.js';
+import { NetworkGateway } from '../../network/gateway.js';
 
 const FIXTURES = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
 const SHELL_WASM = resolve(import.meta.dirname, '../__tests__/fixtures/wasmsand-shell.wasm');
@@ -255,6 +256,85 @@ describe('ShellRunner', () => {
       const result = await runner.run('date +%H:%M:%S');
       expect(result.exitCode).toBe(0);
       expect(result.stdout.trim()).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    });
+  });
+
+  describe('curl builtin', () => {
+    it('returns error when no NetworkGateway is configured', async () => {
+      const result = await runner.run('curl https://example.com');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('network access not configured');
+    });
+  });
+
+  describe('curl builtin with gateway', () => {
+    let netRunner: ShellRunner;
+    let savedFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      savedFetch = globalThis.fetch;
+      globalThis.fetch = async (url: RequestInfo | URL) => {
+        return new Response(`response from ${url}`, { status: 200 });
+      };
+      const gateway = new NetworkGateway({ allowedHosts: ['example.com'] });
+      const adapter = new NodeAdapter();
+      netRunner = new ShellRunner(vfs, mgr, adapter, SHELL_WASM, gateway);
+    });
+
+    afterEach(() => {
+      globalThis.fetch = savedFetch;
+    });
+
+    it('GET request outputs response body', async () => {
+      const result = await netRunner.run('curl https://example.com/data');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('response from');
+    });
+
+    it('-o writes output to VFS file', async () => {
+      const result = await netRunner.run('curl -o /tmp/out.txt https://example.com/data');
+      expect(result.exitCode).toBe(0);
+      const content = new TextDecoder().decode(vfs.readFile('/tmp/out.txt'));
+      expect(content).toContain('response from');
+    });
+
+    it('blocked host returns error', async () => {
+      const result = await netRunner.run('curl https://evil.com/data');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('denied');
+    });
+  });
+
+  describe('wget builtin with gateway', () => {
+    let netRunner: ShellRunner;
+    let savedFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      savedFetch = globalThis.fetch;
+      globalThis.fetch = async (url: RequestInfo | URL) => {
+        return new Response(`downloaded from ${url}`, { status: 200 });
+      };
+      const gateway = new NetworkGateway({ allowedHosts: ['example.com'] });
+      const adapter = new NodeAdapter();
+      netRunner = new ShellRunner(vfs, mgr, adapter, SHELL_WASM, gateway);
+      netRunner.setEnv('PWD', '/home/user');
+    });
+
+    afterEach(() => {
+      globalThis.fetch = savedFetch;
+    });
+
+    it('downloads to VFS file named from URL', async () => {
+      const result = await netRunner.run('wget https://example.com/file.txt');
+      expect(result.exitCode).toBe(0);
+      const content = new TextDecoder().decode(vfs.readFile('/home/user/file.txt'));
+      expect(content).toContain('downloaded from');
+    });
+
+    it('-O - outputs to stdout', async () => {
+      const result = await netRunner.run('wget -O - https://example.com/file.txt');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('downloaded from');
     });
   });
 });

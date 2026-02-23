@@ -14,9 +14,10 @@ import type { SpawnResult } from '../process/process.js';
 import type { VFS } from '../vfs/vfs.js';
 import { PythonRunner } from '../python/python-runner.js';
 import { WasiHost } from '../wasi/wasi-host.js';
+import { NetworkGateway, NetworkAccessDenied } from '../network/gateway.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
-const SHELL_BUILTINS = new Set(['which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date']);
+const SHELL_BUILTINS = new Set(['which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */
 const PYTHON_INTERPRETERS = new Set(['python3', 'python']);
@@ -84,6 +85,7 @@ export class ShellRunner {
   private shellWasmPath: string;
   private shellModule: WebAssembly.Module | null = null;
   private pythonRunner: PythonRunner | null = null;
+  private gateway: NetworkGateway | null = null;
   private env: Map<string, string> = new Map();
   /** Current command substitution nesting depth. */
   private substitutionDepth = 0;
@@ -93,11 +95,13 @@ export class ShellRunner {
     mgr: ProcessManager,
     adapter: PlatformAdapter,
     shellWasmPath: string,
+    gateway?: NetworkGateway,
   ) {
     this.vfs = vfs;
     this.mgr = mgr;
     this.adapter = adapter;
     this.shellWasmPath = shellWasmPath;
+    this.gateway = gateway ?? null;
 
     // Populate /bin with stubs for registered tools + python3 so that
     // `ls /bin` and `which <tool>` work as expected.
@@ -378,6 +382,12 @@ export class ShellRunner {
     }
     if (cmdName === 'date') {
       return this.builtinDate(args);
+    }
+    if (cmdName === 'curl') {
+      return this.builtinCurl(args);
+    }
+    if (cmdName === 'wget') {
+      return this.builtinWget(args);
     }
 
     // Handle stdin redirect
@@ -1103,6 +1113,107 @@ export class ShellRunner {
     }
 
     return { exitCode, stdout: '', stderr, executionTimeMs: 0 };
+  }
+
+  /** Builtin: curl — HTTP client delegating to NetworkGateway. */
+  private async builtinCurl(args: string[]): Promise<RunResult> {
+    if (!this.gateway) {
+      return { exitCode: 1, stdout: '', stderr: 'curl: network access not configured\n', executionTimeMs: 0 };
+    }
+
+    let method = 'GET';
+    const headers: Record<string, string> = {};
+    let data: string | undefined;
+    let outputFile: string | undefined;
+    let headOnly = false;
+    let url: string | undefined;
+
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '-X' && i + 1 < args.length) { method = args[++i]; }
+      else if (arg === '-H' && i + 1 < args.length) {
+        const header = args[++i];
+        const colonIdx = header.indexOf(':');
+        if (colonIdx > 0) headers[header.slice(0, colonIdx).trim()] = header.slice(colonIdx + 1).trim();
+      }
+      else if ((arg === '-d' || arg === '--data') && i + 1 < args.length) {
+        data = args[++i];
+        if (method === 'GET') method = 'POST';
+      }
+      else if (arg === '-o' && i + 1 < args.length) { outputFile = this.resolvePath(args[++i]); }
+      else if (arg === '-s' || arg === '--silent') { /* silent mode */ }
+      else if (arg === '-I' || arg === '--head') { headOnly = true; method = 'HEAD'; }
+      else if (arg === '-L' || arg === '--location') { /* follow redirects is default with fetch() */ }
+      else if (!arg.startsWith('-')) { url = arg; }
+    }
+
+    if (!url) return { exitCode: 1, stdout: '', stderr: 'curl: no URL specified\n', executionTimeMs: 0 };
+
+    try {
+      const init: RequestInit = { method, headers };
+      if (data) {
+        init.body = data;
+        if (!headers['Content-Type']) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      }
+      const response = await this.gateway.fetch(url, init);
+
+      if (headOnly) {
+        let headerStr = `HTTP/${response.status}\n`;
+        response.headers.forEach((v, k) => { headerStr += `${k}: ${v}\n`; });
+        return { exitCode: 0, stdout: headerStr, stderr: '', executionTimeMs: 0 };
+      }
+
+      const body = await response.text();
+      if (outputFile) {
+        this.vfs.writeFile(outputFile, new TextEncoder().encode(body));
+        return { exitCode: 0, stdout: '', stderr: '', executionTimeMs: 0 };
+      }
+      return { exitCode: 0, stdout: body, stderr: '', executionTimeMs: 0 };
+    } catch (err) {
+      if (err instanceof NetworkAccessDenied) return { exitCode: 1, stdout: '', stderr: `curl: ${err.message}\n`, executionTimeMs: 0 };
+      const msg = err instanceof Error ? err.message : String(err);
+      return { exitCode: 1, stdout: '', stderr: `curl: ${msg}\n`, executionTimeMs: 0 };
+    }
+  }
+
+  /** Builtin: wget — download files via NetworkGateway. */
+  private async builtinWget(args: string[]): Promise<RunResult> {
+    if (!this.gateway) {
+      return { exitCode: 1, stdout: '', stderr: 'wget: network access not configured\n', executionTimeMs: 0 };
+    }
+
+    let outputFile: string | undefined;
+    let toStdout = false;
+    let quiet = false;
+    let url: string | undefined;
+
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '-O' && i + 1 < args.length) {
+        const val = args[++i];
+        if (val === '-') toStdout = true;
+        else outputFile = this.resolvePath(val);
+      } else if (arg === '-q') { quiet = true; }
+      else if (!arg.startsWith('-')) { url = arg; }
+    }
+
+    if (!url) return { exitCode: 1, stdout: '', stderr: 'wget: no URL specified\n', executionTimeMs: 0 };
+
+    try {
+      const response = await this.gateway.fetch(url);
+      const body = await response.text();
+
+      if (toStdout) return { exitCode: 0, stdout: body, stderr: '', executionTimeMs: 0 };
+
+      const destPath = outputFile ?? this.resolvePath(url.split('/').pop() || 'index.html');
+      this.vfs.writeFile(destPath, new TextEncoder().encode(body));
+      const stderr = quiet ? '' : `saved to ${destPath}\n`;
+      return { exitCode: 0, stdout: '', stderr, executionTimeMs: 0 };
+    } catch (err) {
+      if (err instanceof NetworkAccessDenied) return { exitCode: 1, stdout: '', stderr: `wget: ${err.message}\n`, executionTimeMs: 0 };
+      const msg = err instanceof Error ? err.message : String(err);
+      return { exitCode: 1, stdout: '', stderr: `wget: ${msg}\n`, executionTimeMs: 0 };
+    }
   }
 
   private tryReadFile(path: string): Uint8Array {
