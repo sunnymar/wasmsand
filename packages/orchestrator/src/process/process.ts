@@ -14,6 +14,7 @@ export interface SpawnOptions {
   cwd?: string;
   stdoutLimit?: number;
   stderrLimit?: number;
+  deadlineMs?: number;
 }
 
 export interface SpawnResult {

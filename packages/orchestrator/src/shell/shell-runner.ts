@@ -17,6 +17,7 @@ import { PythonRunner } from '../python/python-runner.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import { NetworkGateway, NetworkAccessDenied } from '../network/gateway.js';
 import type { ErrorClass } from '../security.js';
+import { CancelledError } from '../security.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
 const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false']);
@@ -113,6 +114,8 @@ export class ShellRunner {
   private env: Map<string, string> = new Map();
   private stdoutLimit: number | undefined;
   private stderrLimit: number | undefined;
+  private cancelledReason: 'TIMEOUT' | 'CANCELLED' | null = null;
+  private deadlineMs: number = Infinity;
   /** Current command substitution nesting depth. */
   private substitutionDepth = 0;
   /** Exit code of the last executed command (for $?). */
@@ -187,6 +190,22 @@ export class ShellRunner {
   setOutputLimits(stdoutBytes?: number, stderrBytes?: number): void {
     this.stdoutLimit = stdoutBytes;
     this.stderrLimit = stderrBytes;
+  }
+
+  /** Signal cancellation to the shell runner. */
+  cancel(reason: 'TIMEOUT' | 'CANCELLED'): void {
+    this.cancelledReason = reason;
+  }
+
+  /** Force deadline to now — causes immediate cancellation at next check. */
+  setDeadlineNow(): void {
+    this.deadlineMs = 0;
+  }
+
+  /** Reset cancellation flag and set deadline before a new run. */
+  resetCancel(timeoutMs?: number): void {
+    this.cancelledReason = null;
+    this.deadlineMs = timeoutMs !== undefined ? Date.now() + timeoutMs : Infinity;
   }
 
   /** Resolve a path relative to PWD. Absolute paths pass through unchanged. */
@@ -355,6 +374,12 @@ export class ShellRunner {
   // ---- AST execution ----
 
   private async execCommand(cmd: Command): Promise<RunResult> {
+    if (this.cancelledReason) {
+      throw new CancelledError(this.cancelledReason);
+    }
+    if (Date.now() > this.deadlineMs) {
+      throw new CancelledError('TIMEOUT');
+    }
     // Handle string-typed commands (Break, Continue)
     if (typeof cmd === 'string') {
       if (cmd === 'Break') throw new BreakSignal();
@@ -509,6 +534,7 @@ export class ShellRunner {
       try {
         result = await this.spawnOrPython(cmdName, args, stdinData);
       } catch (err: unknown) {
+        if (err instanceof CancelledError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         return {
           exitCode: 127,
@@ -560,6 +586,7 @@ export class ShellRunner {
           stderr = '';
         }
       } catch (err: unknown) {
+        if (err instanceof CancelledError) throw err;
         if (err instanceof VfsError) {
           const target = typeof rt === 'object' && 'StdoutOverwrite' in rt
             ? rt.StdoutOverwrite
@@ -615,6 +642,7 @@ export class ShellRunner {
           const result = await this.spawnOrPython(cmdName, args, stdinData);
           lastResult = { ...result };
         } catch (err: unknown) {
+          if (err instanceof CancelledError) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           lastResult = {
             exitCode: 127,
@@ -860,27 +888,35 @@ export class ShellRunner {
     args: string[],
     stdinData: Uint8Array | undefined,
   ): Promise<SpawnResult> {
+    let result: SpawnResult;
+
     // If the command looks like a path (./script.sh, /tmp/run.py),
     // try shebang-based execution before falling through to tool lookup.
     if (cmdName.includes('/')) {
-      return this.execPath(cmdName, args, stdinData);
+      result = await this.execPath(cmdName, args, stdinData);
+    } else if (PYTHON_COMMANDS.has(cmdName)) {
+      result = await this.execPython(args, stdinData);
+    } else {
+      // Resolve relative path args for WASI binaries. WASI resolves all
+      // paths against the root preopen (/), so we must convert relative
+      // paths to absolute ones using PWD before spawning.
+      const resolvedArgs = args.map(a => this.resolveArgIfPath(cmdName, a));
+      result = await this.mgr.spawn(cmdName, {
+        args: resolvedArgs,
+        env: Object.fromEntries(this.env),
+        stdinData,
+        cwd: this.env.get('PWD'),
+        stdoutLimit: this.stdoutLimit,
+        stderrLimit: this.stderrLimit,
+        deadlineMs: this.deadlineMs,
+      });
     }
 
-    if (PYTHON_COMMANDS.has(cmdName)) {
-      return this.execPython(args, stdinData);
-    }
-    // Resolve relative path args for WASI binaries. WASI resolves all
-    // paths against the root preopen (/), so we must convert relative
-    // paths to absolute ones using PWD before spawning.
-    const resolvedArgs = args.map(a => this.resolveArgIfPath(cmdName, a));
-    return this.mgr.spawn(cmdName, {
-      args: resolvedArgs,
-      env: Object.fromEntries(this.env),
-      stdinData,
-      cwd: this.env.get('PWD'),
-      stdoutLimit: this.stdoutLimit,
-      stderrLimit: this.stderrLimit,
-    });
+    // Check if execution was terminated by deadline or cancellation
+    if (this.cancelledReason) throw new CancelledError(this.cancelledReason);
+    if (Date.now() > this.deadlineMs) throw new CancelledError('TIMEOUT');
+
+    return result;
   }
 
   /** Run a Python script via PythonRunner. */
@@ -1419,6 +1455,7 @@ export class ShellRunner {
       }
       return { exitCode: 0, stdout: body, stderr: '', executionTimeMs: 0 };
     } catch (err) {
+      if (err instanceof CancelledError) throw err;
       if (err instanceof NetworkAccessDenied) return { exitCode: 1, stdout: '', stderr: `curl: ${err.message}\n`, executionTimeMs: 0 };
       const msg = err instanceof Error ? err.message : String(err);
       return { exitCode: 1, stdout: '', stderr: `curl: ${msg}\n`, executionTimeMs: 0 };
@@ -1459,6 +1496,7 @@ export class ShellRunner {
       const stderr = quiet ? '' : `saved to ${destPath}\n`;
       return { exitCode: 0, stdout: '', stderr, executionTimeMs: 0 };
     } catch (err) {
+      if (err instanceof CancelledError) throw err;
       if (err instanceof NetworkAccessDenied) return { exitCode: 1, stdout: '', stderr: `wget: ${err.message}\n`, executionTimeMs: 0 };
       const msg = err instanceof Error ? err.message : String(err);
       return { exitCode: 1, stdout: '', stderr: `wget: ${msg}\n`, executionTimeMs: 0 };

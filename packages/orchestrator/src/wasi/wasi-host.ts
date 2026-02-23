@@ -58,6 +58,7 @@ export interface WasiHostOptions {
   networkBridge?: NetworkBridge;
   stdoutLimit?: number;
   stderrLimit?: number;
+  deadlineMs?: number;
 }
 
 interface PreopenEntry {
@@ -140,6 +141,8 @@ export class WasiHost {
   private stderrTruncated = false;
   private stdoutLimit: number;
   private stderrLimit: number;
+  private cancelled = false;
+  private deadlineMs: number = Infinity;
 
   constructor(options: WasiHostOptions) {
     this.vfs = options.vfs;
@@ -152,6 +155,7 @@ export class WasiHost {
     this.networkBridge = options.networkBridge ?? null;
     this.stdoutLimit = options.stdoutLimit ?? Infinity;
     this.stderrLimit = options.stderrLimit ?? Infinity;
+    this.deadlineMs = options.deadlineMs ?? Infinity;
     this.preopens = [];
 
     // Set up preopened directories starting at fd 3.
@@ -191,6 +195,11 @@ export class WasiHost {
 
   isStderrTruncated(): boolean {
     return this.stderrTruncated;
+  }
+
+  /** Signal cancellation — next fd_write/fd_read will throw WasiExitError. */
+  cancelExecution(): void {
+    this.cancelled = true;
   }
 
   getExitCode(): number | null {
@@ -417,6 +426,7 @@ export class WasiHost {
     iovsLen: number,
     nwrittenPtr: number,
   ): number {
+    if (this.cancelled || Date.now() > this.deadlineMs) throw new WasiExitError(124);
     const view = this.getView();
     const bytes = this.getBytes();
     const iovecs = readIovecs(view, iovsPtr, iovsLen);
@@ -482,6 +492,7 @@ export class WasiHost {
     iovsLen: number,
     nreadPtr: number,
   ): number {
+    if (this.cancelled || Date.now() > this.deadlineMs) throw new WasiExitError(124);
     const view = this.getView();
     const iovecs = readIovecs(view, iovsPtr, iovsLen);
 

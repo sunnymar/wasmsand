@@ -89,7 +89,7 @@ describe('Sandbox', () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(), timeoutMs: 1 });
     const result = await sandbox.run('yes hello | head -1000');
     expect(result.exitCode).toBe(124);
-    expect(result.stderr).toContain('timed out');
+    expect(result.errorClass).toBe('TIMEOUT');
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
@@ -305,6 +305,38 @@ describe('Sandbox', () => {
       const result = await sandbox.run('echo hello');
       expect(result.exitCode).toBe(0);
       expect(result.errorClass).toBeUndefined();
+    });
+  });
+
+  describe('hard cancellation', () => {
+    it('timeout kills long-running WASM via deadline in fdWrite', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { timeoutMs: 50 } },
+      });
+      const start = performance.now();
+      // seq 1 billion generates huge output; deadline in fdWrite kills it
+      const result = await sandbox.run('seq 1 999999999');
+      const elapsed = performance.now() - start;
+      expect(result.errorClass).toBe('TIMEOUT');
+      expect(result.exitCode).toBe(124);
+      // Should complete near the timeout, not run for 30s
+      expect(elapsed).toBeLessThan(3000);
+    });
+
+    it('timeout kills chained commands via deadline in execCommand', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { timeoutMs: 50 } },
+      });
+      // Two sequential heavy WASM commands — second gets killed by deadline
+      const result = await sandbox.run('seq 1 999999999 && seq 1 999999999');
+      expect(result.errorClass).toBe('TIMEOUT');
+      expect(result.exitCode).toBe(124);
     });
   });
 

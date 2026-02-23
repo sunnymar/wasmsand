@@ -19,6 +19,7 @@ export class ProcessManager {
   private registry: Map<string, string> = new Map();
   private moduleCache: Map<string, WebAssembly.Module> = new Map();
   private networkBridge: NetworkBridge | null;
+  private currentHost: WasiHost | null = null;
 
   constructor(vfs: VFS, adapter: PlatformAdapter, networkBridge?: NetworkBridge) {
     this.vfs = vfs;
@@ -34,6 +35,11 @@ export class ProcessManager {
   /** Return the names of all registered tools. */
   getRegisteredTools(): string[] {
     return Array.from(this.registry.keys());
+  }
+
+  /** Cancel the currently running WASI process, if any. */
+  cancelCurrent(): void {
+    this.currentHost?.cancelExecution();
   }
 
   /** Check if a tool name is registered. */
@@ -74,13 +80,16 @@ export class ProcessManager {
       networkBridge: this.networkBridge ?? undefined,
       stdoutLimit: opts.stdoutLimit,
       stderrLimit: opts.stderrLimit,
+      deadlineMs: opts.deadlineMs,
     });
 
     const instance = await this.adapter.instantiate(module, host.getImports());
 
+    this.currentHost = host;
     const startTime = performance.now();
     const exitCode = host.start(instance);
     const executionTimeMs = performance.now() - startTime;
+    this.currentHost = null;
 
     const stdoutTruncated = host.isStdoutTruncated();
     const stderrTruncated = host.isStderrTruncated();

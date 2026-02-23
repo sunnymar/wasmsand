@@ -17,6 +17,7 @@ import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge } from './network/bridge.js';
 import { SOCKET_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from './network/socket-shim.js';
 import type { SecurityOptions } from './security.js';
+import { CancelledError } from './security.js';
 
 export interface SandboxOptions {
   /** Directory (Node) or URL base (browser) containing .wasm files. */
@@ -154,16 +155,24 @@ export class Sandbox {
     }
 
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
-    const timer = new Promise<RunResult>((resolve) => {
-      setTimeout(() => resolve({
-        exitCode: 124,
-        stdout: '',
-        stderr: 'command timed out\n',
-        executionTimeMs: effectiveTimeout,
-        errorClass: 'TIMEOUT',
-      }), effectiveTimeout);
-    });
-    return Promise.race([this.runner.run(command), timer]);
+    this.runner.resetCancel(effectiveTimeout);
+    const startTime = performance.now();
+
+    try {
+      const result = await this.runner.run(command);
+      return result;
+    } catch (e) {
+      if (e instanceof CancelledError) {
+        return {
+          exitCode: 124,
+          stdout: '',
+          stderr: `command ${e.reason.toLowerCase()}\n`,
+          executionTimeMs: performance.now() - startTime,
+          errorClass: e.reason,
+        };
+      }
+      throw e;
+    }
   }
 
   readFile(path: string): Uint8Array {
@@ -259,6 +268,14 @@ export class Sandbox {
       this.adapter, this.wasmDir, this.shellWasmPath,
       childMgr, childBridge, this.networkPolicy, this.security,
     );
+  }
+
+  /** Cancel the currently running command. */
+  cancel(): void {
+    this.runner.cancel('CANCELLED');
+    // Set deadline to now so Date.now() checks in fdWrite/fdRead fire immediately
+    this.runner.setDeadlineNow();
+    this.mgr.cancelCurrent();
   }
 
   destroy(): void {
