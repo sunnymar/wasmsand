@@ -16,7 +16,7 @@ import { PythonRunner } from '../python/python-runner.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
-const SHELL_BUILTINS = new Set(['which', 'chmod', 'test', '[', 'pwd', 'cd']);
+const SHELL_BUILTINS = new Set(['which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */
 const PYTHON_INTERPRETERS = new Set(['python3', 'python']);
@@ -130,6 +130,16 @@ export class ShellRunner {
 
   getEnv(name: string): string | undefined {
     return this.env.get(name);
+  }
+
+  /** Return a copy of all env vars (for snapshot). */
+  getEnvMap(): Map<string, string> {
+    return new Map(this.env);
+  }
+
+  /** Replace all env vars (for restore). */
+  setEnvMap(env: Map<string, string>): void {
+    this.env = new Map(env);
   }
 
   /** Resolve a path relative to PWD. Absolute paths pass through unchanged. */
@@ -303,6 +313,15 @@ export class ShellRunner {
     }
     if (cmdName === 'cd') {
       return this.builtinCd(args);
+    }
+    if (cmdName === 'export') {
+      return this.builtinExport(args);
+    }
+    if (cmdName === 'unset') {
+      return this.builtinUnset(args);
+    }
+    if (cmdName === 'date') {
+      return this.builtinDate(args);
     }
 
     // Handle stdin redirect
@@ -862,6 +881,48 @@ export class ShellRunner {
     return { ...EMPTY_RESULT };
   }
 
+  /** Builtin: export — set env variables (alias for assignment). */
+  private builtinExport(args: string[]): RunResult {
+    if (args.length === 0) {
+      let stdout = '';
+      for (const [key, value] of this.env) {
+        stdout += `${key}=${value}\n`;
+      }
+      return { exitCode: 0, stdout, stderr: '', executionTimeMs: 0 };
+    }
+
+    for (const arg of args) {
+      const eqIdx = arg.indexOf('=');
+      if (eqIdx >= 0) {
+        this.env.set(arg.slice(0, eqIdx), arg.slice(eqIdx + 1));
+      }
+      // export FOO with no value is a no-op
+    }
+    return { ...EMPTY_RESULT };
+  }
+
+  /** Builtin: unset — remove env variables. */
+  private builtinUnset(args: string[]): RunResult {
+    for (const name of args) {
+      this.env.delete(name);
+    }
+    return { ...EMPTY_RESULT };
+  }
+
+  /** Builtin: date — print current date/time. */
+  private builtinDate(args: string[]): RunResult {
+    const now = new Date();
+
+    if (args.length > 0 && args[0].startsWith('+')) {
+      const format = args[0].slice(1);
+      const stdout = formatDate(now, format) + '\n';
+      return { exitCode: 0, stdout, stderr: '', executionTimeMs: 0 };
+    }
+
+    const stdout = now.toUTCString() + '\n';
+    return { exitCode: 0, stdout, stderr: '', executionTimeMs: 0 };
+  }
+
   /** Builtin: test / [ — evaluate conditional expressions. */
   private builtinTest(args: string[], isBracket: boolean): RunResult {
     // If [ syntax, require and strip trailing ]
@@ -1076,6 +1137,35 @@ function normalizePath(path: string): string {
     }
   }
   return '/' + resolved.join('/');
+}
+
+/** Simple strftime-like date formatter. Supports common % tokens. */
+function formatDate(d: Date, format: string): string {
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  return format.replace(/%([YmdHMSaAbBpZsnT%])/g, (_, code: string) => {
+    switch (code) {
+      case 'Y': return String(d.getUTCFullYear());
+      case 'm': return pad(d.getUTCMonth() + 1);
+      case 'd': return pad(d.getUTCDate());
+      case 'H': return pad(d.getUTCHours());
+      case 'M': return pad(d.getUTCMinutes());
+      case 'S': return pad(d.getUTCSeconds());
+      case 'a': return days[d.getUTCDay()];
+      case 'A': return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getUTCDay()];
+      case 'b': return months[d.getUTCMonth()];
+      case 'B': return ['January','February','March','April','May','June','July','August','September','October','November','December'][d.getUTCMonth()];
+      case 'p': return d.getUTCHours() < 12 ? 'AM' : 'PM';
+      case 'Z': return 'UTC';
+      case 's': return String(Math.floor(d.getTime() / 1000));
+      case 'n': return '\n';
+      case 'T': return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+      case '%': return '%';
+      default: return `%${code}`;
+    }
+  });
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

@@ -108,4 +108,76 @@ describe('Sandbox', () => {
     const result = await sandbox.run('uname');
     expect(result.stdout.trim()).toBe('wasmsand');
   });
+
+  describe('snapshot and restore', () => {
+    it('snapshot captures VFS + env state', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox.writeFile('/tmp/data.txt', new TextEncoder().encode('v1'));
+      sandbox.setEnv('MY_VAR', 'original');
+      const snapId = sandbox.snapshot();
+
+      sandbox.writeFile('/tmp/data.txt', new TextEncoder().encode('v2'));
+      sandbox.setEnv('MY_VAR', 'changed');
+      sandbox.writeFile('/tmp/new.txt', new TextEncoder().encode('new'));
+
+      sandbox.restore(snapId);
+      expect(new TextDecoder().decode(sandbox.readFile('/tmp/data.txt'))).toBe('v1');
+      expect(sandbox.getEnv('MY_VAR')).toBe('original');
+      expect(() => sandbox.stat('/tmp/new.txt')).toThrow();
+    });
+
+    it('snapshots are reusable', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox.writeFile('/tmp/f.txt', new TextEncoder().encode('snap'));
+      const snapId = sandbox.snapshot();
+
+      sandbox.writeFile('/tmp/f.txt', new TextEncoder().encode('changed1'));
+      sandbox.restore(snapId);
+      expect(new TextDecoder().decode(sandbox.readFile('/tmp/f.txt'))).toBe('snap');
+
+      sandbox.writeFile('/tmp/f.txt', new TextEncoder().encode('changed2'));
+      sandbox.restore(snapId);
+      expect(new TextDecoder().decode(sandbox.readFile('/tmp/f.txt'))).toBe('snap');
+    });
+
+    it('restore throws for invalid snapshot ID', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      expect(() => sandbox.restore('nonexistent')).toThrow();
+    });
+  });
+
+  describe('fork', () => {
+    it('creates an independent sandbox with COW VFS', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox.writeFile('/tmp/shared.txt', new TextEncoder().encode('original'));
+      sandbox.setEnv('FORKED', 'yes');
+
+      const child = await sandbox.fork();
+      try {
+        expect(new TextDecoder().decode(child.readFile('/tmp/shared.txt'))).toBe('original');
+        expect(child.getEnv('FORKED')).toBe('yes');
+
+        child.writeFile('/tmp/shared.txt', new TextEncoder().encode('child'));
+        expect(new TextDecoder().decode(sandbox.readFile('/tmp/shared.txt'))).toBe('original');
+        expect(new TextDecoder().decode(child.readFile('/tmp/shared.txt'))).toBe('child');
+
+        child.writeFile('/tmp/child-only.txt', new TextEncoder().encode('x'));
+        expect(() => sandbox.stat('/tmp/child-only.txt')).toThrow();
+      } finally {
+        child.destroy();
+      }
+    });
+
+    it('forked sandbox can run commands independently', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      const child = await sandbox.fork();
+      try {
+        const result = await child.run('echo hello from fork');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.trim()).toBe('hello from fork');
+      } finally {
+        child.destroy();
+      }
+    });
+  });
 });
