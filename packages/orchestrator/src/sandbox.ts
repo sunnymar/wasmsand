@@ -16,7 +16,7 @@ import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge } from './network/bridge.js';
 import { SOCKET_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from './network/socket-shim.js';
-import type { SecurityOptions } from './security.js';
+import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
 
 export interface SandboxOptions {
@@ -52,6 +52,8 @@ export class Sandbox {
   private bridge: NetworkBridge | null = null;
   private networkPolicy: NetworkPolicy | undefined;
   private security: SecurityOptions | undefined;
+  private sessionId: string;
+  private auditHandler: AuditEventHandler | undefined;
 
   private constructor(
     vfs: VFS,
@@ -75,6 +77,18 @@ export class Sandbox {
     this.bridge = bridge ?? null;
     this.networkPolicy = networkPolicy;
     this.security = security;
+    this.sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    this.auditHandler = security?.onAuditEvent;
+  }
+
+  private audit(type: string, data?: Record<string, unknown>): void {
+    if (!this.auditHandler) return;
+    this.auditHandler({
+      type,
+      sessionId: this.sessionId,
+      timestamp: Date.now(),
+      ...data,
+    });
   }
 
   static async create(options: SandboxOptions): Promise<Sandbox> {
@@ -127,7 +141,9 @@ export class Sandbox {
       runner.setEnv('PYTHONPATH', '/usr/lib/python');
     }
 
-    return new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network, options.security);
+    const sb = new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network, options.security);
+    sb.audit('sandbox.create');
+    return sb;
   }
 
   private static async detectAdapter(): Promise<PlatformAdapter> {
@@ -145,6 +161,7 @@ export class Sandbox {
     // Check command size limit
     const commandLimit = this.security?.limits?.commandBytes ?? 65536;
     if (new TextEncoder().encode(command).byteLength > commandLimit) {
+      this.audit('limit.exceeded', { subtype: 'command', command });
       return {
         exitCode: 1,
         stdout: '',
@@ -154,20 +171,44 @@ export class Sandbox {
       };
     }
 
+    this.audit('command.start', { command });
+
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
     this.runner.resetCancel(effectiveTimeout);
     const startTime = performance.now();
 
     try {
       const result = await this.runner.run(command);
+      const executionTimeMs = performance.now() - startTime;
+
+      // Emit truncation events
+      if (result.truncated?.stdout) {
+        this.audit('limit.exceeded', { subtype: 'stdout', command });
+      }
+      if (result.truncated?.stderr) {
+        this.audit('limit.exceeded', { subtype: 'stderr', command });
+      }
+
+      // Emit capability denied for tool allowlist blocks
+      if (result.stderr?.includes('not allowed by security policy')) {
+        this.audit('capability.denied', { command, reason: result.stderr.trim() });
+      }
+
+      this.audit('command.complete', { command, exitCode: result.exitCode, executionTimeMs });
       return result;
     } catch (e) {
       if (e instanceof CancelledError) {
+        const executionTimeMs = performance.now() - startTime;
+        if (e.reason === 'TIMEOUT') {
+          this.audit('command.timeout', { command, executionTimeMs });
+        } else {
+          this.audit('command.cancelled', { command, executionTimeMs });
+        }
         return {
           exitCode: 124,
           stdout: '',
           stderr: `command ${e.reason.toLowerCase()}\n`,
-          executionTimeMs: performance.now() - startTime,
+          executionTimeMs,
           errorClass: e.reason,
         };
       }
@@ -279,6 +320,7 @@ export class Sandbox {
   }
 
   destroy(): void {
+    this.audit('sandbox.destroy');
     this.destroyed = true;
     this.bridge?.dispose();
   }

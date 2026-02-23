@@ -402,4 +402,95 @@ describe('Sandbox', () => {
       expect(result.errorClass).toBe('TIMEOUT');
     });
   });
+
+  describe('audit logging', () => {
+    it('emits events for command lifecycle', async () => {
+      const events: any[] = [];
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: {
+          onAuditEvent: (event) => events.push(event),
+        },
+      });
+      await sandbox.run('echo hello');
+      sandbox.destroy();
+
+      expect(events.find(e => e.type === 'sandbox.create')).toBeDefined();
+      expect(events.find(e => e.type === 'command.start')).toBeDefined();
+      expect(events.find(e => e.type === 'command.complete')).toBeDefined();
+      expect(events.find(e => e.type === 'sandbox.destroy')).toBeDefined();
+    });
+
+    it('emits timeout event', async () => {
+      const events: any[] = [];
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: {
+          limits: { timeoutMs: 1 },
+          onAuditEvent: (event) => events.push(event),
+        },
+      });
+      await sandbox.run('yes hello | head -10000');
+
+      expect(events.find(e => e.type === 'command.timeout')).toBeDefined();
+    });
+
+    it('audit events have sessionId and timestamp', async () => {
+      const events: any[] = [];
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: {
+          onAuditEvent: (event) => events.push(event),
+        },
+      });
+      await sandbox.run('echo hello');
+
+      for (const e of events) {
+        expect(e.sessionId).toBeDefined();
+        expect(typeof e.sessionId).toBe('string');
+        expect(e.timestamp).toBeGreaterThan(0);
+      }
+      // All events share the same sessionId
+      const ids = new Set(events.map(e => e.sessionId));
+      expect(ids.size).toBe(1);
+    });
+
+    it('emits limit.exceeded event on output truncation', async () => {
+      const events: any[] = [];
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: {
+          limits: { stdoutBytes: 20 },
+          onAuditEvent: (event) => events.push(event),
+        },
+      });
+      await sandbox.run('yes hello | head -100');
+
+      expect(events.find(e => e.type === 'limit.exceeded' && e.subtype === 'stdout')).toBeDefined();
+    });
+
+    it('emits capability.denied on blocked tool', async () => {
+      const events: any[] = [];
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: {
+          toolAllowlist: ['echo'],
+          onAuditEvent: (event) => events.push(event),
+        },
+      });
+      await sandbox.run('grep hello /tmp/f.txt');
+
+      expect(events.find(e => e.type === 'capability.denied')).toBeDefined();
+    });
+  });
 });
