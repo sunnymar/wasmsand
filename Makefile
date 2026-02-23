@@ -1,7 +1,7 @@
 .PHONY: test build build-rust build-ts npm wheel clean
 
 # Development
-test:
+test: build-ts
 	bun test
 
 build: build-rust build-ts
