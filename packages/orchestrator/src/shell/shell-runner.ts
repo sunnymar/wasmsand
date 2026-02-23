@@ -632,9 +632,11 @@ export class ShellRunner {
     try {
       leftResult = await this.execCommand(list.left);
     } catch (e) {
-      if (e instanceof ExitSignal) throw e; // propagate directly
+      if (e instanceof ExitSignal) throw e;
       throw e;
     }
+    // Update lastExitCode so $? reflects intermediate results
+    this.lastExitCode = leftResult.exitCode;
 
     switch (list.op) {
       case 'And': {
