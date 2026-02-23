@@ -12,3 +12,8 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
+
+# Build artifacts
+packages/python-sdk/src/wasmsand/_bundled/
+packages/orchestrator/wasm/
+.build-venv/

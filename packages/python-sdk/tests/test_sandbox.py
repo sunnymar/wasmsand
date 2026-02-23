@@ -14,6 +14,7 @@ class TestSandbox:
 
     def test_missing_bun_raises(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda _: None)
+        monkeypatch.setattr("wasmsand.sandbox._is_bundled", lambda: False)
         with pytest.raises(RuntimeError, match="Bun not found"):
             Sandbox()
 
