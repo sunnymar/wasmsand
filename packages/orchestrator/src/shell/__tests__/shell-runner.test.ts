@@ -367,6 +367,11 @@ describe('ShellRunner', () => {
       const result = await runner.run('echo-args $?');
       expect(result.stdout).toBe('0\n');
     });
+
+    it('$? reflects intermediate exit code in a sequence', async () => {
+      const result = await runner.run('false ; echo $?');
+      expect(result.stdout).toContain('1');
+    });
   });
 
   describe('subshell isolation', () => {
@@ -424,6 +429,11 @@ describe('ShellRunner', () => {
     it('negates exit code of false', async () => {
       const result = await runner.run('! false');
       expect(result.exitCode).toBe(0);
+    });
+
+    it('negation composes with &&', async () => {
+      const result = await runner.run('! false && echo "negation works"');
+      expect(result.stdout.trim()).toBe('negation works');
     });
   });
 
@@ -494,6 +504,11 @@ describe('ShellRunner', () => {
       await runner.run('greet() { echo-args hello $1; }');
       const result = await runner.run('greet world');
       expect(result.stdout).toBe('hello\nworld\n');
+    });
+
+    it('defines and calls in a single command', async () => {
+      const result = await runner.run('greet() { echo "hello $1"; } ; greet world');
+      expect(result.stdout.trim()).toBe('hello world');
     });
   });
 
