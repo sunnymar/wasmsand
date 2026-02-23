@@ -18,3 +18,6 @@ export { NetworkBridge } from './network/bridge.js';
 export type { SyncFetchResult } from './network/bridge.js';
 export type { SecurityOptions, SecurityLimits, ErrorClass, AuditEvent, AuditEventHandler } from './security.js';
 export { CancelledError } from './security.js';
+export type { VfsLike } from './vfs/vfs-like.js';
+export { WorkerExecutor } from './execution/worker-executor.js';
+export type { WorkerConfig } from './execution/worker-executor.js';
