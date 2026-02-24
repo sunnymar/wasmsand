@@ -39,6 +39,7 @@ export interface SandboxLike {
   importState(blob: Uint8Array): void;
   getHistory(): Array<{ index: number; command: string; timestamp: number }>;
   clearHistory(): void;
+  mount(path: string, filesOrProvider: Record<string, Uint8Array>): void;
 }
 
 export interface RpcError {
@@ -91,6 +92,8 @@ export class Dispatcher {
           return this.persistenceExport(params);
         case 'persistence.import':
           return this.persistenceImport(params);
+        case 'mount':
+          return this.mountFiles(params);
         case 'shell.history.list':
           return this.shellHistoryList(params);
         case 'shell.history.clear':
@@ -282,6 +285,21 @@ export class Dispatcher {
     const sb = this.resolveSandbox(params);
     const data = this.requireString(params, 'data');
     sb.importState(new Uint8Array(Buffer.from(data, 'base64')));
+    return { ok: true };
+  }
+
+  private mountFiles(params: Record<string, unknown>) {
+    const sb = this.resolveSandbox(params);
+    const path = this.requireString(params, 'path');
+    const filesRaw = params.files;
+    if (!filesRaw || typeof filesRaw !== 'object') {
+      throw this.rpcError(-32602, 'Missing required param: files');
+    }
+    const decoded: Record<string, Uint8Array> = {};
+    for (const [key, value] of Object.entries(filesRaw as Record<string, string>)) {
+      decoded[key] = new Uint8Array(Buffer.from(value, 'base64'));
+    }
+    sb.mount(path, decoded);
     return { ok: true };
   }
 

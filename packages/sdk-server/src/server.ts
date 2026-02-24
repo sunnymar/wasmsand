@@ -82,6 +82,8 @@ async function main(): Promise<void> {
           fsLimitBytes,
           shellWasmPath,
           limits,
+          mounts,
+          pythonPath,
         } = params as {
           wasmDir?: string;
           timeoutMs?: number;
@@ -94,12 +96,23 @@ async function main(): Promise<void> {
             fileCount?: number;
             rpcBytes?: number;
           };
+          mounts?: Array<{ path: string; files: Record<string, string>; writable?: boolean }>;
+          pythonPath?: string[];
         };
 
         if (!wasmDir || typeof wasmDir !== 'string') {
           respond(errorResponse(id, -32602, 'Missing required param: wasmDir'));
           continue;
         }
+
+        // Decode base64-encoded mount files
+        const mountConfigs = mounts?.map(m => ({
+          path: m.path,
+          files: Object.fromEntries(
+            Object.entries(m.files).map(([k, v]) => [k, new Uint8Array(Buffer.from(v, 'base64'))]),
+          ),
+          writable: m.writable,
+        }));
 
         const sandbox = await Sandbox.create({
           wasmDir,
@@ -108,6 +121,8 @@ async function main(): Promise<void> {
           fsLimitBytes,
           shellWasmPath,
           security: limits ? { limits } : undefined,
+          mounts: mountConfigs,
+          pythonPath,
         });
 
         if (limits?.rpcBytes !== undefined) {

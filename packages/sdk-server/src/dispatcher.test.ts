@@ -34,6 +34,9 @@ function createMockSandbox(): SandboxLike {
     fork: mock(async () => createMockSandbox()),
     exportState: mock(() => new TextEncoder().encode('snapshot-blob')),
     importState: mock((_blob: Uint8Array) => {}),
+    getHistory: mock(() => [{ index: 0, command: 'echo hi', timestamp: 1234 }]),
+    clearHistory: mock(() => {}),
+    mount: mock((_path: string, _files: Record<string, Uint8Array>) => {}),
   };
 }
 
@@ -445,5 +448,41 @@ describe('Dispatcher', () => {
     const result = await dispatcher.dispatch('run', { command: 'echo hello' });
     expect(result).not.toHaveProperty('truncated');
     expect(result).not.toHaveProperty('errorClass');
+  });
+
+  describe('mount', () => {
+    it('decodes base64 files and calls sandbox.mount()', async () => {
+      const files = {
+        'hello.txt': Buffer.from('hello world').toString('base64'),
+        'sub/data.bin': Buffer.from([0x00, 0x01, 0xff]).toString('base64'),
+      };
+      const result = await dispatcher.dispatch('mount', { path: '/mnt/tools', files });
+      expect(sandbox.mount).toHaveBeenCalledWith('/mnt/tools', expect.any(Object));
+      // Verify decoded content
+      const decoded = (sandbox.mount as ReturnType<typeof mock>).mock.calls[0][1] as Record<string, Uint8Array>;
+      expect(new TextDecoder().decode(decoded['hello.txt'])).toBe('hello world');
+      expect(Array.from(decoded['sub/data.bin'])).toEqual([0x00, 0x01, 0xff]);
+      expect(result).toEqual({ ok: true });
+    });
+
+    it('rejects when path param is missing', async () => {
+      await expect(
+        dispatcher.dispatch('mount', { files: {} }),
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+
+    it('rejects when files param is missing', async () => {
+      await expect(
+        dispatcher.dispatch('mount', { path: '/mnt/x' }),
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+
+    it('routes mount to forked sandbox via sandboxId', async () => {
+      const forkResult = await dispatcher.dispatch('sandbox.fork', {}) as { sandboxId: string };
+      const files = { 'test.txt': Buffer.from('hi').toString('base64') };
+      await dispatcher.dispatch('mount', { path: '/mnt/x', files, sandboxId: forkResult.sandboxId });
+      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value;
+      expect(forkedSandbox.mount).toHaveBeenCalledWith('/mnt/x', expect.any(Object));
+    });
   });
 });

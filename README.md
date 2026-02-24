@@ -13,6 +13,7 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 - **Python 3** via RustPython compiled to WASI — standard library available
 - **Virtual filesystem** — in-memory POSIX VFS with optional persistence to IndexedDB (browser) or filesystem (Node)
 - **Virtual `/dev` and `/proc`** — `/dev/null`, `/dev/zero`, `/dev/random`, `/proc/uptime`, `/proc/cpuinfo`, and more
+- **Host mounts** — inject files into the VFS at arbitrary paths (tools, uploads, Python libraries) with a pluggable `VirtualFileSystem` interface
 - **Package manager** — install WASI binaries into the sandbox at runtime with `pkg install`
 - **State persistence** — ephemeral, session (manual save/load), or persistent (debounced autosave) modes for long-running agent workflows
 - **Command history** — `history list` and `history clear` for agent session tracking
@@ -125,6 +126,97 @@ The sandbox provides virtual `/dev` and `/proc` filesystems:
 | `/proc/diskstats` | VFS storage statistics (JSON) |
 
 These work transparently with coreutils: `cat /dev/null`, `head -c 16 /dev/random | xxd`, `cat /proc/uptime`.
+
+## Host mounts
+
+Mount host-provided files into the sandbox at arbitrary paths. Use cases include injecting tools, uploading user files, and providing Python libraries.
+
+**TypeScript:**
+
+```typescript
+// At creation time
+const sandbox = await Sandbox.create({
+  wasmDir: './wasm',
+  mounts: [
+    { path: '/mnt/tools', files: { 'hello.sh': encode('#!/bin/sh\necho hi') } },
+    { path: '/mnt/libs', files: { 'mymod.py': encode('GREETING = "hello"') } },
+  ],
+  pythonPath: ['/mnt/libs'],  // adds to PYTHONPATH
+});
+
+// Or at runtime
+sandbox.mount('/mnt/uploads', { 'data.csv': encode('a,b,c\n1,2,3\n') });
+
+await sandbox.run('cat /mnt/uploads/data.csv');
+await sandbox.run('ls /mnt/tools');
+```
+
+Mount points are visible in parent directory listings (`ls /mnt` shows `tools`). Mounted files are automatically excluded from `exportState()` — they are host-provided, not sandbox state.
+
+**Python:**
+
+```python
+from wasmsand import Sandbox, MemoryFS
+
+# At creation time
+with Sandbox(
+    mounts=[("/mnt/tools", {"hello.sh": b"#!/bin/sh\necho hi"})],
+    python_path=["/mnt/libs"],
+) as sb:
+    sb.commands.run("cat /mnt/tools/hello.sh")
+
+# At runtime
+sb.mount("/mnt/uploads", {"data.csv": b"a,b,c\n1,2,3\n"})
+```
+
+For structured file trees, use `MemoryFS` — a `VirtualFileSystem` implementation with the standard FS interface (read, write, stat, readdir, exists):
+
+```python
+from wasmsand import Sandbox, MemoryFS
+
+fs = MemoryFS({
+    "mylib/__init__.py": b"",
+    "mylib/utils.py": b"def greet(): return 'hello'",
+})
+
+with Sandbox(mounts=[("/mnt/pkg", fs)], python_path=["/mnt/pkg"]) as sb:
+    sb.commands.run("ls /mnt/pkg/mylib")
+```
+
+You can also subclass `VirtualFileSystem` to implement custom file sources (local disk, database, HTTP):
+
+```python
+from wasmsand import VirtualFileSystem, FileStat, DirEntry
+
+class LocalDirFS(VirtualFileSystem):
+    def __init__(self, root: str):
+        self.root = root
+
+    def read_file(self, path: str) -> bytes:
+        return open(f"{self.root}/{path}", "rb").read()
+
+    def exists(self, path: str) -> bool:
+        return os.path.exists(f"{self.root}/{path}")
+
+    def stat(self, path: str) -> FileStat:
+        p = f"{self.root}/{path}"
+        return FileStat(
+            type="dir" if os.path.isdir(p) else "file",
+            size=os.path.getsize(p) if os.path.isfile(p) else 0,
+        )
+
+    def readdir(self, path: str) -> list[DirEntry]:
+        p = f"{self.root}/{path}" if path else self.root
+        return [
+            DirEntry(name=e, type="dir" if os.path.isdir(f"{p}/{e}") else "file")
+            for e in os.listdir(p)
+        ]
+
+    def write_file(self, path: str, data: bytes) -> None:
+        raise PermissionError("read-only")
+```
+
+When mounted, the VFS is walked and serialized to the sandbox. Files are snapshotted at mount time — changes to the source after mounting are not reflected.
 
 ## Package manager
 

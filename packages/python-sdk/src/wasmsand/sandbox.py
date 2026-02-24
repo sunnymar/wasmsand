@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import base64
 import os
 import shutil
 from wasmsand._rpc import RpcClient
 from wasmsand.commands import Commands
 from wasmsand.files import Files
+from wasmsand.vfs import VirtualFileSystem, _encode_files_for_rpc
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 _BUNDLED_DIR = os.path.join(_PKG_DIR, "_bundled")
@@ -41,9 +44,32 @@ def _dev_paths() -> tuple[str, str, str, str]:
     return runtime_path, server, wasm_dir, shell_wasm
 
 
+MountSpec = dict[str, bytes | str]
+"""A flat mapping of relative paths to file contents for mounting."""
+
+
 class Sandbox:
-    def __init__(self, *, timeout_ms: int = 30_000, fs_limit_bytes: int = 256 * 1024 * 1024,
-                 _sandbox_id: str | None = None, _client: RpcClient | None = None):
+    """Isolated sandbox with a POSIX shell, virtual filesystem, and Python runtime.
+
+    Args:
+        timeout_ms: Per-command wall-clock timeout in milliseconds.
+        fs_limit_bytes: Maximum VFS size in bytes.
+        mounts: List of ``(path, files)`` tuples to mount at creation time.
+            Each ``files`` can be a ``dict[str, bytes|str]`` or a
+            :class:`~wasmsand.vfs.VirtualFileSystem` instance.
+        python_path: Directories to add to PYTHONPATH (in addition to /usr/lib/python).
+    """
+
+    def __init__(
+        self,
+        *,
+        timeout_ms: int = 30_000,
+        fs_limit_bytes: int = 256 * 1024 * 1024,
+        mounts: list[tuple[str, MountSpec | VirtualFileSystem]] | None = None,
+        python_path: list[str] | None = None,
+        _sandbox_id: str | None = None,
+        _client: RpcClient | None = None,
+    ):
         if _client is not None:
             # Internal constructor for forked sandboxes
             self._client = _client
@@ -61,12 +87,23 @@ class Sandbox:
         self._client.start()
         self._sandbox_id = None
 
-        self._client.call("create", {
+        create_params: dict = {
             "wasmDir": wasm_dir,
             "shellWasmPath": shell_wasm,
             "timeoutMs": timeout_ms,
             "fsLimitBytes": fs_limit_bytes,
-        })
+        }
+
+        # Encode mounts for create-time mounting
+        if mounts:
+            create_params["mounts"] = [
+                _serialize_mount(path, files) for path, files in mounts
+            ]
+
+        if python_path:
+            create_params["pythonPath"] = python_path
+
+        self._client.call("create", create_params)
 
         self.commands = Commands(self._client)
         self.files = Files(self._client)
@@ -75,6 +112,29 @@ class Sandbox:
         if self._sandbox_id is not None:
             params["sandboxId"] = self._sandbox_id
         return params
+
+    def mount(self, path: str, files: MountSpec | VirtualFileSystem) -> None:
+        """Mount host-provided files into the sandbox at the given path.
+
+        Args:
+            path: Absolute mount path (e.g. ``'/mnt/tools'``).
+            files: Either a ``dict[str, bytes|str]`` mapping relative paths
+                to file contents, or a :class:`~wasmsand.vfs.VirtualFileSystem`
+                instance.
+
+        Example::
+
+            # Simple dict mount
+            sb.mount("/mnt/tools", {"hello.sh": b"#!/bin/sh\\necho hi"})
+
+            # VirtualFileSystem mount
+            from wasmsand import MemoryFS
+            fs = MemoryFS({"lib/utils.py": b"def greet(): return 'hello'"})
+            sb.mount("/mnt/pkg", fs)
+        """
+        flat = _extract_flat_files(files)
+        encoded = _encode_files_for_rpc(flat)
+        self._client.call("mount", self._with_id({"path": path, "files": encoded}))
 
     def snapshot(self) -> str:
         """Save current VFS + env state. Returns snapshot ID."""
@@ -127,3 +187,22 @@ class Sandbox:
                 pass
         else:
             self.kill()
+
+
+def _extract_flat_files(files: MountSpec | VirtualFileSystem) -> dict[str, bytes]:
+    """Convert a mount spec or VFS to a flat {path: bytes} dict."""
+    if isinstance(files, VirtualFileSystem):
+        return files._to_flat_files()
+    result: dict[str, bytes] = {}
+    for k, v in files.items():
+        if isinstance(v, str):
+            v = v.encode("utf-8")
+        result[k] = v
+    return result
+
+
+def _serialize_mount(path: str, files: MountSpec | VirtualFileSystem) -> dict:
+    """Serialize a mount for the create RPC."""
+    flat = _extract_flat_files(files)
+    encoded = _encode_files_for_rpc(flat)
+    return {"path": path, "files": encoded}
