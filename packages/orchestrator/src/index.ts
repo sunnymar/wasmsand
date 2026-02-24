@@ -40,3 +40,5 @@ export { exportState, importState } from './persistence/serializer.js';
 // Node consumers: import { FsBackend } from '@wasmsand/sandbox/node'
 export { CommandHistory } from './shell/history.js';
 export type { HistoryEntry } from './shell/history.js';
+export type { ExtensionConfig, ExtensionHandler, ExtensionInvokeArgs, ExtensionInvokeResult, PythonPackageSpec } from './extension/types.js';
+export { ExtensionRegistry } from './extension/registry.js';

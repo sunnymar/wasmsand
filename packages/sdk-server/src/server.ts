@@ -10,6 +10,7 @@
 
 import { createInterface } from 'node:readline';
 import { Sandbox } from '@wasmsand/sandbox';
+import type { ExtensionConfig, ExtensionInvokeArgs, ExtensionInvokeResult } from '@wasmsand/sandbox';
 import { NodeAdapter } from '@wasmsand/sandbox/node';
 import { Dispatcher } from './dispatcher.js';
 
@@ -46,33 +47,65 @@ function log(msg: string): void {
 // Max request size: 8MB default. Overridable via limits.rpcBytes.
 let maxLineBytes = 8 * 1024 * 1024;
 
+// --- Bidirectional RPC: callback infrastructure ---
+// The server can send requests to the Python client (for extension invocations).
+// Callback IDs use 'cb_' prefix to distinguish from normal responses.
+const pendingCallbacks = new Map<string, {
+  resolve: (result: unknown) => void;
+  reject: (err: Error) => void;
+}>();
+let nextCbId = 1;
+
+function sendCallback(method: string, params: Record<string, unknown>): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const id = `cb_${nextCbId++}`;
+    pendingCallbacks.set(id, { resolve, reject });
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+}
+
 async function main(): Promise<void> {
   let dispatcher: Dispatcher | null = null;
 
   const rl = createInterface({ input: process.stdin });
 
-  for await (const line of rl) {
+  // Use event-driven readline instead of `for await` so callback responses
+  // from the client can be processed while an async dispatch is in progress.
+  const processLine = async (line: string): Promise<void> => {
     if (Buffer.byteLength(line) > maxLineBytes) {
       respond(errorResponse(0, -32700, 'Request too large'));
-      continue;
+      return;
     }
 
     let req: JsonRpcRequest;
     try {
       req = JSON.parse(line);
     } catch {
-      // Malformed JSON — send parse error
       respond(errorResponse(0, -32700, 'Parse error'));
-      continue;
+      return;
     }
 
     const { id, method, params = {} } = req;
+
+    // Handle callback responses from client (id starts with 'cb_')
+    if (typeof id === 'string' && id.startsWith('cb_') && ('result' in req || 'error' in (req as any))) {
+      const pending = pendingCallbacks.get(id);
+      if (pending) {
+        pendingCallbacks.delete(id);
+        if ('error' in (req as any) && (req as any).error) {
+          pending.reject(new Error((req as any).error.message));
+        } else {
+          pending.resolve((req as any).result);
+        }
+      }
+      return;
+    }
 
     // First RPC must be `create`
     if (method === 'create') {
       if (dispatcher) {
         respond(errorResponse(id, -32600, 'Sandbox already created'));
-        continue;
+        return;
       }
 
       try {
@@ -84,6 +117,7 @@ async function main(): Promise<void> {
           limits,
           mounts,
           pythonPath,
+          extensions: extensionSpecs,
         } = params as {
           wasmDir?: string;
           timeoutMs?: number;
@@ -98,11 +132,17 @@ async function main(): Promise<void> {
           };
           mounts?: Array<{ path: string; files: Record<string, string>; writable?: boolean }>;
           pythonPath?: string[];
+          extensions?: Array<{
+            name: string;
+            description?: string;
+            hasCommand?: boolean;
+            pythonPackage?: { version: string; summary?: string; files: Record<string, string> };
+          }>;
         };
 
         if (!wasmDir || typeof wasmDir !== 'string') {
           respond(errorResponse(id, -32602, 'Missing required param: wasmDir'));
-          continue;
+          return;
         }
 
         // Decode base64-encoded mount files
@@ -114,6 +154,23 @@ async function main(): Promise<void> {
           writable: m.writable,
         }));
 
+        // Build extension configs — hasCommand extensions get a callback handler
+        const extensionConfigs: ExtensionConfig[] | undefined = extensionSpecs?.map((ext) => ({
+          name: ext.name,
+          description: ext.description,
+          command: ext.hasCommand ? async (input: ExtensionInvokeArgs): Promise<ExtensionInvokeResult> => {
+            const result = await sendCallback('extension.invoke', {
+              name: ext.name,
+              args: input.args,
+              stdin: input.stdin,
+              env: input.env,
+              cwd: input.cwd,
+            });
+            return result as ExtensionInvokeResult;
+          } : undefined,
+          pythonPackage: ext.pythonPackage,
+        }));
+
         const sandbox = await Sandbox.create({
           wasmDir,
           adapter: new NodeAdapter(),
@@ -123,6 +180,7 @@ async function main(): Promise<void> {
           security: limits ? { limits } : undefined,
           mounts: mountConfigs,
           pythonPath,
+          extensions: extensionConfigs,
         });
 
         if (limits?.rpcBytes !== undefined) {
@@ -135,13 +193,13 @@ async function main(): Promise<void> {
         log(`create failed: ${err}`);
         respond(errorResponse(id, -32603, `Internal error: ${(err as Error).message}`));
       }
-      continue;
+      return;
     }
 
     // All other methods require the sandbox to be created first
     if (!dispatcher) {
       respond(errorResponse(id, -32600, 'Sandbox not created. Call "create" first.'));
-      continue;
+      return;
     }
 
     try {
@@ -160,7 +218,18 @@ async function main(): Promise<void> {
         respond(errorResponse(id, -32603, 'Internal error'));
       }
     }
-  }
+  };
+
+  rl.on('line', (line) => {
+    processLine(line).catch((err) => {
+      log(`processLine error: ${err}`);
+    });
+  });
+
+  // Keep process alive until stdin closes
+  await new Promise<void>((resolve) => {
+    rl.on('close', resolve);
+  });
 }
 
 main().catch((err) => {

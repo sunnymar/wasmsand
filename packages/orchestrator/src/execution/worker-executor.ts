@@ -16,6 +16,7 @@ import {
   encodeResponse,
 } from './proxy-protocol.js';
 import { VfsError } from '../vfs/inode.js';
+import type { ExtensionRegistry } from '../extension/registry.js';
 
 export interface WorkerConfig {
   vfs: VFS;
@@ -29,6 +30,7 @@ export interface WorkerConfig {
   memoryBytes?: number;
   bridgeSab?: SharedArrayBuffer;
   networkPolicy?: { allowedHosts?: string[]; blockedHosts?: string[] };
+  extensionRegistry?: ExtensionRegistry;
 }
 
 export interface WorkerRunResult extends RunResult {
@@ -182,6 +184,7 @@ export class WorkerExecutor {
       memoryBytes: this.config.memoryBytes,
       bridgeSab: this.config.bridgeSab,
       networkPolicy: this.config.networkPolicy,
+      hasExtensions: this.config.extensionRegistry != null,
     });
 
     await readyPromise;
@@ -190,6 +193,19 @@ export class WorkerExecutor {
   private handleProxyRequest(): void {
     const { metadata, binary } = decodeRequest(this.sab);
     const op = metadata.op as string;
+
+    // Extension invocations are async — main thread is free while worker blocks
+    if (op === 'extensionInvoke') {
+      this.handleExtensionProxy(metadata).then(() => {
+        Atomics.notify(this.int32, 0);
+      }).catch((err) => {
+        encodeResponse(this.sab, { ok: false, error: (err as Error).message ?? 'extension handler error' });
+        Atomics.store(this.int32, 0, STATUS_ERROR);
+        Atomics.notify(this.int32, 0);
+      });
+      return; // Don't notify yet — async handler will notify
+    }
+
     const path = (metadata.path as string) ?? '';
     const vfs = this.config.vfs;
 
@@ -313,6 +329,32 @@ export class WorkerExecutor {
     }
 
     Atomics.notify(this.int32, 0);
+  }
+
+  private async handleExtensionProxy(metadata: Record<string, unknown>): Promise<void> {
+    const extName = metadata.extension as string;
+    const method = metadata.method as string;
+    const kwargs = metadata.kwargs as Record<string, unknown>;
+
+    if (!this.config.extensionRegistry) {
+      encodeResponse(this.sab, { ok: false, error: 'no extension registry configured' });
+      Atomics.store(this.int32, 0, STATUS_RESPONSE);
+      return;
+    }
+
+    try {
+      const result = await this.config.extensionRegistry.invoke(extName, {
+        args: [method, JSON.stringify(kwargs)],
+        stdin: '',
+        env: {},
+        cwd: '/',
+      });
+      encodeResponse(this.sab, { ok: true, result: result.stdout });
+      Atomics.store(this.int32, 0, STATUS_RESPONSE);
+    } catch (err) {
+      encodeResponse(this.sab, { ok: false, error: (err as Error).message });
+      Atomics.store(this.int32, 0, STATUS_RESPONSE);
+    }
   }
 
   private terminateWorker(result: RunResult): void {
