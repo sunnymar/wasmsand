@@ -26,6 +26,9 @@ import type { PersistenceOptions } from './persistence/types.js';
 import { PersistenceManager } from './persistence/manager.js';
 import { HostMount } from './vfs/host-mount.js';
 import type { VirtualProvider } from './vfs/provider.js';
+import { ExtensionRegistry } from './extension/registry.js';
+import type { ExtensionConfig } from './extension/types.js';
+import { WASMSAND_EXT_SOURCE } from './extension/wasmsand-ext-shim.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -58,6 +61,8 @@ export interface SandboxOptions {
   mounts?: MountConfig[];
   /** Directories to include in PYTHONPATH (in addition to /usr/lib/python). */
   pythonPath?: string[];
+  /** Host-provided extensions (custom commands and/or Python packages). */
+  extensions?: ExtensionConfig[];
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -76,6 +81,7 @@ interface SandboxParts {
   networkPolicy?: NetworkPolicy;
   security?: SecurityOptions;
   workerExecutor?: WorkerExecutor;
+  extensionRegistry?: ExtensionRegistry;
 }
 
 export class Sandbox {
@@ -95,6 +101,7 @@ export class Sandbox {
   private auditHandler: AuditEventHandler | undefined;
   private workerExecutor: WorkerExecutor | null = null;
   private persistenceManager: PersistenceManager | null = null;
+  private extensionRegistry: ExtensionRegistry | null = null;
 
   private constructor(parts: SandboxParts) {
     this.vfs = parts.vfs;
@@ -110,6 +117,7 @@ export class Sandbox {
     this.sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
     this.auditHandler = parts.security?.onAuditEvent;
     this.workerExecutor = parts.workerExecutor ?? null;
+    this.extensionRegistry = parts.extensionRegistry ?? null;
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -132,6 +140,12 @@ export class Sandbox {
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir);
 
+    // Build extension registry
+    const extensionRegistry = new ExtensionRegistry();
+    if (options.extensions) {
+      for (const ext of options.extensions) extensionRegistry.register(ext);
+    }
+
     // Process host mounts before ShellRunner so files are available immediately
     if (options.mounts) {
       for (const mc of options.mounts) {
@@ -142,6 +156,11 @@ export class Sandbox {
 
     const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/wasmsand-shell.wasm`;
     const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
+
+    // Wire extension registry to ShellRunner
+    if (extensionRegistry.list().length > 0) {
+      runner.setExtensionRegistry(extensionRegistry);
+    }
 
     // Apply output limits from security options
     if (options.security?.limits) {
@@ -185,8 +204,31 @@ export class Sandbox {
       });
     }
 
+    // Install extension Python package files in VFS
+    if (extensionRegistry.getPackageNames().length > 0) {
+      vfs.withWriteAccess(() => {
+        vfs.mkdirp('/usr/lib/python');
+        vfs.writeFile('/usr/lib/python/wasmsand_ext.py',
+          new TextEncoder().encode(WASMSAND_EXT_SOURCE));
+        for (const name of extensionRegistry.getPackageNames()) {
+          const ext = extensionRegistry.get(name)!;
+          const pkg = ext.pythonPackage!;
+          vfs.mkdirp(`/usr/lib/python/${name}`);
+          for (const [fp, src] of Object.entries(pkg.files)) {
+            // Ensure subdirectories exist for nested paths
+            const parts = fp.split('/');
+            if (parts.length > 1) {
+              vfs.mkdirp(`/usr/lib/python/${name}/${parts.slice(0, -1).join('/')}`);
+            }
+            vfs.writeFile(`/usr/lib/python/${name}/${fp}`,
+              new TextEncoder().encode(src));
+          }
+        }
+      });
+    }
+
     // Set PYTHONPATH: user-provided paths + /usr/lib/python (always included)
-    if (options.pythonPath || bridge) {
+    if (options.pythonPath || bridge || extensionRegistry.getPackageNames().length > 0) {
       const paths = [...(options.pythonPath ?? []), '/usr/lib/python'];
       runner.setEnv('PYTHONPATH', paths.join(':'));
     }
@@ -202,6 +244,7 @@ export class Sandbox {
       wasmDir: options.wasmDir, shellWasmPath,
       mgr, bridge, networkPolicy: options.network,
       security: options.security, workerExecutor,
+      extensionRegistry,
     });
 
     // Wire persistence if configured

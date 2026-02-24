@@ -22,6 +22,7 @@ import type { PackageManager } from '../pkg/manager.js';
 import { PkgError } from '../pkg/manager.js';
 import { CommandHistory } from './history.js';
 import type { HistoryEntry } from './history.js';
+import type { ExtensionRegistry } from '../extension/registry.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
 const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg', 'history', 'source', '.']);
@@ -133,6 +134,8 @@ export class ShellRunner {
   private auditHandler: ((type: string, data?: Record<string, unknown>) => void) | null = null;
   /** Command history tracker. */
   private history = new CommandHistory();
+  /** Host-provided extension registry for custom commands/packages. */
+  private extensionRegistry: ExtensionRegistry | null = null;
 
   constructor(
     vfs: VfsLike,
@@ -219,6 +222,20 @@ export class ShellRunner {
   /** Set the audit event handler for emitting structured audit events. */
   setAuditHandler(handler: (type: string, data?: Record<string, unknown>) => void): void {
     this.auditHandler = handler;
+  }
+
+  /** Set the extension registry and write /bin stubs for discovery. */
+  setExtensionRegistry(registry: ExtensionRegistry): void {
+    this.extensionRegistry = registry;
+    this.vfs.withWriteAccess(() => {
+      const enc = new TextEncoder();
+      for (const name of registry.getCommandNames()) {
+        try {
+          this.vfs.writeFile(`/bin/${name}`, enc.encode(`#!/bin/wasmsand\n# extension: ${name}\n`));
+          this.vfs.chmod(`/bin/${name}`, 0o755);
+        } catch { /* ignore if exists */ }
+      }
+    });
   }
 
   /** Signal cancellation to the shell runner. */
@@ -961,6 +978,8 @@ export class ShellRunner {
       result = await this.execPath(cmdName, args, stdinData);
     } else if (PYTHON_COMMANDS.has(cmdName)) {
       result = await this.execPython(args, stdinData);
+    } else if (this.extensionRegistry?.has(cmdName) && this.extensionRegistry.get(cmdName)!.command) {
+      result = await this.execExtension(cmdName, args, stdinData);
     } else {
       // Resolve relative path args for WASI binaries. WASI resolves all
       // paths against the root preopen (/), so we must convert relative
@@ -983,6 +1002,35 @@ export class ShellRunner {
     if (Date.now() > this.deadlineMs) throw new CancelledError('TIMEOUT');
 
     return result;
+  }
+
+  /** Execute a host-provided extension command. */
+  private async execExtension(
+    cmdName: string, args: string[], stdinData: Uint8Array | undefined,
+  ): Promise<SpawnResult> {
+    const start = performance.now();
+    if (args.includes('--help')) {
+      const desc = this.extensionRegistry!.get(cmdName)!.description ?? `${cmdName}: extension command\n`;
+      return {
+        exitCode: 0,
+        stdout: desc.endsWith('\n') ? desc : desc + '\n',
+        stderr: '',
+        executionTimeMs: performance.now() - start,
+      };
+    }
+    const stdin = stdinData ? new TextDecoder().decode(stdinData) : '';
+    const r = await this.extensionRegistry!.invoke(cmdName, {
+      args,
+      stdin,
+      env: Object.fromEntries(this.env),
+      cwd: this.env.get('PWD') ?? '/',
+    });
+    return {
+      exitCode: r.exitCode,
+      stdout: r.stdout,
+      stderr: r.stderr ?? '',
+      executionTimeMs: performance.now() - start,
+    };
   }
 
   /** Run a Python script via PythonRunner. */
@@ -1433,7 +1481,7 @@ export class ShellRunner {
     let stdout = '';
     let exitCode = 0;
     for (const name of args) {
-      if (this.mgr.hasTool(name) || PYTHON_COMMANDS.has(name) || SHELL_BUILTINS.has(name)) {
+      if (this.mgr.hasTool(name) || PYTHON_COMMANDS.has(name) || SHELL_BUILTINS.has(name) || this.extensionRegistry?.has(name)) {
         stdout += `/bin/${name}\n`;
       } else {
         exitCode = 1;
