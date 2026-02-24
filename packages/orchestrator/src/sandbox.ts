@@ -40,6 +40,21 @@ export interface SandboxOptions {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_FS_LIMIT = 256 * 1024 * 1024; // 256 MB
 
+/** Internal config for the Sandbox constructor. Not part of the public API. */
+interface SandboxParts {
+  vfs: VFS;
+  runner: ShellRunner;
+  timeoutMs: number;
+  adapter: PlatformAdapter;
+  wasmDir: string;
+  shellWasmPath: string;
+  mgr: ProcessManager;
+  bridge?: NetworkBridge;
+  networkPolicy?: NetworkPolicy;
+  security?: SecurityOptions;
+  workerExecutor?: WorkerExecutor;
+}
+
 export class Sandbox {
   private vfs: VFS;
   private runner: ShellRunner;
@@ -57,32 +72,20 @@ export class Sandbox {
   private auditHandler: AuditEventHandler | undefined;
   private workerExecutor: WorkerExecutor | null = null;
 
-  private constructor(
-    vfs: VFS,
-    runner: ShellRunner,
-    timeoutMs: number,
-    adapter: PlatformAdapter,
-    wasmDir: string,
-    shellWasmPath: string,
-    mgr: ProcessManager,
-    bridge?: NetworkBridge,
-    networkPolicy?: NetworkPolicy,
-    security?: SecurityOptions,
-    workerExecutor?: WorkerExecutor,
-  ) {
-    this.vfs = vfs;
-    this.runner = runner;
-    this.timeoutMs = timeoutMs;
-    this.adapter = adapter;
-    this.wasmDir = wasmDir;
-    this.shellWasmPath = shellWasmPath;
-    this.mgr = mgr;
-    this.bridge = bridge ?? null;
-    this.networkPolicy = networkPolicy;
-    this.security = security;
+  private constructor(parts: SandboxParts) {
+    this.vfs = parts.vfs;
+    this.runner = parts.runner;
+    this.timeoutMs = parts.timeoutMs;
+    this.adapter = parts.adapter;
+    this.wasmDir = parts.wasmDir;
+    this.shellWasmPath = parts.shellWasmPath;
+    this.mgr = parts.mgr;
+    this.bridge = parts.bridge ?? null;
+    this.networkPolicy = parts.networkPolicy;
+    this.security = parts.security;
     this.sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    this.auditHandler = security?.onAuditEvent;
-    this.workerExecutor = workerExecutor ?? null;
+    this.auditHandler = parts.security?.onAuditEvent;
+    this.workerExecutor = parts.workerExecutor ?? null;
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -168,7 +171,12 @@ export class Sandbox {
       });
     }
 
-    const sb = new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network, options.security, workerExecutor);
+    const sb = new Sandbox({
+      vfs, runner, timeoutMs, adapter,
+      wasmDir: options.wasmDir, shellWasmPath,
+      mgr, bridge, networkPolicy: options.network,
+      security: options.security, workerExecutor,
+    });
     sb.audit('sandbox.create');
     return sb;
   }
@@ -347,11 +355,12 @@ export class Sandbox {
       childRunner.setEnv(k, v);
     }
 
-    return new Sandbox(
-      childVfs, childRunner, this.timeoutMs,
-      this.adapter, this.wasmDir, this.shellWasmPath,
-      childMgr, childBridge, this.networkPolicy, this.security,
-    );
+    return new Sandbox({
+      vfs: childVfs, runner: childRunner, timeoutMs: this.timeoutMs,
+      adapter: this.adapter, wasmDir: this.wasmDir, shellWasmPath: this.shellWasmPath,
+      mgr: childMgr, bridge: childBridge, networkPolicy: this.networkPolicy,
+      security: this.security,
+    });
   }
 
   /** Cancel the currently running command. */
