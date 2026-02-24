@@ -10,6 +10,7 @@ import type { VfsOptions } from './vfs/vfs.js';
 import { ProcessManager } from './process/manager.js';
 import { ShellRunner } from './shell/shell-runner.js';
 import type { RunResult } from './shell/shell-runner.js';
+import type { HistoryEntry } from './shell/history.js';
 import type { PlatformAdapter } from './platform/adapter.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
@@ -354,6 +355,18 @@ export class Sandbox {
   getEnv(name: string): string | undefined {
     this.assertAlive();
     return this.runner.getEnv(name);
+  }
+
+  /** Return the command history entries. */
+  getHistory(): HistoryEntry[] {
+    this.assertAlive();
+    return this.runner.getHistory();
+  }
+
+  /** Clear the command history. */
+  clearHistory(): void {
+    this.assertAlive();
+    this.runner.clearHistory();
   }
 
   snapshot(): string {

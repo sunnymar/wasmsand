@@ -20,9 +20,11 @@ import type { ErrorClass } from '../security.js';
 import { CancelledError } from '../security.js';
 import type { PackageManager } from '../pkg/manager.js';
 import { PkgError } from '../pkg/manager.js';
+import { CommandHistory } from './history.js';
+import type { HistoryEntry } from './history.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
-const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg']);
+const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg', 'history']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */
 const PYTHON_INTERPRETERS = new Set(['python3', 'python']);
@@ -129,6 +131,8 @@ export class ShellRunner {
   private packageManager: PackageManager | null = null;
   /** Audit event handler for emitting structured audit events. */
   private auditHandler: ((type: string, data?: Record<string, unknown>) => void) | null = null;
+  /** Command history tracker. */
+  private history = new CommandHistory();
 
   constructor(
     vfs: VfsLike,
@@ -290,6 +294,7 @@ export class ShellRunner {
    * then executes the AST.
    */
   async run(command: string): Promise<RunResult> {
+    this.history.add(command);
     const startTime = performance.now();
 
     // Pre-process: the Rust parser swallows NAME=VALUE tokens after `export`,
@@ -508,6 +513,8 @@ export class ShellRunner {
       result = await this.builtinWget(args);
     } else if (cmdName === 'pkg') {
       result = await this.builtinPkg(args);
+    } else if (cmdName === 'history') {
+      result = this.builtinHistory(args);
     } else if (cmdName === 'exit') {
       const code = args.length > 0 ? parseInt(args[0], 10) || 0 : this.lastExitCode;
       throw new ExitSignal(code);
@@ -1440,6 +1447,34 @@ export class ShellRunner {
   /** Emit an audit event if an audit handler is configured. */
   private audit(type: string, data?: Record<string, unknown>): void {
     if (this.auditHandler) this.auditHandler(type, data);
+  }
+
+  /** Builtin: history — list or clear command history. */
+  private builtinHistory(args: string[]): RunResult {
+    const sub = args[0] ?? 'list';
+
+    if (sub === 'clear') {
+      this.history.clear();
+      return { exitCode: 0, stdout: '', stderr: '', executionTimeMs: 0 };
+    }
+
+    if (sub === 'list') {
+      const entries = this.history.list();
+      const lines = entries.map(e => `  ${e.index}  ${e.command}`);
+      return { exitCode: 0, stdout: lines.join('\n') + (lines.length > 0 ? '\n' : ''), stderr: '', executionTimeMs: 0 };
+    }
+
+    return { exitCode: 1, stdout: '', stderr: `history: unknown subcommand: ${sub}\n`, executionTimeMs: 0 };
+  }
+
+  /** Return the command history entries. */
+  getHistory(): HistoryEntry[] {
+    return this.history.list();
+  }
+
+  /** Clear the command history. */
+  clearHistory(): void {
+    this.history.clear();
   }
 
   /** Builtin: pkg — manage WASI binary packages. */

@@ -35,6 +35,10 @@ export interface SandboxLike {
   snapshot(): string;
   restore(id: string): void;
   fork(): Promise<SandboxLike>;
+  exportState(): Uint8Array;
+  importState(blob: Uint8Array): void;
+  getHistory(): Array<{ index: number; command: string; timestamp: number }>;
+  clearHistory(): void;
 }
 
 export interface RpcError {
@@ -83,6 +87,14 @@ export class Dispatcher {
           return await this.sandboxFork(params);
         case 'sandbox.destroy':
           return this.sandboxDestroy(params);
+        case 'persistence.export':
+          return this.persistenceExport(params);
+        case 'persistence.import':
+          return this.persistenceImport(params);
+        case 'shell.history.list':
+          return this.shellHistoryList(params);
+        case 'shell.history.clear':
+          return this.shellHistoryClear(params);
         default:
           throw this.rpcError(-32601, `Method not found: ${method}`);
       }
@@ -257,6 +269,31 @@ export class Dispatcher {
     if (!fork) throw this.rpcError(-32602, `Unknown sandboxId: ${id}`);
     fork.destroy();
     this.forks.delete(id);
+    return { ok: true };
+  }
+
+  private persistenceExport(params: Record<string, unknown>) {
+    const sb = this.resolveSandbox(params);
+    const blob = sb.exportState();
+    return { data: Buffer.from(blob).toString('base64') };
+  }
+
+  private persistenceImport(params: Record<string, unknown>) {
+    const sb = this.resolveSandbox(params);
+    const data = this.requireString(params, 'data');
+    sb.importState(new Uint8Array(Buffer.from(data, 'base64')));
+    return { ok: true };
+  }
+
+  private shellHistoryList(params: Record<string, unknown>) {
+    const sb = this.resolveSandbox(params);
+    const entries = sb.getHistory();
+    return { entries };
+  }
+
+  private shellHistoryClear(params: Record<string, unknown>) {
+    const sb = this.resolveSandbox(params);
+    sb.clearHistory();
     return { ok: true };
   }
 }
