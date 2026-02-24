@@ -1,6 +1,7 @@
 from wasmsand.sandbox import Sandbox
 from wasmsand._types import CommandResult, FileInfo
 from wasmsand.vfs import VirtualFileSystem, MemoryFS, FileStat, DirEntry
+from wasmsand.extension import Extension, PythonPackage
 
 __all__ = [
     "Sandbox",
@@ -10,4 +11,6 @@ __all__ = [
     "MemoryFS",
     "FileStat",
     "DirEntry",
+    "Extension",
+    "PythonPackage",
 ]

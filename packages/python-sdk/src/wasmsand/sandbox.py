@@ -5,6 +5,7 @@ import os
 import shutil
 from wasmsand._rpc import RpcClient
 from wasmsand.commands import Commands
+from wasmsand.extension import Extension
 from wasmsand.files import Files
 from wasmsand.vfs import VirtualFileSystem, _encode_files_for_rpc
 
@@ -58,6 +59,7 @@ class Sandbox:
             Each ``files`` can be a ``dict[str, bytes|str]`` or a
             :class:`~wasmsand.vfs.VirtualFileSystem` instance.
         python_path: Directories to add to PYTHONPATH (in addition to /usr/lib/python).
+        extensions: List of :class:`~wasmsand.Extension` instances to register.
     """
 
     def __init__(
@@ -67,6 +69,7 @@ class Sandbox:
         fs_limit_bytes: int = 256 * 1024 * 1024,
         mounts: list[tuple[str, MountSpec | VirtualFileSystem]] | None = None,
         python_path: list[str] | None = None,
+        extensions: list[Extension] | None = None,
         _sandbox_id: str | None = None,
         _client: RpcClient | None = None,
     ):
@@ -102,6 +105,29 @@ class Sandbox:
 
         if python_path:
             create_params["pythonPath"] = python_path
+
+        # Serialize extensions for RPC and register callback handlers
+        if extensions:
+            ext_specs = []
+            for ext in extensions:
+                spec: dict = {
+                    "name": ext.name,
+                    "description": ext.description,
+                    "hasCommand": ext.command is not None,
+                }
+                if ext.python_package is not None:
+                    spec["pythonPackage"] = {
+                        "version": ext.python_package.version,
+                        "summary": ext.python_package.summary,
+                        "files": ext.python_package.files,
+                    }
+                ext_specs.append(spec)
+
+                # Register the command handler for bidirectional callbacks
+                if ext.command is not None:
+                    self._client.register_extension_handler(ext.name, ext.command)
+
+            create_params["extensions"] = ext_specs
 
         self._client.call("create", create_params)
 
