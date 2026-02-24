@@ -18,6 +18,7 @@ import { NetworkBridge } from './network/bridge.js';
 import { SOCKET_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
+import type { WorkerExecutor } from './execution/worker-executor.js';
 
 export interface SandboxOptions {
   /** Directory (Node) or URL base (browser) containing .wasm files. */
@@ -54,6 +55,7 @@ export class Sandbox {
   private security: SecurityOptions | undefined;
   private sessionId: string;
   private auditHandler: AuditEventHandler | undefined;
+  private workerExecutor: WorkerExecutor | null = null;
 
   private constructor(
     vfs: VFS,
@@ -142,6 +144,27 @@ export class Sandbox {
     }
 
     const sb = new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network, options.security);
+
+    // Create WorkerExecutor for hard-kill preemption when enabled
+    if (options.security?.hardKill && adapter.supportsWorkerExecution) {
+      const { WorkerExecutor: WE } = await import('./execution/worker-executor.js');
+      const toolRegistry: [string, string][] = [];
+      for (const [name, path] of tools) {
+        toolRegistry.push([name, path]);
+      }
+      if (!tools.has('python3')) {
+        toolRegistry.push(['python3', `${options.wasmDir}/python3.wasm`]);
+      }
+      sb.workerExecutor = new WE({
+        vfs,
+        wasmDir: options.wasmDir,
+        shellWasmPath,
+        toolRegistry,
+        stdoutLimit: options.security?.limits?.stdoutBytes,
+        stderrLimit: options.security?.limits?.stderrBytes,
+      });
+    }
+
     sb.audit('sandbox.create');
     return sb;
   }
@@ -174,6 +197,29 @@ export class Sandbox {
     this.audit('command.start', { command });
 
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
+
+    // Worker-based execution: hard-kill preemption via worker.terminate()
+    if (this.workerExecutor) {
+      const startTime = performance.now();
+      const result = await this.workerExecutor.run(command, this.runner.getEnvMap(), effectiveTimeout);
+      const executionTimeMs = performance.now() - startTime;
+
+      // Sync env changes back from worker
+      if (result.env) {
+        this.runner.setEnvMap(new Map(result.env));
+      }
+
+      // Audit
+      if (result.errorClass === 'TIMEOUT') {
+        this.audit('command.timeout', { command, executionTimeMs });
+      } else {
+        this.audit('command.complete', { command, exitCode: result.exitCode, executionTimeMs });
+      }
+
+      return result;
+    }
+
+    // Fallback: in-process execution (browser, or hardKill=false)
     this.runner.resetCancel(effectiveTimeout);
     const startTime = performance.now();
 
@@ -322,6 +368,7 @@ export class Sandbox {
   destroy(): void {
     this.audit('sandbox.destroy');
     this.destroyed = true;
+    this.workerExecutor?.dispose();
     this.bridge?.dispose();
   }
 

@@ -6,6 +6,8 @@ export interface SecurityOptions {
   limits?: SecurityLimits;
   /** Audit event handler. */
   onAuditEvent?: AuditEventHandler;
+  /** Enable worker thread execution for hard-kill preemption. Node.js only. */
+  hardKill?: boolean;
 }
 
 export interface SecurityLimits {

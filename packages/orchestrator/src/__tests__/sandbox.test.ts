@@ -412,6 +412,22 @@ describe('Sandbox', () => {
     });
   });
 
+  describe('worker-based hard kill', () => {
+    it('kills a pure CPU-bound Python loop via worker termination', { timeout: 15000 }, async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { hardKill: true, limits: { timeoutMs: 500 } },
+      });
+      const start = performance.now();
+      const result = await sandbox.run('python3 -c "while True: pass"');
+      const elapsed = performance.now() - start;
+      expect(result.errorClass).toBe('TIMEOUT');
+      expect(elapsed).toBeLessThan(5000);
+    });
+  });
+
   describe('hard cancellation', () => {
     it('timeout kills long-running WASM via deadline in fdWrite', async () => {
       sandbox = await Sandbox.create({
