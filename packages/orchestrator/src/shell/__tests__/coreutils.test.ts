@@ -24,7 +24,7 @@ const TOOLS = [
   'ln', 'readlink', 'realpath', 'mktemp', 'tac',
   'xargs', 'expr',
   'diff',
-  'du',
+  'du', 'df',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */
@@ -1059,6 +1059,34 @@ describe('Coreutils Integration', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain('< b');
       expect(result.stdout).toContain('> B');
+    });
+  });
+
+  describe('df', () => {
+    it('df shows wasmsand and Filesystem header', async () => {
+      const result = await runner.run('df');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Filesystem');
+      expect(result.stdout).toContain('wasmsand');
+    });
+
+    it('df -h shows human-readable output', async () => {
+      const result = await runner.run('df -h');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Size');
+      expect(result.stdout).toContain('wasmsand');
+    });
+
+    it('df reflects current usage', async () => {
+      vfs.writeFile('/home/user/bigfile.txt', new TextEncoder().encode('x'.repeat(1000)));
+      const result = await runner.run('df');
+      expect(result.exitCode).toBe(0);
+      // Parse the used value from the output - should include our 1000 bytes
+      const lines = result.stdout.trim().split('\n');
+      const dataLine = lines[1];
+      const usedStr = dataLine.split(/\s+/)[2];
+      const used = parseInt(usedStr, 10);
+      expect(used).toBeGreaterThanOrEqual(1000);
     });
   });
 

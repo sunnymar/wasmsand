@@ -83,7 +83,7 @@ export class VFS {
     this.initDefaultLayout();
     this.initializing = false;
     this.registerProvider('/dev', new DevProvider());
-    this.registerProvider('/proc', new ProcProvider());
+    this.registerProvider('/proc', new ProcProvider(() => this.getStorageStats()));
   }
 
   /** Create a VFS from an already-populated root (used by cowClone). */
@@ -112,7 +112,7 @@ export class VFS {
         if (mount === '/dev') {
           vfs.providers.set(mount, new DevProvider());
         } else if (mount === '/proc') {
-          vfs.providers.set(mount, new ProcProvider());
+          vfs.providers.set(mount, new ProcProvider(() => vfs.getStorageStats()));
         }
       }
     }
@@ -576,6 +576,20 @@ export class VFS {
    * mutates) content arrays, writes in either VFS are invisible
    * to the other — natural COW semantics.
    */
+  getStorageStats(): {
+    totalBytes: number;
+    limitBytes: number | undefined;
+    fileCount: number;
+    fileCountLimit: number | undefined;
+  } {
+    return {
+      totalBytes: this.totalBytes,
+      limitBytes: this.fsLimitBytes,
+      fileCount: this.currentFileCount,
+      fileCountLimit: this.fileCountLimit,
+    };
+  }
+
   cowClone(): VFS {
     return VFS.fromRoot(deepCloneRoot(this.root), {
       fsLimitBytes: this.fsLimitBytes,

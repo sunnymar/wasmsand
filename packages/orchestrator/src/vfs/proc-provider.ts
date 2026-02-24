@@ -2,24 +2,34 @@
  * /proc virtual provider.
  *
  * Provides synthetic proc files:
- * - /proc/uptime   — seconds since VFS creation
- * - /proc/version  — sandbox version string
- * - /proc/cpuinfo  — processor entries
- * - /proc/meminfo  — synthetic memory info
+ * - /proc/uptime    — seconds since VFS creation
+ * - /proc/version   — sandbox version string
+ * - /proc/cpuinfo   — processor entries
+ * - /proc/meminfo   — synthetic memory info
+ * - /proc/diskstats — VFS storage statistics (JSON)
  */
 
 import { VfsError } from './inode.js';
 import type { VirtualProvider } from './provider.js';
 
-const PROC_FILES = new Set(['uptime', 'version', 'cpuinfo', 'meminfo']);
+const PROC_FILES = new Set(['uptime', 'version', 'cpuinfo', 'meminfo', 'diskstats']);
 
 const VERSION_STRING = 'wasmsand 1.0.0 (WASI sandbox)\n';
 
+export interface StorageStats {
+  totalBytes: number;
+  limitBytes: number | undefined;
+  fileCount: number;
+  fileCountLimit: number | undefined;
+}
+
 export class ProcProvider implements VirtualProvider {
   private readonly createdAt: number;
+  private readonly getStorageStats?: () => StorageStats;
 
-  constructor() {
+  constructor(getStorageStats?: () => StorageStats) {
     this.createdAt = Date.now();
+    this.getStorageStats = getStorageStats;
   }
 
   readFile(subpath: string): Uint8Array {
@@ -89,6 +99,17 @@ export class ProcProvider implements VirtualProvider {
           'Buffers:          65536 kB\n' +
           'Cached:          524288 kB\n'
         );
+      case 'diskstats': {
+        const stats = this.getStorageStats
+          ? this.getStorageStats()
+          : { totalBytes: 0, limitBytes: undefined, fileCount: 0, fileCountLimit: undefined };
+        return JSON.stringify({
+          totalBytes: stats.totalBytes,
+          limitBytes: stats.limitBytes ?? 0,
+          fileCount: stats.fileCount,
+          fileCountLimit: stats.fileCountLimit ?? 0,
+        }) + '\n';
+      }
       default:
         throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
     }

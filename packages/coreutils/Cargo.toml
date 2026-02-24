@@ -171,4 +171,8 @@ path = "src/bin/diff.rs"
 name = "du"
 path = "src/bin/du.rs"
 
+[[bin]]
+name = "df"
+path = "src/bin/df.rs"
+
 [dependencies]
