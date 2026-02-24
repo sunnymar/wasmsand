@@ -21,6 +21,7 @@ export class ProcessManager {
   private networkBridge: NetworkBridgeLike | null;
   private currentHost: WasiHost | null = null;
   private toolAllowlist: Set<string> | null = null;
+  private extensionHandler: ((cmd: Record<string, unknown>) => Record<string, unknown>) | null = null;
 
   constructor(vfs: VfsLike, adapter: PlatformAdapter, networkBridge?: NetworkBridgeLike, toolAllowlist?: string[]) {
     this.vfs = vfs;
@@ -42,6 +43,11 @@ export class ProcessManager {
   /** Cancel the currently running WASI process, if any. */
   cancelCurrent(): void {
     this.currentHost?.cancelExecution();
+  }
+
+  /** Set the extension handler for Python package → host extension bridge. */
+  setExtensionHandler(handler: (cmd: Record<string, unknown>) => Record<string, unknown>): void {
+    this.extensionHandler = handler;
   }
 
   /** Check if a tool name is registered. */
@@ -88,6 +94,7 @@ export class ProcessManager {
       preopens: { '/': '/' },
       stdin: stdinData,
       networkBridge: this.networkBridge ?? undefined,
+      extensionHandler: this.extensionHandler ?? undefined,
       stdoutLimit: opts.stdoutLimit,
       stderrLimit: opts.stderrLimit,
       deadlineMs: opts.deadlineMs,
