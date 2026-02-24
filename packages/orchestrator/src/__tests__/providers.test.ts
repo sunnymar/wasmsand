@@ -3,10 +3,19 @@
  *
  * Exercises the full provider interface through the VFS layer, verifying
  * that provider routing correctly intercepts before normal inode logic.
+ * Also includes integration tests that verify providers work through the
+ * full Sandbox.run() path (via WASM coreutils) and survive snapshot/restore
+ * and fork operations.
  */
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, afterEach } from 'bun:test';
+import { resolve } from 'node:path';
 import { VFS } from '../vfs/vfs.js';
 import { VfsError } from '../vfs/inode.js';
+import { Sandbox } from '../sandbox.js';
+import { NodeAdapter } from '../platform/node-adapter.js';
+
+const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
+const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/wasmsand-shell.wasm');
 
 describe('DevProvider (/dev)', () => {
   it('/dev/null read returns empty bytes', () => {
@@ -272,5 +281,130 @@ describe('Provider integration with VFS', () => {
 
     const nullStat = vfs.stat('/dev/null');
     expect(nullStat.permissions).toBe(0o444);
+  });
+});
+
+describe('providers via Sandbox.run()', () => {
+  let sandbox: Sandbox;
+
+  afterEach(() => {
+    sandbox?.destroy();
+  });
+
+  it('cat /dev/null returns empty stdout with exit code 0', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const result = await sandbox.run('cat /dev/null');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+  });
+
+  it('cat /proc/version returns wasmsand', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const result = await sandbox.run('cat /proc/version');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('wasmsand');
+  });
+
+  it('ls /dev lists devices including null', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const result = await sandbox.run('ls /dev');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('null');
+  });
+});
+
+describe('providers after snapshot/restore and fork', () => {
+  let sandbox: Sandbox;
+
+  afterEach(() => {
+    sandbox?.destroy();
+  });
+
+  it('/dev/null works after snapshot/restore', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const snapId = sandbox.snapshot();
+    sandbox.restore(snapId);
+
+    const data = sandbox.readFile('/dev/null');
+    expect(data).toBeInstanceOf(Uint8Array);
+    expect(data.byteLength).toBe(0);
+  });
+
+  it('/proc/version available in fork', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const child = await sandbox.fork();
+    try {
+      const data = child.readFile('/proc/version');
+      const text = new TextDecoder().decode(data);
+      expect(text).toContain('wasmsand');
+    } finally {
+      child.destroy();
+    }
+  });
+
+  it('/dev devices are accessible in forked sandbox', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const child = await sandbox.fork();
+    try {
+      // /dev/null should return empty
+      const nullData = child.readFile('/dev/null');
+      expect(nullData.byteLength).toBe(0);
+
+      // /dev/zero should return zero bytes
+      const zeroData = child.readFile('/dev/zero');
+      expect(zeroData.byteLength).toBeGreaterThan(0);
+      for (let i = 0; i < zeroData.byteLength; i++) {
+        expect(zeroData[i]).toBe(0);
+      }
+
+      // readdir /dev should list all devices
+      const entries = child.readDir('/dev');
+      const names = entries.map(e => e.name).sort();
+      expect(names).toEqual(['null', 'random', 'urandom', 'zero']);
+    } finally {
+      child.destroy();
+    }
+  });
+
+  it('/proc files are accessible after multiple snapshot/restore cycles', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+
+    // First snapshot/restore
+    const snap1 = sandbox.snapshot();
+    sandbox.writeFile('/tmp/marker.txt', new TextEncoder().encode('modified'));
+    sandbox.restore(snap1);
+
+    // Providers should still work
+    const version1 = new TextDecoder().decode(sandbox.readFile('/proc/version'));
+    expect(version1).toContain('wasmsand');
+
+    // Second snapshot/restore
+    const snap2 = sandbox.snapshot();
+    sandbox.restore(snap2);
+
+    const version2 = new TextDecoder().decode(sandbox.readFile('/proc/version'));
+    expect(version2).toContain('wasmsand');
+
+    // /dev should also work
+    const nullData = sandbox.readFile('/dev/null');
+    expect(nullData.byteLength).toBe(0);
+  });
+
+  it('forked sandbox providers are independent from parent', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const child = await sandbox.fork();
+    try {
+      // Both parent and child should have working providers
+      const parentVersion = new TextDecoder().decode(sandbox.readFile('/proc/version'));
+      const childVersion = new TextDecoder().decode(child.readFile('/proc/version'));
+      expect(parentVersion).toContain('wasmsand');
+      expect(childVersion).toContain('wasmsand');
+
+      // Both should have working /dev/null
+      expect(sandbox.readFile('/dev/null').byteLength).toBe(0);
+      expect(child.readFile('/dev/null').byteLength).toBe(0);
+    } finally {
+      child.destroy();
+    }
   });
 });
