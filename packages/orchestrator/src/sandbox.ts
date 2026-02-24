@@ -40,6 +40,21 @@ export interface SandboxOptions {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_FS_LIMIT = 256 * 1024 * 1024; // 256 MB
 
+/** Internal config for the Sandbox constructor. Not part of the public API. */
+interface SandboxParts {
+  vfs: VFS;
+  runner: ShellRunner;
+  timeoutMs: number;
+  adapter: PlatformAdapter;
+  wasmDir: string;
+  shellWasmPath: string;
+  mgr: ProcessManager;
+  bridge?: NetworkBridge;
+  networkPolicy?: NetworkPolicy;
+  security?: SecurityOptions;
+  workerExecutor?: WorkerExecutor;
+}
+
 export class Sandbox {
   private vfs: VFS;
   private runner: ShellRunner;
@@ -57,32 +72,20 @@ export class Sandbox {
   private auditHandler: AuditEventHandler | undefined;
   private workerExecutor: WorkerExecutor | null = null;
 
-  private constructor(
-    vfs: VFS,
-    runner: ShellRunner,
-    timeoutMs: number,
-    adapter: PlatformAdapter,
-    wasmDir: string,
-    shellWasmPath: string,
-    mgr: ProcessManager,
-    bridge?: NetworkBridge,
-    networkPolicy?: NetworkPolicy,
-    security?: SecurityOptions,
-    workerExecutor?: WorkerExecutor,
-  ) {
-    this.vfs = vfs;
-    this.runner = runner;
-    this.timeoutMs = timeoutMs;
-    this.adapter = adapter;
-    this.wasmDir = wasmDir;
-    this.shellWasmPath = shellWasmPath;
-    this.mgr = mgr;
-    this.bridge = bridge ?? null;
-    this.networkPolicy = networkPolicy;
-    this.security = security;
+  private constructor(parts: SandboxParts) {
+    this.vfs = parts.vfs;
+    this.runner = parts.runner;
+    this.timeoutMs = parts.timeoutMs;
+    this.adapter = parts.adapter;
+    this.wasmDir = parts.wasmDir;
+    this.shellWasmPath = parts.shellWasmPath;
+    this.mgr = parts.mgr;
+    this.bridge = parts.bridge ?? null;
+    this.networkPolicy = parts.networkPolicy;
+    this.security = parts.security;
     this.sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    this.auditHandler = security?.onAuditEvent;
-    this.workerExecutor = workerExecutor ?? null;
+    this.auditHandler = parts.security?.onAuditEvent;
+    this.workerExecutor = parts.workerExecutor ?? null;
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -101,29 +104,10 @@ export class Sandbox {
     const fsLimitBytes = options.fsLimitBytes ?? DEFAULT_FS_LIMIT;
 
     const vfs = new VFS({ fsLimitBytes, fileCount: options.security?.limits?.fileCount });
-    const gateway = options.network ? new NetworkGateway(options.network) : undefined;
-
-    // Create bridge for WASI socket access when network policy exists
-    let bridge: NetworkBridge | undefined;
-    if (gateway) {
-      bridge = new NetworkBridge(gateway);
-      await bridge.start();
-    }
-
+    const { gateway, bridge } = await Sandbox.createNetworkBridge(options.network);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
+    const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir);
 
-    // Discover and register tools
-    const tools = await adapter.scanTools(options.wasmDir);
-    for (const [name, path] of tools) {
-      mgr.registerTool(name, path);
-    }
-
-    // Register python3 if not already discovered
-    if (!tools.has('python3')) {
-      mgr.registerTool('python3', `${options.wasmDir}/python3.wasm`);
-    }
-
-    // Shell parser wasm
     const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/wasmsand-shell.wasm`;
     const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
 
@@ -178,7 +162,12 @@ export class Sandbox {
       });
     }
 
-    const sb = new Sandbox(vfs, runner, timeoutMs, adapter, options.wasmDir, shellWasmPath, mgr, bridge, options.network, options.security, workerExecutor);
+    const sb = new Sandbox({
+      vfs, runner, timeoutMs, adapter,
+      wasmDir: options.wasmDir, shellWasmPath,
+      mgr, bridge, networkPolicy: options.network,
+      security: options.security, workerExecutor,
+    });
     sb.audit('sandbox.create');
     return sb;
   }
@@ -190,6 +179,31 @@ export class Sandbox {
     }
     const { BrowserAdapter } = await import('./platform/browser-adapter.js');
     return new BrowserAdapter();
+  }
+
+  private static async createNetworkBridge(
+    policy: NetworkPolicy | undefined,
+  ): Promise<{ gateway?: NetworkGateway; bridge?: NetworkBridge }> {
+    if (!policy) return {};
+    const gateway = new NetworkGateway(policy);
+    const bridge = new NetworkBridge(gateway);
+    await bridge.start();
+    return { gateway, bridge };
+  }
+
+  private static async registerTools(
+    mgr: ProcessManager,
+    adapter: PlatformAdapter,
+    wasmDir: string,
+  ): Promise<Map<string, string>> {
+    const tools = await adapter.scanTools(wasmDir);
+    for (const [name, path] of tools) {
+      mgr.registerTool(name, path);
+    }
+    if (!tools.has('python3')) {
+      mgr.registerTool('python3', `${wasmDir}/python3.wasm`);
+    }
+    return tools;
   }
 
   async run(command: string): Promise<RunResult> {
@@ -328,28 +342,10 @@ export class Sandbox {
   async fork(): Promise<Sandbox> {
     this.assertAlive();
     const childVfs = this.vfs.cowClone();
-
-    // Create a new bridge for the forked sandbox if the parent has network policy
-    let childBridge: NetworkBridge | undefined;
-    let childGateway: NetworkGateway | undefined;
-    if (this.networkPolicy) {
-      childGateway = new NetworkGateway(this.networkPolicy);
-      childBridge = new NetworkBridge(childGateway);
-      await childBridge.start();
-    }
-
-    const childMgr = new ProcessManager(childVfs, this.adapter, childBridge, this.security?.toolAllowlist);
-
-    // Re-register tools from the same wasmDir
-    const tools = await this.adapter.scanTools(this.wasmDir);
-    for (const [name, path] of tools) {
-      childMgr.registerTool(name, path);
-    }
-    if (!tools.has('python3')) {
-      childMgr.registerTool('python3', `${this.wasmDir}/python3.wasm`);
-    }
-
-    const childRunner = new ShellRunner(childVfs, childMgr, this.adapter, this.shellWasmPath, childGateway);
+    const { gateway, bridge } = await Sandbox.createNetworkBridge(this.networkPolicy);
+    const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist);
+    const tools = await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir);
+    const childRunner = new ShellRunner(childVfs, childMgr, this.adapter, this.shellWasmPath, gateway);
 
     // Copy env
     const envMap = this.runner.getEnvMap();
@@ -377,7 +373,7 @@ export class Sandbox {
         stderrBytes: this.security?.limits?.stderrBytes,
         toolAllowlist: this.security?.toolAllowlist,
         memoryBytes: this.security?.limits?.memoryBytes,
-        bridgeSab: childBridge?.getSab(),
+        bridgeSab: bridge?.getSab(),
         networkPolicy: this.networkPolicy ? {
           allowedHosts: this.networkPolicy.allowedHosts,
           blockedHosts: this.networkPolicy.blockedHosts,
@@ -385,12 +381,12 @@ export class Sandbox {
       });
     }
 
-    return new Sandbox(
-      childVfs, childRunner, this.timeoutMs,
-      this.adapter, this.wasmDir, this.shellWasmPath,
-      childMgr, childBridge, this.networkPolicy, this.security,
-      childWorkerExecutor,
-    );
+    return new Sandbox({
+      vfs: childVfs, runner: childRunner, timeoutMs: this.timeoutMs,
+      adapter: this.adapter, wasmDir: this.wasmDir, shellWasmPath: this.shellWasmPath,
+      mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
+      security: this.security, workerExecutor: childWorkerExecutor,
+    });
   }
 
   /** Cancel the currently running command. */
