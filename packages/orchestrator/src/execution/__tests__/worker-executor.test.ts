@@ -16,6 +16,15 @@ function makeToolRegistry(...names: string[]): [string, string][] {
   });
 }
 
+/** Poll until the executor reports it's running. */
+async function waitForRunning(exec: WorkerExecutor, intervalMs = 5, maxMs = 10000): Promise<void> {
+  const start = Date.now();
+  while (!exec.isRunning()) {
+    if (Date.now() - start > maxMs) throw new Error('Timed out waiting for executor to start running');
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 describe('WorkerExecutor', () => {
   let executor: WorkerExecutor;
   let vfs: VFS;
@@ -92,7 +101,7 @@ describe('WorkerExecutor', () => {
       ['PATH', '/bin:/usr/bin'],
     ]);
     const promise = executor.run('seq 1 999999999', env, 30000);
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForRunning(executor);
     executor.kill();
     const result = await promise;
     expect(result.exitCode).toBe(125);
@@ -115,7 +124,7 @@ describe('WorkerExecutor', () => {
 
     // Kill first run
     const promise1 = executor.run('seq 1 999999999', env, 30000);
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForRunning(executor);
     executor.kill();
     await promise1;
 

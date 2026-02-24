@@ -158,7 +158,7 @@ fn main() {
             let spec = &args[i][2..];
             mode = Some(Mode::Characters(parse_ranges(spec)));
         } else if args[i] == "--" {
-            files.extend_from_slice(&args[i + 1..].iter().map(|s| s.clone()).collect::<Vec<_>>());
+            files.extend_from_slice(&args[i + 1..]);
             break;
         } else {
             files.push(args[i].clone());

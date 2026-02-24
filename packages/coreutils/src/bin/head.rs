@@ -69,7 +69,10 @@ fn run() -> i32 {
                     }
                 }
             }
-            arg if arg.starts_with("-") && arg.len() > 1 && arg[1..].chars().all(|c| c.is_ascii_digit()) => {
+            arg if arg.starts_with("-")
+                && arg.len() > 1
+                && arg[1..].chars().all(|c| c.is_ascii_digit()) =>
+            {
                 // Handle -NUM shorthand (e.g., -5)
                 match arg[1..].parse::<usize>() {
                     Ok(n) => count = n,
@@ -114,7 +117,11 @@ fn run() -> i32 {
             if idx > 0 {
                 let _ = writeln!(stdout);
             }
-            let name = if file == "-" { "standard input" } else { file.as_str() };
+            let name = if file == "-" {
+                "standard input"
+            } else {
+                file.as_str()
+            };
             let _ = writeln!(stdout, "==> {} <==", name);
         }
 

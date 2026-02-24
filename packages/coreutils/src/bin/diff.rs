@@ -5,7 +5,11 @@ use std::process;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    let paths: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).map(|s| s.as_str()).collect();
+    let paths: Vec<&str> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(|s| s.as_str())
+        .collect();
     if paths.len() != 2 {
         eprintln!("diff: usage: diff FILE1 FILE2");
         process::exit(2);
@@ -13,11 +17,17 @@ fn main() {
 
     let content1 = match fs::read_to_string(paths[0]) {
         Ok(s) => s,
-        Err(e) => { eprintln!("diff: {}: {e}", paths[0]); process::exit(2); }
+        Err(e) => {
+            eprintln!("diff: {}: {e}", paths[0]);
+            process::exit(2);
+        }
     };
     let content2 = match fs::read_to_string(paths[1]) {
         Ok(s) => s,
-        Err(e) => { eprintln!("diff: {}: {e}", paths[1]); process::exit(2); }
+        Err(e) => {
+            eprintln!("diff: {}: {e}", paths[1]);
+            process::exit(2);
+        }
     };
 
     let lines1: Vec<&str> = content1.lines().collect();

@@ -10,7 +10,7 @@
  * allocated by open().
  */
 
-import type { VFS } from './vfs.js';
+import type { VfsLike } from './vfs-like.js';
 
 export type OpenMode = 'r' | 'w' | 'a' | 'rw';
 export type SeekWhence = 'set' | 'cur' | 'end';
@@ -33,11 +33,11 @@ const FIRST_FD = 3; // 0 = stdin, 1 = stdout, 2 = stderr
  * VFS when the fd is closed.
  */
 export class FdTable {
-  private vfs: VFS;
+  private vfs: VfsLike;
   private entries: Map<number, FdEntry> = new Map();
   private nextFd: number = FIRST_FD;
 
-  constructor(vfs: VFS) {
+  constructor(vfs: VfsLike) {
     this.vfs = vfs;
   }
 

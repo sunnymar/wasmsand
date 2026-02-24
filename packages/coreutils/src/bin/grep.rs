@@ -78,21 +78,14 @@ fn grep_reader<R: io::Read>(
     Ok(found)
 }
 
-fn grep_path(
-    path: &Path,
-    pattern: &str,
-    opts: &Options,
-    show_filename: bool,
-) -> io::Result<bool> {
+fn grep_path(path: &Path, pattern: &str, opts: &Options, show_filename: bool) -> io::Result<bool> {
     if path.is_dir() {
         if !opts.recursive {
             eprintln!("grep: {}: Is a directory", path.display());
             return Ok(false);
         }
         let mut found = false;
-        let mut entries: Vec<_> = fs::read_dir(path)?
-            .filter_map(|e| e.ok())
-            .collect();
+        let mut entries: Vec<_> = fs::read_dir(path)?.filter_map(|e| e.ok()).collect();
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let child = entry.path();

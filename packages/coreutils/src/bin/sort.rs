@@ -91,7 +91,11 @@ fn main() {
             let na = parse_numeric_key(a);
             let nb = parse_numeric_key(b);
             let cmp = na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal);
-            if reverse { cmp.reverse() } else { cmp }
+            if reverse {
+                cmp.reverse()
+            } else {
+                cmp
+            }
         });
     } else {
         all_lines.sort();

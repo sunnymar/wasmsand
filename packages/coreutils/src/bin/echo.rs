@@ -28,7 +28,11 @@ fn process_escapes(s: &str) -> (Vec<u8>, bool) {
                     // Octal: \0NNN (up to 3 octal digits after the 0)
                     let mut val: u8 = 0;
                     let mut count = 0;
-                    while count < 3 && i + 1 < bytes.len() && bytes[i + 1] >= b'0' && bytes[i + 1] <= b'7' {
+                    while count < 3
+                        && i + 1 < bytes.len()
+                        && bytes[i + 1] >= b'0'
+                        && bytes[i + 1] <= b'7'
+                    {
                         val = val.wrapping_mul(8).wrapping_add(bytes[i + 1] - b'0');
                         i += 1;
                         count += 1;
@@ -109,10 +113,8 @@ fn run() -> i32 {
 
     let remaining = &args[arg_start..];
     for (i, arg) in remaining.iter().enumerate() {
-        if i > 0 {
-            if out.write_all(b" ").is_err() {
-                return 1;
-            }
+        if i > 0 && out.write_all(b" ").is_err() {
+            return 1;
         }
         if interpret_escapes {
             let (bytes, stop) = process_escapes(arg);
@@ -129,10 +131,8 @@ fn run() -> i32 {
         }
     }
 
-    if trailing_newline {
-        if out.write_all(b"\n").is_err() {
-            return 1;
-        }
+    if trailing_newline && out.write_all(b"\n").is_err() {
+        return 1;
     }
 
     let _ = out.flush();

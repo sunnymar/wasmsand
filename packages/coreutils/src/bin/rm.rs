@@ -26,13 +26,9 @@ fn remove_path(path: &Path, opts: &Options) -> Result<(), String> {
                 path.display()
             ));
         }
-        fs::remove_dir_all(path).map_err(|e| {
-            format!("cannot remove '{}': {}", path.display(), e)
-        })
+        fs::remove_dir_all(path).map_err(|e| format!("cannot remove '{}': {}", path.display(), e))
     } else {
-        fs::remove_file(path).map_err(|e| {
-            format!("cannot remove '{}': {}", path.display(), e)
-        })
+        fs::remove_file(path).map_err(|e| format!("cannot remove '{}': {}", path.display(), e))
     }
 }
 

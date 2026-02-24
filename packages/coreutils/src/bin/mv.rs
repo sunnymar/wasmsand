@@ -6,35 +6,33 @@ use std::process;
 fn copy_and_remove(src: &Path, dst: &Path) -> Result<(), String> {
     if src.is_dir() {
         copy_dir_recursive(src, dst)?;
-        fs::remove_dir_all(src).map_err(|e| {
-            format!("cannot remove '{}': {}", src.display(), e)
-        })?;
+        fs::remove_dir_all(src).map_err(|e| format!("cannot remove '{}': {}", src.display(), e))?;
     } else {
         fs::copy(src, dst).map_err(|e| {
-            format!("cannot copy '{}' to '{}': {}", src.display(), dst.display(), e)
+            format!(
+                "cannot copy '{}' to '{}': {}",
+                src.display(),
+                dst.display(),
+                e
+            )
         })?;
-        fs::remove_file(src).map_err(|e| {
-            format!("cannot remove '{}': {}", src.display(), e)
-        })?;
+        fs::remove_file(src).map_err(|e| format!("cannot remove '{}': {}", src.display(), e))?;
     }
     Ok(())
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     if !dst.exists() {
-        fs::create_dir(dst).map_err(|e| {
-            format!("cannot create directory '{}': {}", dst.display(), e)
-        })?;
+        fs::create_dir(dst)
+            .map_err(|e| format!("cannot create directory '{}': {}", dst.display(), e))?;
     }
 
-    let entries = fs::read_dir(src).map_err(|e| {
-        format!("cannot read directory '{}': {}", src.display(), e)
-    })?;
+    let entries = fs::read_dir(src)
+        .map_err(|e| format!("cannot read directory '{}': {}", src.display(), e))?;
 
     for entry in entries {
-        let entry = entry.map_err(|e| {
-            format!("error reading entry in '{}': {}", src.display(), e)
-        })?;
+        let entry =
+            entry.map_err(|e| format!("error reading entry in '{}': {}", src.display(), e))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
@@ -82,13 +80,9 @@ fn main() {
         }
         if arg.starts_with('-') && arg.len() > 1 {
             // mv has no commonly needed flags for basic use; reject unknown ones
-            for ch in arg[1..].chars() {
-                match ch {
-                    _ => {
-                        eprintln!("mv: invalid option -- '{}'", ch);
-                        process::exit(1);
-                    }
-                }
+            if let Some(ch) = arg[1..].chars().next() {
+                eprintln!("mv: invalid option -- '{}'", ch);
+                process::exit(1);
             }
         } else {
             args.push(arg);
@@ -99,10 +93,7 @@ fn main() {
         if args.is_empty() {
             eprintln!("mv: missing file operand");
         } else {
-            eprintln!(
-                "mv: missing destination file operand after '{}'",
-                args[0]
-            );
+            eprintln!("mv: missing destination file operand after '{}'", args[0]);
         }
         process::exit(1);
     }

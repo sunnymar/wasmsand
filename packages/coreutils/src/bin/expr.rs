@@ -27,34 +27,98 @@ fn main() {
                 "-" => l - r,
                 "*" => l * r,
                 "/" => {
-                    if r == 0 { eprintln!("expr: division by zero"); process::exit(2); }
+                    if r == 0 {
+                        eprintln!("expr: division by zero");
+                        process::exit(2);
+                    }
                     l / r
                 }
                 "%" => {
-                    if r == 0 { eprintln!("expr: division by zero"); process::exit(2); }
+                    if r == 0 {
+                        eprintln!("expr: division by zero");
+                        process::exit(2);
+                    }
                     l % r
                 }
-                "<" => if l < r { 1 } else { 0 },
-                "<=" => if l <= r { 1 } else { 0 },
-                ">" => if l > r { 1 } else { 0 },
-                ">=" => if l >= r { 1 } else { 0 },
-                "=" => if l == r { 1 } else { 0 },
-                "!=" => if l != r { 1 } else { 0 },
-                _ => { eprintln!("expr: unknown operator: {op}"); process::exit(2); }
+                "<" => {
+                    if l < r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                "<=" => {
+                    if l <= r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                ">" => {
+                    if l > r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                ">=" => {
+                    if l >= r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                "=" => {
+                    if l == r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                "!=" => {
+                    if l != r {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                _ => {
+                    eprintln!("expr: unknown operator: {op}");
+                    process::exit(2);
+                }
             };
             println!("{result}");
-            if result == 0 { process::exit(1); }
+            if result == 0 {
+                process::exit(1);
+            }
             return;
         }
 
         // String comparison
         let result = match op.as_str() {
-            "=" => if left == right { 1 } else { 0 },
-            "!=" => if left != right { 1 } else { 0 },
-            _ => { eprintln!("expr: non-integer argument"); process::exit(2); }
+            "=" => {
+                if left == right {
+                    1
+                } else {
+                    0
+                }
+            }
+            "!=" => {
+                if left != right {
+                    1
+                } else {
+                    0
+                }
+            }
+            _ => {
+                eprintln!("expr: non-integer argument");
+                process::exit(2);
+            }
         };
         println!("{result}");
-        if result == 0 { process::exit(1); }
+        if result == 0 {
+            process::exit(1);
+        }
         return;
     }
 

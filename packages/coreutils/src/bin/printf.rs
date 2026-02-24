@@ -25,15 +25,30 @@ fn main() {
             // Handle escape sequences
             if i + 1 < format_chars.len() {
                 match format_chars[i + 1] {
-                    'n' => { let _ = out.write_all(b"\n"); i += 2; }
-                    't' => { let _ = out.write_all(b"\t"); i += 2; }
-                    'r' => { let _ = out.write_all(b"\r"); i += 2; }
-                    '\\' => { let _ = out.write_all(b"\\"); i += 2; }
+                    'n' => {
+                        let _ = out.write_all(b"\n");
+                        i += 2;
+                    }
+                    't' => {
+                        let _ = out.write_all(b"\t");
+                        i += 2;
+                    }
+                    'r' => {
+                        let _ = out.write_all(b"\r");
+                        i += 2;
+                    }
+                    '\\' => {
+                        let _ = out.write_all(b"\\");
+                        i += 2;
+                    }
                     '0' => {
                         // Octal escape \0NNN
                         let mut octal = String::new();
                         let mut j = i + 2;
-                        while j < format_chars.len() && octal.len() < 3 && format_chars[j].is_digit(8) {
+                        while j < format_chars.len()
+                            && octal.len() < 3
+                            && format_chars[j].is_digit(8)
+                        {
                             octal.push(format_chars[j]);
                             j += 1;
                         }
