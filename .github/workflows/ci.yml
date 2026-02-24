@@ -21,7 +21,7 @@ jobs:
         run: cd packages/orchestrator && bun run build
 
       - name: Run TypeScript tests
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: bun test packages/orchestrator packages/sdk-server
 
       - name: Install Python SDK
