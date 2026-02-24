@@ -24,7 +24,7 @@ jobs:
         run: bun test packages/orchestrator packages/sdk-server
 
       - name: Install Python SDK
-        run: cd packages/python-sdk && pip install -e .
+        run: cd packages/python-sdk && pip install -e ".[dev]"
 
       - name: Run Python tests
         run: cd packages/python-sdk && python -m pytest tests/ -v
