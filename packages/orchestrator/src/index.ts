@@ -18,3 +18,5 @@ export { NetworkBridge } from './network/bridge.js';
 export type { SyncFetchResult } from './network/bridge.js';
 export type { SecurityOptions, SecurityLimits, ErrorClass, AuditEvent, AuditEventHandler } from './security.js';
 export { CancelledError } from './security.js';
+export { WorkerExecutor } from './execution/worker-executor.js';
+export type { WorkerConfig, WorkerRunResult } from './execution/worker-executor.js';
