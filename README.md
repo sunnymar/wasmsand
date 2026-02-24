@@ -11,10 +11,10 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 - **Shell execution** — pipes, redirects, variables, globbing, control flow (`if`/`for`/`while`/`case`), functions, `source`, command substitution, arithmetic, subshells
 - **55+ commands** — cat, grep, sed, awk, find, sort, jq, curl, and more — coreutils compiled to WebAssembly plus shell builtins
 - **Python 3** via RustPython compiled to WASI — standard library available
-- **In-memory virtual filesystem** — POSIX semantics with inodes, file descriptors, and pipes
+- **Virtual filesystem** — in-memory POSIX VFS with optional persistence to IndexedDB (browser) or filesystem (Node)
 - **Virtual `/dev` and `/proc`** — `/dev/null`, `/dev/zero`, `/dev/random`, `/proc/uptime`, `/proc/cpuinfo`, and more
 - **Package manager** — install WASI binaries into the sandbox at runtime with `pkg install`
-- **State persistence** — export/import full sandbox state (files + env) for long-running agent workflows
+- **State persistence** — ephemeral, session (manual save/load), or persistent (debounced autosave) modes for long-running agent workflows
 - **Command history** — `history list` and `history clear` for agent session tracking
 - **Runs everywhere** — same code works server-side ([Bun](https://bun.sh) or Node.js) and in the browser
 
@@ -248,7 +248,7 @@ The shell parser is written in Rust and compiled to WASI. It emits a JSON AST th
 ## Limitations
 
 - **No networking by default.** Network access is off and must be explicitly enabled with a domain allowlist.
-- **In-memory filesystem.** The VFS is in-memory (256 MB default, configurable). Use `exportState`/`importState` to persist across sessions.
+- **In-memory filesystem.** The VFS is in-memory (256 MB default, configurable). Use persistence modes or `exportState`/`importState` to persist across sessions.
 - **Sequential pipeline execution.** Pipeline stages run one at a time with buffered I/O rather than in parallel. This is correct but slower than a real shell for streaming workloads.
 - **Bash subset, not full POSIX.** No aliases, `eval`, job control, or advanced file descriptor manipulation (e.g., `>&3`).
 - **WASI packages only.** The `pkg` command installs WASI binaries. There is no `pip install` at runtime — only the Python standard library is available.
@@ -265,7 +265,7 @@ bun install
 # Build everything (Rust WASM + TypeScript)
 make build
 
-# Run tests (338 tests)
+# Run tests (646 tests)
 make test
 
 # Package for npm
@@ -306,7 +306,7 @@ The key architectural difference: lifo implements commands in JavaScript against
 | **Security boundary** | WASM sandbox + WASI syscall interception + configurable policies (tool allowlist, output limits, memory limits, hard-kill) | Browser sandbox only — "not for high-security sandboxing" per their docs |
 | **Server-side** | Yes (Bun/Node.js with Worker-based hard-kill) | Browser-only |
 | **Python** | Full Python 3 via RustPython WASI | None |
-| **Persistence** | In-memory VFS with snapshot/restore/fork + export/import | IndexedDB-backed VFS |
+| **Persistence** | In-memory VFS with snapshot/restore/fork, export/import, and auto-persist to IndexedDB or filesystem | IndexedDB-backed VFS |
 | **Networking** | Opt-in with domain allowlist, sync bridge for WASI | Browser fetch (no policy layer) |
 
 lifo is a good fit for lightweight browser-side demos and prototyping where the browser sandbox is sufficient. wasmsand is designed for the harder problem: running untrusted LLM-generated code in production on both server and browser, where you need real process isolation, configurable security policies, and hard-kill guarantees.
