@@ -191,6 +191,38 @@ path = "src/bin/dc.rs"
 name = "bc"
 path = "src/bin/bc.rs"
 
+[[bin]]
+name = "hostname"
+path = "src/bin/hostname.rs"
+
+[[bin]]
+name = "base64"
+path = "src/bin/base64.rs"
+
+[[bin]]
+name = "sha256sum"
+path = "src/bin/sha256sum.rs"
+
+[[bin]]
+name = "md5sum"
+path = "src/bin/md5sum.rs"
+
+[[bin]]
+name = "stat"
+path = "src/bin/stat.rs"
+
+[[bin]]
+name = "xxd"
+path = "src/bin/xxd.rs"
+
+[[bin]]
+name = "rev"
+path = "src/bin/rev.rs"
+
+[[bin]]
+name = "nproc"
+path = "src/bin/nproc.rs"
+
 [dependencies]
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 tar = "0.4"

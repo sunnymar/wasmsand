@@ -18,6 +18,7 @@ const BROWSER_TOOLS = [
   'gzip', 'gunzip', 'tar',
   'true', 'false',
   'bc', 'dc', 'sqlite3',
+  'hostname', 'base64', 'sha256sum', 'md5sum', 'stat', 'xxd', 'rev', 'nproc',
 ];
 
 function toolToWasmFile(name: string): string {

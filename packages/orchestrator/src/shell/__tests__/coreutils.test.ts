@@ -28,6 +28,7 @@ const TOOLS = [
   'gzip', 'gunzip', 'tar',
   'bc', 'dc',
   'sqlite3',
+  'hostname', 'base64', 'sha256sum', 'md5sum', 'stat', 'xxd', 'rev', 'nproc',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */
@@ -1469,6 +1470,77 @@ describe('Coreutils Integration', () => {
       const r = await runner.run('cat /tmp/agg.sql | sqlite3');
       expect(r.exitCode).toBe(0);
       expect(r.stdout.trim()).toBe('60');
+    });
+  });
+
+  describe('hostname', () => {
+    it('prints hostname', async () => {
+      const result = await runner.run('hostname');
+      expect(result.stdout.trim()).toBe('wasmsand');
+    });
+
+    it('prints FQDN with -f', async () => {
+      const result = await runner.run('hostname -f');
+      expect(result.stdout.trim()).toBe('wasmsand.local');
+    });
+  });
+
+  describe('base64', () => {
+    it('encodes to base64', async () => {
+      const result = await runner.run('echo -n "Hello World" | base64');
+      expect(result.stdout.trim()).toBe('SGVsbG8gV29ybGQ=');
+    });
+
+    it('decodes from base64', async () => {
+      const result = await runner.run('echo -n "SGVsbG8gV29ybGQ=" | base64 -d');
+      expect(result.stdout).toBe('Hello World');
+    });
+  });
+
+  describe('sha256sum', () => {
+    it('computes sha256 of stdin', async () => {
+      const result = await runner.run('echo -n "hello" | sha256sum');
+      // SHA-256 of "hello" = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+      expect(result.stdout).toContain('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+    });
+  });
+
+  describe('md5sum', () => {
+    it('computes md5 of stdin', async () => {
+      const result = await runner.run('echo -n "hello" | md5sum');
+      // MD5 of "hello" = 5d41402abc4b2a76b9719d911017c592
+      expect(result.stdout).toContain('5d41402abc4b2a76b9719d911017c592');
+    });
+  });
+
+  describe('stat', () => {
+    it('shows file info', async () => {
+      vfs.writeFile('/tmp/stattest.txt', new TextEncoder().encode('hello'));
+      const result = await runner.run('stat /tmp/stattest.txt');
+      expect(result.stdout).toContain('stattest.txt');
+      expect(result.stdout).toContain('5');
+    });
+  });
+
+  describe('xxd', () => {
+    it('produces hex dump', async () => {
+      const result = await runner.run('echo -n "AB" | xxd');
+      expect(result.stdout).toContain('4142');
+      expect(result.stdout).toContain('AB');
+    });
+  });
+
+  describe('rev', () => {
+    it('reverses lines', async () => {
+      const result = await runner.run('echo "hello" | rev');
+      expect(result.stdout.trim()).toBe('olleh');
+    });
+  });
+
+  describe('nproc', () => {
+    it('prints 1', async () => {
+      const result = await runner.run('nproc');
+      expect(result.stdout.trim()).toBe('1');
     });
   });
 });

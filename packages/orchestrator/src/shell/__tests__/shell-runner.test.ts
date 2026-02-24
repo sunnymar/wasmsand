@@ -754,4 +754,21 @@ describe('ShellRunner', () => {
       expect(result.exitCode).not.toBe(0);
     });
   });
+
+  describe('sh/bash command', () => {
+    it('sh -c runs a command', async () => {
+      const result = await runner.run("sh -c 'echo hello from sh'");
+      expect(result.stdout).toContain('hello from sh');
+    });
+
+    it('bash -c runs a command', async () => {
+      const result = await runner.run("bash -c 'echo hello from bash'");
+      expect(result.stdout).toContain('hello from bash');
+    });
+
+    it('which sh finds /bin/sh', async () => {
+      const result = await runner.run('which sh');
+      expect(result.stdout.trim()).toBe('/bin/sh');
+    });
+  });
 });

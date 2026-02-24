@@ -26,6 +26,7 @@ import type { ExtensionRegistry } from '../extension/registry.js';
 
 const PYTHON_COMMANDS = new Set(['python3', 'python']);
 const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg', 'pip', 'history', 'source', '.', 'set', 'read']);
+const SHELL_COMMANDS = new Set(['sh', 'bash']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */
 const PYTHON_INTERPRETERS = new Set(['python3', 'python']);
@@ -183,6 +184,7 @@ export class ShellRunner {
       ...this.mgr.getRegisteredTools(),
       ...PYTHON_COMMANDS,
       ...SHELL_BUILTINS,
+      ...SHELL_COMMANDS,
     ];
     for (const dir of dirs) {
       for (const tool of allTools) {
@@ -1197,6 +1199,8 @@ export class ShellRunner {
     // try shebang-based execution before falling through to tool lookup.
     if (cmdName.includes('/')) {
       result = await this.execPath(cmdName, args, stdinData);
+    } else if (SHELL_COMMANDS.has(cmdName)) {
+      result = await this.execShellCommand(cmdName, args, stdinData);
     } else if (PYTHON_COMMANDS.has(cmdName)) {
       result = await this.execPython(args, stdinData);
     } else if (this.extensionRegistry?.has(cmdName) && this.extensionRegistry.get(cmdName)!.command) {
@@ -1278,6 +1282,22 @@ export class ShellRunner {
       executionTimeMs: performance.now() - start,
       truncated,
     };
+  }
+
+  /** Run a command via the shell (handles sh -c 'cmd' and sh script.sh). */
+  private async execShellCommand(
+    cmdName: string, args: string[], stdinData: Uint8Array | undefined,
+  ): Promise<SpawnResult> {
+    // sh -c 'command string'
+    if (args.length >= 2 && args[0] === '-c') {
+      return this.run(args[1]);
+    }
+    // sh script.sh — read and execute as shell script
+    if (args.length >= 1 && !args[0].startsWith('-')) {
+      return this.execPath(args[0], args.slice(1), stdinData);
+    }
+    // Bare sh/bash with no args — not interactive, just succeed
+    return { exitCode: 0, stdout: '', stderr: '', executionTimeMs: 0 };
   }
 
   /** Run a Python script via PythonRunner. */
@@ -1854,7 +1874,7 @@ export class ShellRunner {
     let stdout = '';
     let exitCode = 0;
     for (const name of args) {
-      if (this.mgr.hasTool(name) || PYTHON_COMMANDS.has(name) || SHELL_BUILTINS.has(name) || this.extensionRegistry?.has(name)) {
+      if (this.mgr.hasTool(name) || PYTHON_COMMANDS.has(name) || SHELL_BUILTINS.has(name) || SHELL_COMMANDS.has(name) || this.extensionRegistry?.has(name)) {
         stdout += `/bin/${name}\n`;
       } else {
         exitCode = 1;
