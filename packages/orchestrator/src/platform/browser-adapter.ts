@@ -14,6 +14,7 @@ const BROWSER_TOOLS = [
   'uname', 'whoami', 'id', 'printenv', 'yes', 'rmdir', 'sleep', 'seq',
   'ln', 'readlink', 'realpath', 'mktemp', 'tac',
   'xargs', 'expr', 'diff',
+  'du',
   'true', 'false',
 ];
 

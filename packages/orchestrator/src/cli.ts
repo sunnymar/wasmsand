@@ -22,6 +22,7 @@ const TOOLS = [
   'ls', 'mkdir', 'rm', 'cp', 'mv', 'touch', 'tee', 'tr', 'cut',
   'basename', 'dirname', 'env', 'printf',
   'find', 'sed', 'awk', 'jq',
+  'du',
   'true', 'false',
 ];
 

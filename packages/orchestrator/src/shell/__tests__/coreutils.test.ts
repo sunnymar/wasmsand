@@ -24,6 +24,7 @@ const TOOLS = [
   'ln', 'readlink', 'realpath', 'mktemp', 'tac',
   'xargs', 'expr',
   'diff',
+  'du',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */
@@ -1058,6 +1059,41 @@ describe('Coreutils Integration', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain('< b');
       expect(result.stdout).toContain('> B');
+    });
+  });
+
+  describe('du', () => {
+    it('du -a reports size of a single file', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('hello world!'));
+      const result = await runner.run('du -a /home/user/data.txt');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('12');
+      expect(result.stdout).toContain('data.txt');
+    });
+
+    it('du -s gives summary', async () => {
+      vfs.writeFile('/home/user/a.txt', new TextEncoder().encode('aaa'));
+      vfs.writeFile('/home/user/b.txt', new TextEncoder().encode('bbb'));
+      const result = await runner.run('du -s /home/user');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n');
+      expect(lines.length).toBe(1);
+      expect(lines[0]).toContain('/home/user');
+    });
+
+    it('du -sh gives human-readable summary', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('x'.repeat(2048)));
+      const result = await runner.run('du -sh /home/user');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/K/);
+    });
+
+    it('du with no args works (defaults to .)', async () => {
+      runner.setEnv('PWD', '/home/user');
+      vfs.writeFile('/home/user/file.txt', new TextEncoder().encode('test'));
+      const result = await runner.run('du -s');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).not.toBe('');
     });
   });
 

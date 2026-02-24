@@ -167,4 +167,8 @@ path = "src/bin/expr.rs"
 name = "diff"
 path = "src/bin/diff.rs"
 
+[[bin]]
+name = "du"
+path = "src/bin/du.rs"
+
 [dependencies]
