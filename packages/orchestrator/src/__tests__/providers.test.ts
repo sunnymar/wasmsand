@@ -173,11 +173,11 @@ describe('ProcProvider (/proc)', () => {
     expect(text).toContain('MemFree');
   });
 
-  it('/proc is listable with all 4 files', () => {
+  it('/proc is listable with all 5 files', () => {
     const vfs = new VFS();
     const entries = vfs.readdir('/proc');
     const names = entries.map(e => e.name).sort();
-    expect(names).toEqual(['cpuinfo', 'meminfo', 'uptime', 'version']);
+    expect(names).toEqual(['cpuinfo', 'diskstats', 'meminfo', 'uptime', 'version']);
     for (const entry of entries) {
       expect(entry.type).toBe('file');
     }
@@ -187,7 +187,7 @@ describe('ProcProvider (/proc)', () => {
     const vfs = new VFS();
     const s = vfs.stat('/proc');
     expect(s.type).toBe('dir');
-    expect(s.size).toBe(4);
+    expect(s.size).toBe(5);
   });
 
   it('/proc files are read-only (EROFS on write to uptime)', () => {
@@ -261,7 +261,7 @@ describe('Provider integration with VFS', () => {
     const devEntries = clone.readdir('/dev');
     expect(devEntries.length).toBe(4);
     const procEntries = clone.readdir('/proc');
-    expect(procEntries.length).toBe(4);
+    expect(procEntries.length).toBe(5);
   });
 
   it('root readdir still works (does not include virtual mounts)', () => {
