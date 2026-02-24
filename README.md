@@ -80,6 +80,69 @@ with Sandbox() as sb:
     print(result.stdout)
 ```
 
+Constructor options:
+
+```python
+sb = Sandbox(
+    timeout_ms=60_000,               # per-command timeout (default 30s)
+    fs_limit_bytes=512 * 1024 * 1024, # VFS size limit (default 256 MB)
+    mounts=[("/mnt/data", {"f.txt": b"hello"})],
+    python_path=["/mnt/libs"],
+)
+```
+
+The `run()` method returns a `CommandResult` with:
+
+```python
+result = sb.commands.run("echo hello")
+result.stdout        # "hello\n"
+result.stderr        # ""
+result.exit_code     # 0
+result.execution_time_ms  # e.g. 12.5
+```
+
+#### File operations
+
+```python
+# Write (bytes or str)
+sb.files.write("/tmp/msg.txt", "hello world")
+sb.files.write("/tmp/data.bin", b"\x00\x01\x02")
+
+# Read (always returns bytes)
+data = sb.files.read("/tmp/msg.txt")  # b"hello world"
+
+# List directory
+entries = sb.files.list("/tmp")
+for entry in entries:
+    print(entry.name, entry.type, entry.size)  # "msg.txt" "file" 11
+
+# Stat
+info = sb.files.stat("/tmp/msg.txt")
+info.name   # "msg.txt"
+info.type   # "file"
+info.size   # 11
+
+# Create directory
+sb.files.mkdir("/tmp/subdir")
+
+# Remove file
+sb.files.rm("/tmp/msg.txt")
+```
+
+#### Error handling
+
+File operations raise `RpcError` on failure:
+
+```python
+from wasmsand._rpc import RpcError
+
+try:
+    sb.files.read("/nonexistent")
+except RpcError as e:
+    print(e.code)     # 1
+    print(e.message)  # "ENOENT: ..."
+```
+
 ## Available tools
 
 | Category | Tools |
@@ -243,6 +306,18 @@ await sandbox.run('pkg remove mytool');
 
 The package manager is disabled by default. Enable it with `packagePolicy.enabled: true`.
 
+**Python:**
+
+```python
+with Sandbox() as sb:
+    sb.commands.run("pkg install https://trusted-registry.example.com/mytool.wasm")
+    sb.commands.run("mytool --help")
+    sb.commands.run("pkg list")
+    sb.commands.run("pkg remove mytool")
+```
+
+Note: package policy configuration is set at the TypeScript orchestrator level. The Python SDK inherits the default policy (disabled).
+
 ## State persistence
 
 Export and import the full sandbox state (filesystem + environment variables) as an opaque binary blob. Useful for long-running agent workflows that need to survive restarts.
@@ -297,12 +372,40 @@ Persistence modes:
 **Python:**
 
 ```python
-# Save state
+# Export/import full state as an opaque binary blob
 blob = sb.export_state()
 
-# Later, restore
 sb2 = Sandbox()
 sb2.import_state(blob)
+# sb2 now has the same filesystem and environment as sb
+```
+
+Snapshots provide lightweight in-session save points (no serialization overhead):
+
+```python
+with Sandbox() as sb:
+    sb.files.write("/tmp/original.txt", b"hello")
+    snap_id = sb.snapshot()
+
+    sb.files.write("/tmp/original.txt", b"modified")
+    sb.restore(snap_id)
+    # /tmp/original.txt is back to "hello"
+```
+
+Fork creates an independent copy of the sandbox (shared RPC server, independent state):
+
+```python
+with Sandbox() as sb:
+    sb.files.write("/tmp/shared.txt", b"base state")
+
+    fork = sb.fork()
+    fork.commands.run("echo fork-only > /tmp/fork.txt")
+
+    # Original sandbox is unaffected
+    result = sb.commands.run("cat /tmp/fork.txt")
+    assert result.exit_code != 0  # file doesn't exist in parent
+
+    fork.destroy()  # clean up the forked sandbox
 ```
 
 Virtual filesystems (`/dev`, `/proc`) are excluded from exports — they are regenerated automatically.
@@ -318,7 +421,81 @@ history list    # shows all executed commands with indices
 history clear   # resets history
 ```
 
+**Python:**
+
+```python
+with Sandbox() as sb:
+    sb.commands.run("echo hello")
+    sb.commands.run("echo world")
+    result = sb.commands.run("history list")
+    print(result.stdout)  # numbered list of executed commands
+
+    sb.commands.run("history clear")
+```
+
 Also available via the RPC API: `shell.history.list`, `shell.history.clear`.
+
+## Python API reference
+
+### `Sandbox`
+
+| Method / Property | Description |
+|---|---|
+| `Sandbox(*, timeout_ms, fs_limit_bytes, mounts, python_path)` | Create a new sandbox. Use as a context manager. |
+| `sb.commands.run(command) -> CommandResult` | Execute a shell command. |
+| `sb.files.read(path) -> bytes` | Read file contents. |
+| `sb.files.write(path, data)` | Write `bytes` or `str` to a file. |
+| `sb.files.list(path) -> list[FileInfo]` | List directory entries. |
+| `sb.files.stat(path) -> FileInfo` | Get file/directory metadata. |
+| `sb.files.mkdir(path)` | Create a directory. |
+| `sb.files.rm(path)` | Remove a file. |
+| `sb.mount(path, files)` | Mount host files at runtime. Accepts `dict` or `VirtualFileSystem`. |
+| `sb.snapshot() -> str` | Save VFS + env state. Returns snapshot ID. |
+| `sb.restore(snapshot_id)` | Restore to a previous snapshot. |
+| `sb.export_state() -> bytes` | Export full state as a binary blob. |
+| `sb.import_state(blob)` | Import a previously exported state. |
+| `sb.fork() -> Sandbox` | Create an independent forked sandbox. |
+| `sb.destroy()` | Destroy a forked sandbox. |
+| `sb.kill()` | Shut down the RPC server (root sandbox only). |
+
+### Data types
+
+```python
+from wasmsand import CommandResult, FileInfo, MemoryFS, VirtualFileSystem, FileStat, DirEntry
+
+# CommandResult (returned by commands.run)
+result.stdout: str
+result.stderr: str
+result.exit_code: int
+result.execution_time_ms: float
+
+# FileInfo (returned by files.list, files.stat)
+info.name: str       # filename
+info.type: str       # "file" or "dir"
+info.size: int       # bytes (files) or entry count (dirs)
+
+# FileStat (used by VirtualFileSystem.stat)
+stat.type: str       # "file" or "dir"
+stat.size: int
+
+# DirEntry (used by VirtualFileSystem.readdir)
+entry.name: str
+entry.type: str      # "file" or "dir"
+```
+
+### `VirtualFileSystem`
+
+Subclass to implement custom file sources. All paths are relative to the mount point.
+
+| Method | Description |
+|---|---|
+| `read_file(path) -> bytes` | Read file. Raise `FileNotFoundError` if missing. |
+| `write_file(path, data)` | Write file. Raise `PermissionError` if read-only. |
+| `exists(path) -> bool` | Check existence. |
+| `stat(path) -> FileStat` | Return type and size. |
+| `readdir(path) -> list[DirEntry]` | List directory entries. |
+
+`MemoryFS` is a built-in implementation backed by a flat dict — see [Host mounts](#host-mounts) for examples.
 
 ## Architecture
 
