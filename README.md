@@ -1,6 +1,6 @@
 # wasmsand
 
-A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 45+ coreutils, and a Python runtime — no containers, no kernel, no hardware emulation.
+A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 55+ commands, and a Python runtime — no containers, no kernel, no hardware emulation.
 
 **[Try it in your browser](https://sunnymar.github.io/wasmsand/)**
 
@@ -8,8 +8,8 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 
 ## What it does
 
-- **Shell execution** — pipes, redirects, variables, globbing, control flow (`if`/`for`/`while`), command substitution, subshells
-- **45+ coreutils** — cat, grep, sed, awk, find, sort, jq, and more, compiled to WebAssembly
+- **Shell execution** — pipes, redirects, variables, globbing, control flow (`if`/`for`/`while`/`case`), functions, `source`, command substitution, arithmetic, subshells
+- **55+ commands** — cat, grep, sed, awk, find, sort, jq, curl, and more — coreutils compiled to WebAssembly plus shell builtins
 - **Python 3** via RustPython compiled to WASI — standard library available
 - **In-memory virtual filesystem** — POSIX semantics with inodes, file descriptors, and pipes
 - **Virtual `/dev` and `/proc`** — `/dev/null`, `/dev/zero`, `/dev/random`, `/proc/uptime`, `/proc/cpuinfo`, and more
@@ -89,13 +89,23 @@ with Sandbox() as sb:
 | Search | find, xargs |
 | Data formats | jq |
 | Path utilities | basename, dirname, readlink, realpath |
-| Environment | env, printenv, export, uname, whoami, id |
+| Environment | env, printenv, export, unset, uname, whoami, id |
 | Scripting | echo, printf, test, expr, seq, sleep, yes, true, false, mktemp |
+| Shell builtins | cd, pwd, which, date, source/`.`, exit, history |
+| Networking | curl, wget (requires network access to be enabled) |
 | Python | python3 (RustPython, standard library) |
 
 ## Shell features
 
-Pipes (`|`), redirects (`>`, `>>`, `<`, `2>&1`), boolean operators (`&&`, `||`), semicolons, single/double quotes, escape sequences, variable expansion (`$VAR`, `${VAR:-default}`), command substitution (`$(...)`), globbing (`*`, `?`, `**/*.txt`), subshells (`(...)`), and control flow (`if`/`elif`/`else`/`fi`, `for`/`do`/`done`, `while`/`do`/`done`).
+**Operators and I/O:** pipes (`|`), redirects (`>`, `>>`, `<`, `2>`, `2>&1`), here-documents (`<<EOF`), boolean operators (`&&`, `||`), semicolons, subshells (`(...)`)
+
+**Quoting and expansion:** single/double quotes, escape sequences, tilde expansion (`~`), variable expansion (`$VAR`, `${VAR:-default}`, `${VAR:+alt}`, `${VAR:=val}`, `${VAR:?err}`), command substitution (`$(...)`), arithmetic expansion (`$(( ))`), globbing (`*`, `?`)
+
+**Control flow:** `if`/`elif`/`else`/`fi`, `for`/`do`/`done`, `while`/`do`/`done`, `case`/`esac`, `break`, `continue`
+
+**Functions and sourcing:** function definitions (`name() { ...; }`), `source`/`.` for loading files into the current shell
+
+**Special variables:** `$?` (last exit code), `$@` and `$*` (all positional parameters), `$#` (argument count), `$1`–`$9` (positional parameters)
 
 ## Virtual filesystems
 
@@ -204,7 +214,7 @@ The shell parser is written in Rust and compiled to WASI. It emits a JSON AST th
 - **No networking by default.** Network access is off and must be explicitly enabled with a domain allowlist.
 - **In-memory filesystem.** The VFS is in-memory (256 MB default, configurable). Use `exportState`/`importState` to persist across sessions.
 - **Sequential pipeline execution.** Pipeline stages run one at a time with buffered I/O rather than in parallel. This is correct but slower than a real shell for streaming workloads.
-- **Bash subset, not full POSIX.** No function definitions, aliases, `eval`, job control, or advanced file descriptor manipulation (e.g., `>&3`).
+- **Bash subset, not full POSIX.** No aliases, `eval`, job control, or advanced file descriptor manipulation (e.g., `>&3`).
 - **WASI packages only.** The `pkg` command installs WASI binaries. There is no `pip install` at runtime — only the Python standard library is available.
 - **Security hardening is in progress.** Timeout enforcement, capability policies, output truncation, and session isolation are defined but not all fully implemented yet. Do not use for adversarial untrusted input in production without reviewing the [security spec](docs/plans/2026-02-23-security-mvp-spec.md).
 
