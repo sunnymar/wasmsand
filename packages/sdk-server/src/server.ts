@@ -69,19 +69,20 @@ async function main(): Promise<void> {
 
   const rl = createInterface({ input: process.stdin });
 
-  for await (const line of rl) {
+  // Use event-driven readline instead of `for await` so callback responses
+  // from the client can be processed while an async dispatch is in progress.
+  const processLine = async (line: string): Promise<void> => {
     if (Buffer.byteLength(line) > maxLineBytes) {
       respond(errorResponse(0, -32700, 'Request too large'));
-      continue;
+      return;
     }
 
     let req: JsonRpcRequest;
     try {
       req = JSON.parse(line);
     } catch {
-      // Malformed JSON — send parse error
       respond(errorResponse(0, -32700, 'Parse error'));
-      continue;
+      return;
     }
 
     const { id, method, params = {} } = req;
@@ -97,14 +98,14 @@ async function main(): Promise<void> {
           pending.resolve((req as any).result);
         }
       }
-      continue;
+      return;
     }
 
     // First RPC must be `create`
     if (method === 'create') {
       if (dispatcher) {
         respond(errorResponse(id, -32600, 'Sandbox already created'));
-        continue;
+        return;
       }
 
       try {
@@ -141,7 +142,7 @@ async function main(): Promise<void> {
 
         if (!wasmDir || typeof wasmDir !== 'string') {
           respond(errorResponse(id, -32602, 'Missing required param: wasmDir'));
-          continue;
+          return;
         }
 
         // Decode base64-encoded mount files
@@ -192,13 +193,13 @@ async function main(): Promise<void> {
         log(`create failed: ${err}`);
         respond(errorResponse(id, -32603, `Internal error: ${(err as Error).message}`));
       }
-      continue;
+      return;
     }
 
     // All other methods require the sandbox to be created first
     if (!dispatcher) {
       respond(errorResponse(id, -32600, 'Sandbox not created. Call "create" first.'));
-      continue;
+      return;
     }
 
     try {
@@ -217,7 +218,18 @@ async function main(): Promise<void> {
         respond(errorResponse(id, -32603, 'Internal error'));
       }
     }
-  }
+  };
+
+  rl.on('line', (line) => {
+    processLine(line).catch((err) => {
+      log(`processLine error: ${err}`);
+    });
+  });
+
+  // Keep process alive until stdin closes
+  await new Promise<void>((resolve) => {
+    rl.on('close', resolve);
+  });
 }
 
 main().catch((err) => {
