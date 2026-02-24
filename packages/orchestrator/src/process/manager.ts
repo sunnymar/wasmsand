@@ -94,7 +94,7 @@ export class ProcessManager {
     });
 
     // If memoryBytes is set, inject a bounded memory into the import object
-    const imports: Record<string, Record<string, unknown>> = host.getImports();
+    const imports = host.getImports() as WebAssembly.Imports & Record<string, WebAssembly.ModuleImports>;
     if (opts.memoryBytes !== undefined) {
       const maxPages = Math.ceil(opts.memoryBytes / 65536);
       const moduleImports = WebAssembly.Module.imports(module);
