@@ -26,6 +26,8 @@ const TOOLS = [
   'diff',
   'du', 'df',
   'gzip', 'gunzip', 'tar',
+  'bc', 'dc',
+  'sqlite3',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */
@@ -1334,6 +1336,139 @@ describe('Coreutils Integration', () => {
       const result = await runner.run('python3 -c "def f(:"');
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain('SyntaxError');
+    });
+  });
+
+  describe('dc', () => {
+    it('basic arithmetic', async () => {
+      const r = await runner.run('echo "3 4 + p" | dc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('7');
+    });
+
+    it('multiplication and subtraction', async () => {
+      vfs.writeFile('/tmp/dc.txt', new TextEncoder().encode('5 3 * 2 - p'));
+      const r = await runner.run('cat /tmp/dc.txt | dc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('13');
+    });
+
+    it('division with scale', async () => {
+      const r = await runner.run('echo "2 k 10 3 / p" | dc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('3.33');
+    });
+
+    it('stack print', async () => {
+      const r = await runner.run('echo "1 2 3 f" | dc');
+      expect(r.exitCode).toBe(0);
+      const lines = r.stdout.trim().split('\n');
+      expect(lines).toEqual(['3', '2', '1']);
+    });
+
+    it('duplicate and add', async () => {
+      const r = await runner.run('echo "5 d + p" | dc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('10');
+    });
+
+    it('registers store and load', async () => {
+      const r = await runner.run('echo "42 sa la p" | dc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('42');
+    });
+
+    it('power', async () => {
+      const r = await runner.run('echo "2 10 ^ p" | dc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('1024');
+    });
+  });
+
+  describe('bc', () => {
+    it('basic arithmetic', async () => {
+      const r = await runner.run('echo "3 + 4" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('7');
+    });
+
+    it('operator precedence', async () => {
+      const r = await runner.run('echo "2 + 3 * 4" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('14');
+    });
+
+    it('parentheses', async () => {
+      const r = await runner.run('echo "(2 + 3) * 4" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('20');
+    });
+
+    it('scale for division', async () => {
+      const r = await runner.run('echo "scale=2; 10/3" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('3.33');
+    });
+
+    it('variables', async () => {
+      const r = await runner.run('printf "x=5\\nx*3\\n" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('15');
+    });
+
+    it('power operator', async () => {
+      const r = await runner.run('echo "2^10" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('1024');
+    });
+
+    it('comparison operators', async () => {
+      const r = await runner.run('echo "3 > 2" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('1');
+    });
+
+    it('user-defined function', async () => {
+      const r = await runner.run('printf "define double(x) { return 2*x; }\\ndouble(21)\\n" | bc');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('42');
+    });
+
+    it('math library with -l', async () => {
+      const r = await runner.run('echo "e(1)" | bc -l');
+      expect(r.exitCode).toBe(0);
+      const val = parseFloat(r.stdout.trim());
+      expect(val).toBeCloseTo(Math.E, 4);
+    });
+  });
+
+  describe('sqlite3', () => {
+    it('creates table and queries data', async () => {
+      vfs.writeFile('/tmp/q.sql', new TextEncoder().encode(
+        "CREATE TABLE t(id INTEGER, name TEXT); INSERT INTO t VALUES(1,'alice'); SELECT * FROM t;"
+      ));
+      const r = await runner.run('cat /tmp/q.sql | sqlite3');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain('alice');
+    });
+
+    it('persists data across queries in same session', async () => {
+      // File-backed databases need journal_mode=OFF since WASI lacks fcntl locking
+      vfs.writeFile('/tmp/multi.sql', new TextEncoder().encode(
+        "CREATE TABLE nums(v INTEGER);\nINSERT INTO nums VALUES(42);\nSELECT v FROM nums;"
+      ));
+      const r = await runner.run('cat /tmp/multi.sql | sqlite3');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('42');
+    });
+
+    it('handles aggregations', async () => {
+      vfs.writeFile('/tmp/agg.sql', new TextEncoder().encode(
+        'CREATE TABLE n(v); INSERT INTO n VALUES(10); INSERT INTO n VALUES(20); INSERT INTO n VALUES(30); SELECT SUM(v) FROM n;'
+      ));
+      const r = await runner.run('cat /tmp/agg.sql | sqlite3');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('60');
     });
   });
 });

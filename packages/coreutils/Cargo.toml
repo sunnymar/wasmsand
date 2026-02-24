@@ -183,6 +183,14 @@ path = "src/bin/gzip.rs"
 name = "tar"
 path = "src/bin/tar.rs"
 
+[[bin]]
+name = "dc"
+path = "src/bin/dc.rs"
+
+[[bin]]
+name = "bc"
+path = "src/bin/bc.rs"
+
 [dependencies]
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 tar = "0.4"

@@ -1,13 +1,16 @@
-.PHONY: test build build-rust build-ts npm wheel clean setup
+.PHONY: test build build-rust build-sqlite build-ts npm wheel clean setup
 
 # Development
 test: build-ts
 	bun test
 
-build: build-rust build-ts
+build: build-rust build-sqlite build-ts
 
 build-rust:
 	cargo build --target wasm32-wasip1 --release
+
+build-sqlite:
+	cd packages/sqlite && make
 
 build-ts:
 	cd packages/orchestrator && bunx tsup

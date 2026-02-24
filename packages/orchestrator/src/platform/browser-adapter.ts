@@ -17,6 +17,7 @@ const BROWSER_TOOLS = [
   'du', 'df',
   'gzip', 'gunzip', 'tar',
   'true', 'false',
+  'bc', 'dc', 'sqlite3',
 ];
 
 function toolToWasmFile(name: string): string {
