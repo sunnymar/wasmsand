@@ -15,7 +15,7 @@ const BROWSER_TOOLS = [
   'ln', 'readlink', 'realpath', 'mktemp', 'tac',
   'xargs', 'expr', 'diff',
   'du', 'df',
-  'gzip', 'gunzip',
+  'gzip', 'gunzip', 'tar',
   'true', 'false',
 ];
 

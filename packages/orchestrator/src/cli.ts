@@ -23,7 +23,7 @@ const TOOLS = [
   'basename', 'dirname', 'env', 'printf',
   'find', 'sed', 'awk', 'jq',
   'du', 'df',
-  'gzip', 'gunzip',
+  'gzip', 'gunzip', 'tar',
   'true', 'false',
 ];
 

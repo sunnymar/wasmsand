@@ -25,7 +25,7 @@ const TOOLS = [
   'xargs', 'expr',
   'diff',
   'du', 'df',
-  'gzip', 'gunzip',
+  'gzip', 'gunzip', 'tar',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */
@@ -1170,6 +1170,54 @@ describe('Coreutils Integration', () => {
       expect(result.exitCode).toBe(0);
       expect(vfs.stat('/home/user/keep.txt').type).toBe('file');
       expect(vfs.stat('/home/user/keep.txt.gz').type).toBe('file');
+    });
+  });
+
+  describe('tar', () => {
+    it('tar -cf creates archive and -tf lists contents', async () => {
+      await runner.run('mkdir -p /home/user/mydir');
+      vfs.writeFile('/home/user/mydir/a.txt', new TextEncoder().encode('aaa'));
+      vfs.writeFile('/home/user/mydir/b.txt', new TextEncoder().encode('bbb'));
+      const create = await runner.run('tar -cf /home/user/archive.tar /home/user/mydir');
+      expect(create.exitCode).toBe(0);
+      const list = await runner.run('tar -tf /home/user/archive.tar');
+      expect(list.exitCode).toBe(0);
+      expect(list.stdout).toContain('a.txt');
+      expect(list.stdout).toContain('b.txt');
+    });
+
+    it('tar -xf extracts and file contents match', async () => {
+      await runner.run('mkdir -p /home/user/src');
+      vfs.writeFile('/home/user/src/hello.txt', new TextEncoder().encode('hello tar'));
+      await runner.run('tar -cf /home/user/src.tar /home/user/src');
+      await runner.run('mkdir -p /tmp/dst');
+      const extract = await runner.run('tar -xf /home/user/src.tar -C /tmp/dst');
+      expect(extract.exitCode).toBe(0);
+      // Archive stores relative path: home/user/src/hello.txt
+      const cat = await runner.run('cat /tmp/dst/home/user/src/hello.txt');
+      expect(cat.stdout).toBe('hello tar');
+    });
+
+    it('tar -czf and -xzf roundtrip with gzip', async () => {
+      await runner.run('mkdir -p /home/user/zdir');
+      vfs.writeFile('/home/user/zdir/data.txt', new TextEncoder().encode('gzip tar test'));
+      const create = await runner.run('tar -czf /home/user/zdir.tar.gz /home/user/zdir');
+      expect(create.exitCode).toBe(0);
+      await runner.run('mkdir -p /tmp/zdst');
+      const extract = await runner.run('tar -xzf /home/user/zdir.tar.gz -C /tmp/zdst');
+      expect(extract.exitCode).toBe(0);
+      const cat = await runner.run('cat /tmp/zdst/home/user/zdir/data.txt');
+      expect(cat.stdout).toBe('gzip tar test');
+    });
+
+    it('tar -tvf shows verbose listing', async () => {
+      await runner.run('mkdir -p /home/user/vdir');
+      vfs.writeFile('/home/user/vdir/file.txt', new TextEncoder().encode('verbose'));
+      await runner.run('tar -cf /home/user/v.tar /home/user/vdir');
+      const result = await runner.run('tar -tvf /home/user/v.tar');
+      expect(result.exitCode).toBe(0);
+      // -t lists to stdout, -v adds detail to stderr
+      expect(result.stdout).toContain('file.txt');
     });
   });
 

@@ -179,5 +179,10 @@ path = "src/bin/df.rs"
 name = "gzip"
 path = "src/bin/gzip.rs"
 
+[[bin]]
+name = "tar"
+path = "src/bin/tar.rs"
+
 [dependencies]
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+tar = "0.4"
