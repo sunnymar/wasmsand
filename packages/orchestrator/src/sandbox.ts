@@ -20,6 +20,7 @@ import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
 import type { WorkerExecutor } from './execution/worker-executor.js';
 import { PackageManager } from './pkg/manager.js';
+import { exportState as serializerExportState, importState as serializerImportState } from './persistence/serializer.js';
 
 export interface SandboxOptions {
   /** Directory (Node) or URL base (browser) containing .wasm files. */
@@ -368,6 +369,21 @@ export class Sandbox {
     const envSnap = this.envSnapshots.get(id);
     if (envSnap) {
       this.runner.setEnvMap(envSnap);
+    }
+  }
+
+  /** Export the entire sandbox state (VFS files + env vars) as a binary blob. */
+  exportState(): Uint8Array {
+    this.assertAlive();
+    return serializerExportState(this.vfs, this.runner.getEnvMap());
+  }
+
+  /** Import a previously exported state blob, restoring files and env vars. */
+  importState(blob: Uint8Array): void {
+    this.assertAlive();
+    const { env } = serializerImportState(this.vfs, blob);
+    if (env) {
+      this.runner.setEnvMap(env);
     }
   }
 
