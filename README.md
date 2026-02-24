@@ -14,6 +14,7 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 - **Virtual filesystem** — in-memory POSIX VFS with optional persistence to IndexedDB (browser) or filesystem (Node)
 - **Virtual `/dev` and `/proc`** — `/dev/null`, `/dev/zero`, `/dev/random`, `/proc/uptime`, `/proc/cpuinfo`, and more
 - **Host mounts** — inject files into the VFS at arbitrary paths (tools, uploads, Python libraries) with a pluggable `VirtualFileSystem` interface
+- **Extensions** — register custom shell commands and Python packages backed by host-side handlers (LLM inference, vector search, database queries, etc.)
 - **Package manager** — install WASI binaries into the sandbox at runtime with `pkg install`
 - **State persistence** — ephemeral, session (manual save/load), or persistent (debounced autosave) modes for long-running agent workflows
 - **Command history** — `history list` and `history clear` for agent session tracking
@@ -88,6 +89,7 @@ sb = Sandbox(
     fs_limit_bytes=512 * 1024 * 1024, # VFS size limit (default 256 MB)
     mounts=[("/mnt/data", {"f.txt": b"hello"})],
     python_path=["/mnt/libs"],
+    extensions=[Extension(name="mytool", command=my_handler)],
 )
 ```
 
@@ -158,6 +160,7 @@ except RpcError as e:
 | Environment | env, printenv, export, unset, uname, whoami, id |
 | Scripting | echo, printf, test, expr, seq, sleep, yes, true, false, mktemp |
 | Shell builtins | cd, pwd, which, date, source/`.`, exit, history |
+| Package management | pkg (install/list/remove WASI binaries), pip (list/show/install for extensions) |
 | Networking | curl, wget (requires network access to be enabled) |
 | Python | python3 (RustPython, standard library) |
 
@@ -280,6 +283,97 @@ class LocalDirFS(VirtualFileSystem):
 ```
 
 When mounted, the VFS is walked and serialized to the sandbox. Files are snapshotted at mount time — changes to the source after mounting are not reflected.
+
+## Extensions
+
+Extensions let hosts expose custom capabilities to sandbox code — shell commands that participate in pipes and redirects, and Python packages importable from sandbox scripts.
+
+**TypeScript:**
+
+```typescript
+const sandbox = await Sandbox.create({
+  adapter: new NodeAdapter(),
+  wasmDir: './wasm',
+  extensions: [
+    {
+      name: 'llm',
+      description: 'Query an LLM. Usage: llm <prompt>',
+      command: async ({ args, stdin }) => {
+        const prompt = args.join(' ') || stdin;
+        const answer = await myLlmApi(prompt);
+        return { stdout: answer + '\n', exitCode: 0 };
+      },
+    },
+    {
+      name: 'vecdb',
+      description: 'Search a vector database. Usage: vecdb <query>',
+      command: async ({ args }) => {
+        const results = await myVecSearch(args.join(' '));
+        return { stdout: JSON.stringify(results) + '\n', exitCode: 0 };
+      },
+      pythonPackage: {
+        version: '1.0.0',
+        summary: 'Vector database client',
+        files: {
+          '__init__.py': 'from wasmsand_ext import call as _call\n\ndef search(q): return _call("vecdb", "search", query=q)\n',
+        },
+      },
+    },
+  ],
+});
+
+// Extension commands work like any other command
+await sandbox.run('echo "summarize this" | llm');
+await sandbox.run('vecdb "similar documents" | jq .results');
+
+// Extension Python packages are importable
+await sandbox.run('python3 -c "import vecdb; print(vecdb.search(\'test\'))"');
+
+// Discoverable via standard tools
+await sandbox.run('which llm');        // /bin/llm
+await sandbox.run('pip list');         // shows vecdb 1.0.0
+await sandbox.run('pip show vecdb');   // metadata + file list
+```
+
+**Python:**
+
+```python
+from wasmsand import Sandbox, Extension, PythonPackage
+
+def my_llm_handler(args, stdin, env, cwd):
+    prompt = " ".join(args) or stdin
+    answer = call_my_llm(prompt)
+    return {"stdout": answer + "\n", "exitCode": 0}
+
+with Sandbox(extensions=[
+    Extension(
+        name="llm",
+        description="Query an LLM",
+        command=my_llm_handler,
+    ),
+    Extension(
+        name="vecdb",
+        description="Vector database search",
+        command=lambda args, **_: {"stdout": do_search(args), "exitCode": 0},
+        python_package=PythonPackage(
+            version="1.0.0",
+            summary="Vector database client",
+            files={
+                "__init__.py": (
+                    "from wasmsand_ext import call as _call\n"
+                    "def search(q): return _call('vecdb', 'search', query=q)\n"
+                ),
+            },
+        ),
+    ),
+]) as sb:
+    sb.commands.run("echo hello | llm")
+    sb.commands.run("pip list")
+```
+
+Extension commands receive `args`, `stdin`, `env`, and `cwd`. They return `stdout`, optional `stderr`, and `exitCode`. Commands support `--help` (returns the description), piped input, output redirection, and chaining with `&&`/`||`/`;`.
+
+Python packages are installed in the VFS at `/usr/lib/python/<name>/` and use the `wasmsand_ext` bridge module to call back to the host. Python package extensions require worker execution mode (`security.hardKill: true` in TypeScript) since the synchronous WASI fd bridge needs the main thread free to run async handlers.
 
 ## Package manager
 
@@ -441,7 +535,7 @@ Also available via the RPC API: `shell.history.list`, `shell.history.clear`.
 
 | Method / Property | Description |
 |---|---|
-| `Sandbox(*, timeout_ms, fs_limit_bytes, mounts, python_path)` | Create a new sandbox. Use as a context manager. |
+| `Sandbox(*, timeout_ms, fs_limit_bytes, mounts, python_path, extensions)` | Create a new sandbox. Use as a context manager. |
 | `sb.commands.run(command) -> CommandResult` | Execute a shell command. |
 | `sb.files.read(path) -> bytes` | Read file contents. |
 | `sb.files.write(path, data)` | Write `bytes` or `str` to a file. |
@@ -461,7 +555,7 @@ Also available via the RPC API: `shell.history.list`, `shell.history.clear`.
 ### Data types
 
 ```python
-from wasmsand import CommandResult, FileInfo, MemoryFS, VirtualFileSystem, FileStat, DirEntry
+from wasmsand import CommandResult, FileInfo, MemoryFS, VirtualFileSystem, FileStat, DirEntry, Extension, PythonPackage
 
 # CommandResult (returned by commands.run)
 result.stdout: str
@@ -523,8 +617,8 @@ The shell parser is written in Rust and compiled to WASI. It emits a JSON AST th
 - **In-memory filesystem.** The VFS is in-memory (256 MB default, configurable). Use persistence modes or `exportState`/`importState` to persist across sessions.
 - **Sequential pipeline execution.** Pipeline stages run one at a time with buffered I/O rather than in parallel. This is correct but slower than a real shell for streaming workloads.
 - **Bash subset, not full POSIX.** No aliases, `eval`, job control, or advanced file descriptor manipulation (e.g., `>&3`).
-- **WASI packages only.** The `pkg` command installs WASI binaries. There is no `pip install` at runtime — only the Python standard library is available.
-- **Security hardening is in progress.** Timeout enforcement, capability policies, output truncation, and session isolation are defined but not all fully implemented yet. Do not use for adversarial untrusted input in production without reviewing the [security spec](docs/plans/2026-02-23-security-mvp-spec.md).
+- **No runtime pip install from PyPI.** `pip install` only works for host-registered extensions. There is no PyPI access — Python packages are either standard library or provided via extensions.
+- **Security hardening is in progress.** Timeout enforcement, capability policies, output truncation, and session isolation are implemented but not yet audited for adversarial untrusted input in production.
 
 ## Development
 
@@ -537,7 +631,7 @@ bun install
 # Build everything (Rust WASM + TypeScript)
 make build
 
-# Run tests (646 tests)
+# Run tests (668 tests)
 make test
 
 # Package for npm
