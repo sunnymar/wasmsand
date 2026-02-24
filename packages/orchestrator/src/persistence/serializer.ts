@@ -44,9 +44,9 @@ const EXCLUDED_PREFIXES = ['/dev', '/proc'];
  * Export the full VFS state (files + directories) and optional env vars
  * into a self-describing binary blob.
  */
-export function exportState(vfs: VfsLike, env?: Map<string, string>): Uint8Array {
+export function exportState(vfs: VfsLike, env?: Map<string, string>, excludePaths?: string[]): Uint8Array {
   const files: SerializedState['files'] = [];
-  walkTree(vfs, '/', files);
+  walkTree(vfs, '/', files, excludePaths ?? EXCLUDED_PREFIXES);
 
   const state: SerializedState = {
     version: FORMAT_VERSION,
@@ -139,6 +139,7 @@ function walkTree(
   vfs: VfsLike,
   dirPath: string,
   out: SerializedState['files'],
+  excludePrefixes: string[],
 ): void {
   const entries = vfs.readdir(dirPath);
 
@@ -146,13 +147,13 @@ function walkTree(
     const childPath = dirPath === '/' ? `/${entry.name}` : `${dirPath}/${entry.name}`;
 
     // Skip virtual provider subtrees
-    if (EXCLUDED_PREFIXES.some(prefix => childPath === prefix || childPath.startsWith(prefix + '/'))) {
+    if (excludePrefixes.some(prefix => childPath === prefix || childPath.startsWith(prefix + '/'))) {
       continue;
     }
 
     if (entry.type === 'dir') {
       out.push({ path: childPath, data: '', type: 'dir' });
-      walkTree(vfs, childPath, out);
+      walkTree(vfs, childPath, out, excludePrefixes);
     } else if (entry.type === 'file') {
       const content = vfs.readFile(childPath);
       const b64 = toBase64(content);

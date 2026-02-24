@@ -24,6 +24,18 @@ import { PackageManager } from './pkg/manager.js';
 import { exportState as serializerExportState, importState as serializerImportState } from './persistence/serializer.js';
 import type { PersistenceOptions } from './persistence/types.js';
 import { PersistenceManager } from './persistence/manager.js';
+import { HostMount } from './vfs/host-mount.js';
+import type { VirtualProvider } from './vfs/provider.js';
+
+/** Describes a set of host-provided files to mount into the VFS. */
+export interface MountConfig {
+  /** Absolute mount path (e.g. '/mnt/tools'). */
+  path: string;
+  /** Flat map of relative subpaths to file contents. */
+  files: Record<string, Uint8Array>;
+  /** Allow writes to this mount. Default false. */
+  writable?: boolean;
+}
 
 export interface SandboxOptions {
   /** Directory (Node) or URL base (browser) containing .wasm files. */
@@ -42,6 +54,10 @@ export interface SandboxOptions {
   security?: SecurityOptions;
   /** Persistence configuration. Default mode is 'ephemeral' (no persistence). */
   persistence?: PersistenceOptions;
+  /** Host-provided file mounts. Processed before shell initialization. */
+  mounts?: MountConfig[];
+  /** Directories to include in PYTHONPATH (in addition to /usr/lib/python). */
+  pythonPath?: string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -116,6 +132,14 @@ export class Sandbox {
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir);
 
+    // Process host mounts before ShellRunner so files are available immediately
+    if (options.mounts) {
+      for (const mc of options.mounts) {
+        const provider = new HostMount(mc.files, { writable: mc.writable });
+        vfs.mount(mc.path, provider);
+      }
+    }
+
     const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/wasmsand-shell.wasm`;
     const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
 
@@ -159,7 +183,12 @@ export class Sandbox {
         // take priority over PYTHONPATH files.
         vfs.writeFile('/usr/lib/python/sitecustomize.py', new TextEncoder().encode(SITE_CUSTOMIZE_SOURCE));
       });
-      runner.setEnv('PYTHONPATH', '/usr/lib/python');
+    }
+
+    // Set PYTHONPATH: user-provided paths + /usr/lib/python (always included)
+    if (options.pythonPath || bridge) {
+      const paths = [...(options.pythonPath ?? []), '/usr/lib/python'];
+      runner.setEnv('PYTHONPATH', paths.join(':'));
     }
 
     // Create WorkerExecutor for hard-kill preemption when enabled.
@@ -380,6 +409,21 @@ export class Sandbox {
     this.vfs.unlink(path);
   }
 
+  /**
+   * Mount host-provided files (or a custom VirtualProvider) at the given path.
+   *
+   * Accepts either a flat file map `Record<string, Uint8Array>` (convenient)
+   * or a `VirtualProvider` instance (flexible). Duck-types on `readFile` method.
+   */
+  mount(path: string, filesOrProvider: Record<string, Uint8Array> | VirtualProvider): void {
+    this.assertAlive();
+    const provider: VirtualProvider =
+      typeof (filesOrProvider as VirtualProvider).readFile === 'function'
+        ? (filesOrProvider as VirtualProvider)
+        : new HostMount(filesOrProvider as Record<string, Uint8Array>);
+    this.vfs.mount(path, provider);
+  }
+
   setEnv(name: string, value: string): void {
     this.assertAlive();
     this.runner.setEnv(name, value);
@@ -421,7 +465,7 @@ export class Sandbox {
   /** Export the entire sandbox state (VFS files + env vars) as a binary blob. */
   exportState(): Uint8Array {
     this.assertAlive();
-    return serializerExportState(this.vfs, this.runner.getEnvMap());
+    return serializerExportState(this.vfs, this.runner.getEnvMap(), this.vfs.getProviderPaths());
   }
 
   /** Import a previously exported state blob, restoring files and env vars. */

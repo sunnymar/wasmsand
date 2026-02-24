@@ -1,6 +1,6 @@
 # wasmsand
 
-A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 55+ commands, and a Python runtime — no containers, no kernel, no hardware emulation.
+A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 60+ commands, and a Python runtime — no containers, no kernel, no hardware emulation.
 
 **[Try it in your browser](https://sunnymar.github.io/wasmsand/)**
 
@@ -9,7 +9,7 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 ## What it does
 
 - **Shell execution** — pipes, redirects, variables, globbing, control flow (`if`/`for`/`while`/`case`), functions, `source`, command substitution, arithmetic, subshells
-- **55+ commands** — cat, grep, sed, awk, find, sort, jq, curl, and more — coreutils compiled to WebAssembly plus shell builtins
+- **60+ commands** — cat, grep, sed, awk, find, sort, jq, tar, gzip, curl, and more — coreutils compiled to WebAssembly plus shell builtins
 - **Python 3** via RustPython compiled to WASI — standard library available
 - **Virtual filesystem** — in-memory POSIX VFS with optional persistence to IndexedDB (browser) or filesystem (Node)
 - **Virtual `/dev` and `/proc`** — `/dev/null`, `/dev/zero`, `/dev/random`, `/proc/uptime`, `/proc/cpuinfo`, and more
@@ -88,6 +88,8 @@ with Sandbox() as sb:
 | Advanced text | sed, awk, diff |
 | Search | find, xargs |
 | Data formats | jq |
+| Archiving | tar, gzip, gunzip |
+| Disk usage | du, df |
 | Path utilities | basename, dirname, readlink, realpath |
 | Environment | env, printenv, export, unset, uname, whoami, id |
 | Scripting | echo, printf, test, expr, seq, sleep, yes, true, false, mktemp |
@@ -120,6 +122,7 @@ The sandbox provides virtual `/dev` and `/proc` filesystems:
 | `/proc/version` | Sandbox version string |
 | `/proc/cpuinfo` | Processor information |
 | `/proc/meminfo` | Memory information |
+| `/proc/diskstats` | VFS storage statistics (JSON) |
 
 These work transparently with coreutils: `cat /dev/null`, `head -c 16 /dev/random | xxd`, `cat /proc/uptime`.
 

@@ -105,14 +105,19 @@ export class VFS {
     vfs.currentFileCount = options?.currentFileCount ?? 0;
     vfs.writablePaths = options?.writablePaths;
     vfs.initializing = false;
-    // Re-create providers for the clone (fresh instances for independent state)
+    vfs.onChangeCallback = null;
+    // Re-create built-in providers (fresh instances for independent state).
+    // User-mounted providers are shared by reference (safe for read-only mounts).
     vfs.providers = new Map();
     if (options?.providers) {
-      for (const [mount] of options.providers) {
+      for (const [mount, provider] of options.providers) {
         if (mount === '/dev') {
           vfs.providers.set(mount, new DevProvider());
         } else if (mount === '/proc') {
           vfs.providers.set(mount, new ProcProvider(() => vfs.getStorageStats()));
+        } else {
+          // User mounts: share the provider instance
+          vfs.providers.set(mount, provider);
         }
       }
     }
@@ -130,6 +135,23 @@ export class VFS {
   /** Register a virtual provider at the given mount path. */
   registerProvider(mountPath: string, provider: VirtualProvider): void {
     this.providers.set(mountPath, provider);
+  }
+
+  /**
+   * Mount a virtual provider at the given path, creating the directory node
+   * in the inode tree so the mount point appears in parent listings (e.g. `ls /mnt`).
+   */
+  mount(mountPath: string, provider: VirtualProvider): void {
+    // Ensure parent dirs exist and create the mount-point dir node
+    this.withWriteAccess(() => {
+      this.mkdirInternal(mountPath);
+    });
+    this.providers.set(mountPath, provider);
+  }
+
+  /** Return all provider mount paths (e.g. ['/dev', '/proc', '/mnt/tools']). */
+  getProviderPaths(): string[] {
+    return Array.from(this.providers.keys());
   }
 
   /** Set a callback to be invoked after mutating VFS operations. */
