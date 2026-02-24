@@ -8,6 +8,13 @@
 
 import { parentPort } from 'node:worker_threads';
 import { VfsProxy } from './vfs-proxy.js';
+import {
+  STATUS_REQUEST,
+  STATUS_RESPONSE,
+  STATUS_ERROR,
+  encodeRequest,
+  decodeResponse,
+} from './proxy-protocol.js';
 import { ProcessManager } from '../process/manager.js';
 import { ShellRunner } from '../shell/shell-runner.js';
 import type { RunResult } from '../shell/shell-runner.js';
@@ -28,6 +35,7 @@ interface InitMessage {
   memoryBytes?: number;
   bridgeSab?: SharedArrayBuffer;
   networkPolicy?: { allowedHosts?: string[]; blockedHosts?: string[] };
+  hasExtensions?: boolean;
 }
 
 interface RunMessage {
@@ -82,6 +90,26 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
 
     if (msg.bridgeSab !== undefined) {
       runner.setEnv('PYTHONPATH', '/usr/lib/python');
+    }
+
+    // Set up extension handler proxy: worker blocks on Atomics.wait while
+    // main thread runs the async extension handler, then notifies.
+    if (msg.hasExtensions) {
+      const extInt32 = new Int32Array(sab);
+      const extensionProxy = (cmd: Record<string, unknown>): Record<string, unknown> => {
+        encodeRequest(sab, { op: 'extensionInvoke', ...cmd });
+        Atomics.store(extInt32, 0, STATUS_REQUEST);
+        parentPort!.postMessage('proxy-request');
+        Atomics.wait(extInt32, 0, STATUS_REQUEST);
+        const status = Atomics.load(extInt32, 0);
+        const resp = decodeResponse(sab);
+        Atomics.store(extInt32, 0, 0); // STATUS_IDLE
+        if (status === STATUS_ERROR) {
+          return { ok: false, error: resp.metadata.message ?? 'error' };
+        }
+        return resp.metadata as Record<string, unknown>;
+      };
+      mgr.setExtensionHandler(extensionProxy);
     }
 
     parentPort!.postMessage({ type: 'ready' });

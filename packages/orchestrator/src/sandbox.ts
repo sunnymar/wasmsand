@@ -236,7 +236,7 @@ export class Sandbox {
     // Create WorkerExecutor for hard-kill preemption when enabled.
     const workerExecutor = await Sandbox.createWorkerExecutor(
       vfs, options.wasmDir, shellWasmPath, tools, adapter,
-      options.security, bridge, options.network,
+      options.security, bridge, options.network, extensionRegistry,
     );
 
     const sb = new Sandbox({
@@ -321,6 +321,7 @@ export class Sandbox {
     security?: SecurityOptions,
     bridge?: NetworkBridge,
     networkPolicy?: NetworkPolicy,
+    extensionRegistry?: ExtensionRegistry,
   ): Promise<WorkerExecutor | undefined> {
     if (!security?.hardKill || !adapter.supportsWorkerExecution) return undefined;
     const { WorkerExecutor: WE } = await import('./execution/worker-executor.js');
@@ -342,6 +343,7 @@ export class Sandbox {
         allowedHosts: networkPolicy.allowedHosts,
         blockedHosts: networkPolicy.blockedHosts,
       } : undefined,
+      extensionRegistry: extensionRegistry?.list().length ? extensionRegistry : undefined,
     });
   }
 
