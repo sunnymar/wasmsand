@@ -25,6 +25,9 @@ interface InitMessage {
   stdoutBytes?: number;
   stderrBytes?: number;
   toolAllowlist?: string[];
+  memoryBytes?: number;
+  bridgeSab?: SharedArrayBuffer;
+  networkPolicy?: { allowedHosts?: string[]; blockedHosts?: string[] };
 }
 
 interface RunMessage {
@@ -46,18 +49,39 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
     const adapter = new NodeAdapter();
 
     const vfs = new VfsProxy(sab, { parentPort: parentPort! });
-    const mgr = new ProcessManager(vfs, adapter, undefined, msg.toolAllowlist);
+
+    // Set up network bridge client if SAB provided
+    let networkBridge: import('../network/bridge.js').NetworkBridgeLike | undefined;
+    let networkGateway: import('../network/gateway.js').NetworkGateway | undefined;
+    if (msg.bridgeSab) {
+      const { NetworkGateway } = await import('../network/gateway.js');
+      const { BridgeClient } = await import('../network/bridge-client.js');
+      if (msg.networkPolicy) {
+        networkGateway = new NetworkGateway(msg.networkPolicy);
+      }
+      networkBridge = new BridgeClient(msg.bridgeSab, networkGateway);
+    }
+
+    const mgr = new ProcessManager(vfs, adapter, networkBridge, msg.toolAllowlist);
 
     for (const [name, path] of toolRegistry) {
       mgr.registerTool(name, path);
     }
 
-    runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, undefined, {
+    runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, networkGateway, {
       skipPopulateBin: true,
     });
 
     if (msg.stdoutBytes !== undefined || msg.stderrBytes !== undefined) {
       runner.setOutputLimits(msg.stdoutBytes, msg.stderrBytes);
+    }
+
+    if (msg.memoryBytes) {
+      runner.setMemoryLimit(msg.memoryBytes);
+    }
+
+    if (msg.bridgeSab) {
+      runner.setEnv('PYTHONPATH', '/usr/lib/python');
     }
 
     parentPort!.postMessage({ type: 'ready' });

@@ -114,6 +114,7 @@ export class ShellRunner {
   private env: Map<string, string> = new Map();
   private stdoutLimit: number | undefined;
   private stderrLimit: number | undefined;
+  private memoryBytes: number | undefined;
   private cancelledReason: 'TIMEOUT' | 'CANCELLED' | null = null;
   private deadlineMs: number = Infinity;
   /** Current command substitution nesting depth. */
@@ -193,6 +194,11 @@ export class ShellRunner {
   setOutputLimits(stdoutBytes?: number, stderrBytes?: number): void {
     this.stdoutLimit = stdoutBytes;
     this.stderrLimit = stderrBytes;
+  }
+
+  /** Set WASM memory limit in bytes. */
+  setMemoryLimit(bytes: number): void {
+    this.memoryBytes = bytes;
   }
 
   /** Signal cancellation to the shell runner. */
@@ -918,6 +924,7 @@ export class ShellRunner {
         stdoutLimit: this.stdoutLimit,
         stderrLimit: this.stderrLimit,
         deadlineMs: this.deadlineMs,
+        memoryBytes: this.memoryBytes,
       });
     }
 

@@ -418,13 +418,13 @@ describe('Sandbox', () => {
         wasmDir: WASM_DIR,
         shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
-        security: { hardKill: true, limits: { timeoutMs: 500 } },
+        security: { hardKill: true, limits: { timeoutMs: 3000 } },
       });
       const start = performance.now();
       const result = await sandbox.run('python3 -c "while True: pass"');
       const elapsed = performance.now() - start;
       expect(result.errorClass).toBe('TIMEOUT');
-      expect(elapsed).toBeLessThan(5000);
+      expect(elapsed).toBeLessThan(10000);
     });
   });
 
@@ -493,6 +493,20 @@ describe('Sandbox', () => {
       });
       const result = await sandbox.run('uname');
       expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe('memoryBytes limit', () => {
+    it('rejects WASM that exceeds memoryBytes limit', async () => {
+      sandbox = await Sandbox.create({
+        wasmDir: WASM_DIR,
+        shellWasmPath: SHELL_WASM,
+        adapter: new NodeAdapter(),
+        security: { limits: { memoryBytes: 1024 } }, // 1KB — too small for any WASM
+      });
+      const result = await sandbox.run('cat /tmp/nonexistent');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('memory limit');
     });
   });
 

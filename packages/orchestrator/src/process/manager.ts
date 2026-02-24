@@ -9,7 +9,7 @@
 import type { PlatformAdapter } from '../platform/adapter.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
 import { WasiHost } from '../wasi/wasi-host.js';
-import type { NetworkBridge } from '../network/bridge.js';
+import type { NetworkBridgeLike } from '../network/bridge.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
 
@@ -18,11 +18,11 @@ export class ProcessManager {
   private adapter: PlatformAdapter;
   private registry: Map<string, string> = new Map();
   private moduleCache: Map<string, WebAssembly.Module> = new Map();
-  private networkBridge: NetworkBridge | null;
+  private networkBridge: NetworkBridgeLike | null;
   private currentHost: WasiHost | null = null;
   private toolAllowlist: Set<string> | null = null;
 
-  constructor(vfs: VfsLike, adapter: PlatformAdapter, networkBridge?: NetworkBridge, toolAllowlist?: string[]) {
+  constructor(vfs: VfsLike, adapter: PlatformAdapter, networkBridge?: NetworkBridgeLike, toolAllowlist?: string[]) {
     this.vfs = vfs;
     this.adapter = adapter;
     this.networkBridge = networkBridge ?? null;
@@ -93,7 +93,34 @@ export class ProcessManager {
       deadlineMs: opts.deadlineMs,
     });
 
-    const instance = await this.adapter.instantiate(module, host.getImports());
+    // If memoryBytes is set, inject a bounded memory into the import object
+    const imports = host.getImports();
+    if (opts.memoryBytes) {
+      const maxPages = Math.ceil(opts.memoryBytes / 65536);
+      const moduleImports = WebAssembly.Module.imports(module);
+      for (const imp of moduleImports) {
+        if (imp.kind === 'memory') {
+          const mem = new WebAssembly.Memory({ initial: 1, maximum: maxPages });
+          if (!imports[imp.module]) imports[imp.module] = {};
+          (imports[imp.module] as Record<string, WebAssembly.Memory>)[imp.name] = mem;
+        }
+      }
+    }
+
+    const instance = await this.adapter.instantiate(module, imports);
+
+    // Check exported memory against limit
+    if (opts.memoryBytes) {
+      const mem = instance.exports.memory as WebAssembly.Memory | undefined;
+      if (mem && mem.buffer.byteLength > opts.memoryBytes) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: `memory limit exceeded: ${mem.buffer.byteLength} > ${opts.memoryBytes}\n`,
+          executionTimeMs: 0,
+        };
+      }
+    }
 
     this.currentHost = host;
     const startTime = performance.now();

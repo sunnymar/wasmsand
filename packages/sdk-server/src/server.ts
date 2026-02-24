@@ -43,8 +43,8 @@ function log(msg: string): void {
   process.stderr.write(`[sdk-server] ${msg}\n`);
 }
 
-// Max request size: 8MB. Prevents OOM and oversized payload attacks.
-const MAX_LINE_BYTES = 8 * 1024 * 1024;
+// Max request size: 8MB default. Overridable via limits.rpcBytes.
+let maxLineBytes = 8 * 1024 * 1024;
 
 async function main(): Promise<void> {
   let dispatcher: Dispatcher | null = null;
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   const rl = createInterface({ input: process.stdin });
 
   for await (const line of rl) {
-    if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
+    if (Buffer.byteLength(line) > maxLineBytes) {
       respond(errorResponse(0, -32700, 'Request too large'));
       continue;
     }
@@ -92,6 +92,7 @@ async function main(): Promise<void> {
             stderrBytes?: number;
             commandBytes?: number;
             fileCount?: number;
+            rpcBytes?: number;
           };
         };
 
@@ -108,6 +109,10 @@ async function main(): Promise<void> {
           shellWasmPath,
           security: limits ? { limits } : undefined,
         });
+
+        if (limits?.rpcBytes) {
+          maxLineBytes = limits.rpcBytes;
+        }
 
         dispatcher = new Dispatcher(sandbox);
         respond({ jsonrpc: '2.0', id, result: { ok: true } });

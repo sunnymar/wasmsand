@@ -12,7 +12,7 @@ import { VfsError } from '../vfs/inode.js';
 import type { InodeType } from '../vfs/inode.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
 import { fdErrorToWasi, vfsErrnoToWasi } from './errors.js';
-import type { NetworkBridge } from '../network/bridge.js';
+import type { NetworkBridgeLike } from '../network/bridge.js';
 import {
   WASI_EBADF,
   WASI_EINVAL,
@@ -55,7 +55,7 @@ export interface WasiHostOptions {
   env: Record<string, string>;
   preopens: Record<string, string>;
   stdin?: Uint8Array;
-  networkBridge?: NetworkBridge;
+  networkBridge?: NetworkBridgeLike;
   stdoutLimit?: number;
   stderrLimit?: number;
   deadlineMs?: number;
@@ -130,7 +130,7 @@ export class WasiHost {
   /** Map from fd number to the directory path it represents (for preopens + opened dirs). */
   private dirFds: Map<number, string> = new Map();
 
-  private networkBridge: NetworkBridge | null;
+  private networkBridge: NetworkBridgeLike | null;
   private controlConnections: Map<string, { host: string; port: number; scheme: string }> = new Map();
   private controlResponseBuf: Uint8Array | null = null;
   private nextControlConnId = 0;

@@ -26,6 +26,9 @@ export interface WorkerConfig {
   stdoutBytes?: number;
   stderrBytes?: number;
   toolAllowlist?: string[];
+  memoryBytes?: number;
+  bridgeSab?: SharedArrayBuffer;
+  networkPolicy?: { allowedHosts?: string[]; blockedHosts?: string[] };
 }
 
 export interface WorkerRunResult extends RunResult {
@@ -176,6 +179,9 @@ export class WorkerExecutor {
       stdoutBytes: this.config.stdoutBytes,
       stderrBytes: this.config.stderrBytes,
       toolAllowlist: this.config.toolAllowlist,
+      memoryBytes: this.config.memoryBytes,
+      bridgeSab: this.config.bridgeSab,
+      networkPolicy: this.config.networkPolicy,
     });
 
     await readyPromise;

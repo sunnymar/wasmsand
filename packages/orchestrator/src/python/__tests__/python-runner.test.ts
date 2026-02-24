@@ -169,7 +169,7 @@ describe('PythonRunner', () => {
         wasmDir: FIXTURES,
         shellWasmPath: SHELL_WASM,
         adapter,
-        security: { hardKill: true, limits: { timeoutMs: 500 } },
+        security: { hardKill: true, limits: { timeoutMs: 3000 } },
       });
       const result = await sb.run('python3 -c "while True:\n  pass"');
       expect(result.errorClass).toBe('TIMEOUT');

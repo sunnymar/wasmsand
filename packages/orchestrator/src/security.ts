@@ -25,6 +25,8 @@ export interface SecurityLimits {
   commandBytes?: number;
   /** Max RPC payload size in bytes. Default 8MB. */
   rpcBytes?: number;
+  /** Max WASM linear memory in bytes. Rejects modules that exceed this. */
+  memoryBytes?: number;
 }
 
 /** Error classes returned in RunResult.errorClass. */

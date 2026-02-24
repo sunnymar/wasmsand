@@ -132,6 +132,11 @@ export class Sandbox {
       runner.setOutputLimits(options.security.limits.stdoutBytes, options.security.limits.stderrBytes);
     }
 
+    // Apply memory limit
+    if (options.security?.limits?.memoryBytes) {
+      runner.setMemoryLimit(options.security.limits.memoryBytes);
+    }
+
     // Bootstrap Python socket shim when networking is enabled
     if (bridge) {
       vfs.withWriteAccess(() => {
@@ -146,9 +151,8 @@ export class Sandbox {
     }
 
     // Create WorkerExecutor for hard-kill preemption when enabled.
-    // Skip when networking is enabled — the bridge requires main-thread access.
     let workerExecutor: WorkerExecutor | undefined;
-    if (options.security?.hardKill && adapter.supportsWorkerExecution && !bridge) {
+    if (options.security?.hardKill && adapter.supportsWorkerExecution) {
       const { WorkerExecutor: WE } = await import('./execution/worker-executor.js');
       const toolRegistry: [string, string][] = [];
       for (const [name, path] of tools) {
@@ -165,6 +169,12 @@ export class Sandbox {
         stdoutBytes: options.security?.limits?.stdoutBytes,
         stderrBytes: options.security?.limits?.stderrBytes,
         toolAllowlist: options.security?.toolAllowlist,
+        memoryBytes: options.security?.limits?.memoryBytes,
+        bridgeSab: bridge?.getSab(),
+        networkPolicy: options.network ? {
+          allowedHosts: options.network.allowedHosts,
+          blockedHosts: options.network.blockedHosts,
+        } : undefined,
       });
     }
 
@@ -347,10 +357,39 @@ export class Sandbox {
       childRunner.setEnv(k, v);
     }
 
+    // Create WorkerExecutor for the child if parent uses hard-kill
+    let childWorkerExecutor: WorkerExecutor | undefined;
+    if (this.security?.hardKill && this.adapter.supportsWorkerExecution) {
+      const { WorkerExecutor: WE } = await import('./execution/worker-executor.js');
+      const toolRegistry: [string, string][] = [];
+      for (const [name, path] of tools) {
+        toolRegistry.push([name, path]);
+      }
+      if (!tools.has('python3')) {
+        toolRegistry.push(['python3', `${this.wasmDir}/python3.wasm`]);
+      }
+      childWorkerExecutor = new WE({
+        vfs: childVfs,
+        wasmDir: this.wasmDir,
+        shellWasmPath: this.shellWasmPath,
+        toolRegistry,
+        stdoutBytes: this.security?.limits?.stdoutBytes,
+        stderrBytes: this.security?.limits?.stderrBytes,
+        toolAllowlist: this.security?.toolAllowlist,
+        memoryBytes: this.security?.limits?.memoryBytes,
+        bridgeSab: childBridge?.getSab(),
+        networkPolicy: this.networkPolicy ? {
+          allowedHosts: this.networkPolicy.allowedHosts,
+          blockedHosts: this.networkPolicy.blockedHosts,
+        } : undefined,
+      });
+    }
+
     return new Sandbox(
       childVfs, childRunner, this.timeoutMs,
       this.adapter, this.wasmDir, this.shellWasmPath,
       childMgr, childBridge, this.networkPolicy, this.security,
+      childWorkerExecutor,
     );
   }
 

@@ -26,6 +26,11 @@ export interface SyncFetchResult {
   error?: string;
 }
 
+/** Minimal interface for synchronous network access (main-thread or Worker). */
+export interface NetworkBridgeLike {
+  fetchSync(url: string, method: string, headers: Record<string, string>, body?: string): SyncFetchResult;
+}
+
 export class NetworkBridge {
   private sab: SharedArrayBuffer;
   private int32: Int32Array;
@@ -39,6 +44,9 @@ export class NetworkBridge {
     this.int32 = new Int32Array(this.sab);
     this.uint8 = new Uint8Array(this.sab);
   }
+
+  /** Return the underlying SharedArrayBuffer for use in Worker threads. */
+  getSab(): SharedArrayBuffer { return this.sab; }
 
   async start(): Promise<void> {
     const { Worker } = await import('node:worker_threads');
