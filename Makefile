@@ -1,4 +1,4 @@
-.PHONY: test build build-rust build-ts npm wheel clean
+.PHONY: test build build-rust build-ts npm wheel clean setup
 
 # Development
 test: build-ts
@@ -20,6 +20,10 @@ npm: build-ts
 # Python wheel (for current platform)
 wheel:
 	scripts/build-wheel.sh
+
+# Setup
+setup:
+	git config core.hooksPath .githooks
 
 # Cleanup
 clean:

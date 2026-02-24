@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== pre-push: running tests ==="
+bun test packages/orchestrator packages/sdk-server
+
+echo "pre-push passed"

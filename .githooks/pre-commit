@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== pre-commit: checking Rust formatting ==="
+cargo fmt --all -- --check
+
+echo "=== pre-commit: running clippy ==="
+cargo clippy --workspace --target wasm32-wasip1 -- -D warnings
+
+echo "=== pre-commit: TypeScript type check ==="
+cd packages/orchestrator && bunx tsc --noEmit && cd ../..
+
+echo "pre-commit passed"

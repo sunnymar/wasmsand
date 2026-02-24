@@ -8,6 +8,7 @@
     "test": "bun run build:ts && bun test",
     "build": "bun run build:rust && bun run build:ts",
     "build:ts": "cd packages/orchestrator && tsup",
-    "build:rust": "cargo build --target wasm32-wasip1 --release"
+    "build:rust": "cargo build --target wasm32-wasip1 --release",
+    "prepare": "git config core.hooksPath .githooks"
   }
 }

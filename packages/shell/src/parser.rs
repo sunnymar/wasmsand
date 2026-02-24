@@ -31,11 +31,7 @@ impl Parser {
 
     fn expect(&mut self, expected: &Token) {
         let token = self.advance();
-        assert_eq!(
-            &token, expected,
-            "expected {:?}, got {:?}",
-            expected, token
-        );
+        assert_eq!(&token, expected, "expected {:?}, got {:?}", expected, token);
     }
 
     /// Skip optional semicolons and newlines (used between clauses).
@@ -155,7 +151,9 @@ impl Parser {
     /// pipeline = [BANG] command (PIPE command)*
     fn parse_pipeline(&mut self) -> Command {
         let negated = matches!(self.peek(), Some(Token::Bang));
-        if negated { self.advance(); }
+        if negated {
+            self.advance();
+        }
 
         let first = self.parse_command();
         let mut commands = vec![first];
@@ -173,7 +171,9 @@ impl Parser {
         };
 
         if negated {
-            Command::Negate { body: Box::new(result) }
+            Command::Negate {
+                body: Box::new(result),
+            }
         } else {
             result
         }
@@ -187,23 +187,34 @@ impl Parser {
             Some(Token::While) => self.parse_while(),
             Some(Token::Case) => self.parse_case(),
             Some(Token::LParen) => self.parse_subshell(),
-            Some(Token::Break) => { self.advance(); Command::Break }
-            Some(Token::Continue) => { self.advance(); Command::Continue }
+            Some(Token::Break) => {
+                self.advance();
+                Command::Break
+            }
+            Some(Token::Continue) => {
+                self.advance();
+                Command::Continue
+            }
             _ => {
                 // Check for function: name() { ... }
                 if let Some(Token::Word(name)) = self.peek() {
-                    if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1] == Token::LParen {
-                        if self.pos + 2 < self.tokens.len() && self.tokens[self.pos + 2] == Token::RParen {
-                            let name = name.clone();
-                            self.pos += 3; // consume name ( )
-                            self.skip_separators();
-                            self.expect(&Token::LBrace);
-                            self.skip_separators();
-                            let body = self.parse_list();
-                            self.skip_separators();
-                            self.expect(&Token::RBrace);
-                            return Command::Function { name, body: Box::new(body) };
-                        }
+                    if self.pos + 1 < self.tokens.len()
+                        && self.tokens[self.pos + 1] == Token::LParen
+                        && self.pos + 2 < self.tokens.len()
+                        && self.tokens[self.pos + 2] == Token::RParen
+                    {
+                        let name = name.clone();
+                        self.pos += 3; // consume name ( )
+                        self.skip_separators();
+                        self.expect(&Token::LBrace);
+                        self.skip_separators();
+                        let body = self.parse_list();
+                        self.skip_separators();
+                        self.expect(&Token::RBrace);
+                        return Command::Function {
+                            name,
+                            body: Box::new(body),
+                        };
                     }
                 }
                 self.parse_simple_command()
@@ -429,13 +440,23 @@ impl Parser {
             self.skip_separators();
 
             // Parse body (may be empty)
-            let body = if !matches!(self.peek(), Some(Token::DoubleSemi) | Some(Token::Esac) | None) {
+            let body = if !matches!(
+                self.peek(),
+                Some(Token::DoubleSemi) | Some(Token::Esac) | None
+            ) {
                 self.parse_list()
             } else {
-                Command::Simple { words: vec![], redirects: vec![], assignments: vec![] }
+                Command::Simple {
+                    words: vec![],
+                    redirects: vec![],
+                    assignments: vec![],
+                }
             };
 
-            items.push(CaseItem { patterns, body: Box::new(body) });
+            items.push(CaseItem {
+                patterns,
+                body: Box::new(body),
+            });
 
             // Expect ;; (or esac)
             if matches!(self.peek(), Some(Token::DoubleSemi)) {
@@ -452,18 +473,34 @@ impl Parser {
     fn parse_word_token(&mut self) -> Word {
         match self.peek() {
             Some(Token::Word(_)) => {
-                if let Token::Word(w) = self.advance() { Word::literal(&w) } else { unreachable!() }
+                if let Token::Word(w) = self.advance() {
+                    Word::literal(&w)
+                } else {
+                    unreachable!()
+                }
             }
             Some(Token::Variable(_)) => {
-                if let Token::Variable(v) = self.advance() { Word::variable(&v) } else { unreachable!() }
+                if let Token::Variable(v) = self.advance() {
+                    Word::variable(&v)
+                } else {
+                    unreachable!()
+                }
             }
             Some(Token::DoubleQuoted(_)) => {
-                if let Token::DoubleQuoted(parts) = self.advance() { Word { parts } } else { unreachable!() }
+                if let Token::DoubleQuoted(parts) = self.advance() {
+                    Word { parts }
+                } else {
+                    unreachable!()
+                }
             }
             Some(Token::CommandSub(_)) => {
                 if let Token::CommandSub(c) = self.advance() {
-                    Word { parts: vec![WordPart::CommandSub(c)] }
-                } else { unreachable!() }
+                    Word {
+                        parts: vec![WordPart::CommandSub(c)],
+                    }
+                } else {
+                    unreachable!()
+                }
             }
             other => panic!("expected word, got {:?}", other),
         }
@@ -625,9 +662,7 @@ mod tests {
         let cmd = parse("FOO=bar echo $FOO");
         match cmd {
             Command::Simple {
-                assignments,
-                words,
-                ..
+                assignments, words, ..
             } => {
                 assert_eq!(assignments.len(), 1);
                 assert_eq!(assignments[0].name, "FOO");

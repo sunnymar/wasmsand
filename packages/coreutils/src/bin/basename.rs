@@ -12,7 +12,11 @@ fn main() {
     }
 
     let path = &args[1];
-    let suffix = if args.len() > 2 { Some(args[2].as_str()) } else { None };
+    let suffix = if args.len() > 2 {
+        Some(args[2].as_str())
+    } else {
+        None
+    };
 
     // Remove trailing slashes
     let trimmed = path.trim_end_matches('/');

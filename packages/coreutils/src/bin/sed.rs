@@ -91,9 +91,12 @@ fn parse_address(s: &str) -> (Address, &str) {
 
     if ch == b'$' {
         let rest = &s[1..];
-        if rest.starts_with(',') {
-            let (addr2, rest2) = parse_address(&rest[1..]);
-            return (Address::Range(Box::new(Address::Last), Box::new(addr2)), rest2);
+        if let Some(after_comma) = rest.strip_prefix(',') {
+            let (addr2, rest2) = parse_address(after_comma);
+            return (
+                Address::Range(Box::new(Address::Last), Box::new(addr2)),
+                rest2,
+            );
         }
         return (Address::Last, rest);
     }
@@ -103,8 +106,8 @@ fn parse_address(s: &str) -> (Address, &str) {
         let n: usize = s[..end].parse().unwrap_or(0);
         let rest = &s[end..];
         let addr = Address::Line(n);
-        if rest.starts_with(',') {
-            let (addr2, rest2) = parse_address(&rest[1..]);
+        if let Some(after_comma) = rest.strip_prefix(',') {
+            let (addr2, rest2) = parse_address(after_comma);
             return (Address::Range(Box::new(addr), Box::new(addr2)), rest2);
         }
         return (addr, rest);
@@ -116,8 +119,8 @@ fn parse_address(s: &str) -> (Address, &str) {
             let pattern = rest[..end].to_string();
             let after = &rest[end + 1..];
             let addr = Address::Pattern(pattern);
-            if after.starts_with(',') {
-                let (addr2, rest2) = parse_address(&after[1..]);
+            if let Some(after_comma) = after.strip_prefix(',') {
+                let (addr2, rest2) = parse_address(after_comma);
                 return (Address::Range(Box::new(addr), Box::new(addr2)), rest2);
             }
             return (addr, after);
@@ -165,7 +168,10 @@ fn parse_script(script: &str) -> Vec<Rule> {
             _ => continue,
         };
 
-        rules.push(Rule { address, command: cmd });
+        rules.push(Rule {
+            address,
+            command: cmd,
+        });
     }
 
     rules
@@ -180,13 +186,19 @@ fn address_matches(addr: &Address, line_num: usize, line: &str, is_last: bool) -
         Address::Range(start, end) => {
             address_matches(start, line_num, line, is_last)
                 || address_matches(end, line_num, line, is_last)
-                // A range is active from the first matching start through the first matching end
-                // For simplicity, just check if line_num is between the two line addresses
+            // A range is active from the first matching start through the first matching end
+            // For simplicity, just check if line_num is between the two line addresses
         }
     }
 }
 
-fn apply_substitute(line: &str, pattern: &str, replacement: &str, global: bool, ignore_case: bool) -> (String, bool) {
+fn apply_substitute(
+    line: &str,
+    pattern: &str,
+    replacement: &str,
+    global: bool,
+    ignore_case: bool,
+) -> (String, bool) {
     if pattern.is_empty() {
         return (line.to_string(), false);
     }
@@ -237,7 +249,7 @@ fn apply_substitute(line: &str, pattern: &str, replacement: &str, global: bool, 
 
 fn run_sed(input: &mut dyn Read, rules: &[Rule], suppress: bool) {
     let reader = BufReader::new(input);
-    let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
     let total = lines.len();
 
     for (i, line) in lines.iter().enumerate() {
@@ -256,8 +268,15 @@ fn run_sed(input: &mut dyn Read, rules: &[Rule], suppress: bool) {
             }
 
             match &rule.command {
-                SedCmd::Substitute { pattern, replacement, global, print, ignore_case } => {
-                    let (new_line, changed) = apply_substitute(&current, pattern, replacement, *global, *ignore_case);
+                SedCmd::Substitute {
+                    pattern,
+                    replacement,
+                    global,
+                    print,
+                    ignore_case,
+                } => {
+                    let (new_line, changed) =
+                        apply_substitute(&current, pattern, replacement, *global, *ignore_case);
                     current = new_line;
                     if changed && *print {
                         extra_print = true;
@@ -288,12 +307,6 @@ fn run_sed(input: &mut dyn Read, rules: &[Rule], suppress: bool) {
             }
             if !suppress || extra_print {
                 println!("{}", current);
-            }
-            // Handle extra_print from substitute/p when not in suppress mode
-            if !suppress && extra_print {
-                // Already printed above
-            } else if suppress && extra_print {
-                // Already printed above
             }
             for text in &append_text {
                 println!("{}", text);

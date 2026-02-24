@@ -68,15 +68,24 @@ pub fn lex(input: &str) -> Vec<Token> {
 
         // Bang (pipeline negation) — standalone ! at command start position
         // Only emit Bang if it's the first token or follows a pipe/semi/newline/&&/||/(
-        if chars[pos] == '!' && (pos + 1 >= len || chars[pos + 1] == ' ' || chars[pos + 1] == '\t') {
+        if chars[pos] == '!' && (pos + 1 >= len || chars[pos + 1] == ' ' || chars[pos + 1] == '\t')
+        {
             let mut is_command_start = tokens.is_empty();
             if !is_command_start {
                 if let Some(last) = tokens.last() {
                     is_command_start = matches!(
                         last,
-                        Token::Pipe | Token::And | Token::Or | Token::Semi
-                            | Token::Newline | Token::LParen | Token::Do | Token::Then
-                            | Token::Else | Token::LBrace | Token::DoubleSemi
+                        Token::Pipe
+                            | Token::And
+                            | Token::Or
+                            | Token::Semi
+                            | Token::Newline
+                            | Token::LParen
+                            | Token::Do
+                            | Token::Then
+                            | Token::Else
+                            | Token::LBrace
+                            | Token::DoubleSemi
                     );
                 }
             }
@@ -121,28 +130,26 @@ pub fn lex(input: &str) -> Vec<Token> {
         }
 
         // 2>&1, 2>file, 2>>file
-        if chars[pos] == '2' && pos + 1 < len && (chars[pos + 1] == '>' || chars[pos + 1] == '<') {
-            if chars[pos + 1] == '>' {
-                if pos + 3 < len && chars[pos + 2] == '&' && chars[pos + 3] == '1' {
-                    tokens.push(Token::Redirect(RedirectType::StderrToStdout));
-                    pos += 4;
-                    continue;
-                }
-                if pos + 2 < len && chars[pos + 2] == '>' {
-                    // 2>> file
-                    pos += 3;
-                    skip_whitespace(&chars, &mut pos);
-                    let target = read_redirect_target(&chars, &mut pos);
-                    tokens.push(Token::Redirect(RedirectType::StderrAppend(target)));
-                    continue;
-                }
-                // 2> file
-                pos += 2;
-                skip_whitespace(&chars, &mut pos);
-                let target = read_redirect_target(&chars, &mut pos);
-                tokens.push(Token::Redirect(RedirectType::StderrOverwrite(target)));
+        if chars[pos] == '2' && pos + 1 < len && chars[pos + 1] == '>' {
+            if pos + 3 < len && chars[pos + 2] == '&' && chars[pos + 3] == '1' {
+                tokens.push(Token::Redirect(RedirectType::StderrToStdout));
+                pos += 4;
                 continue;
             }
+            if pos + 2 < len && chars[pos + 2] == '>' {
+                // 2>> file
+                pos += 3;
+                skip_whitespace(&chars, &mut pos);
+                let target = read_redirect_target(&chars, &mut pos);
+                tokens.push(Token::Redirect(RedirectType::StderrAppend(target)));
+                continue;
+            }
+            // 2> file
+            pos += 2;
+            skip_whitespace(&chars, &mut pos);
+            let target = read_redirect_target(&chars, &mut pos);
+            tokens.push(Token::Redirect(RedirectType::StderrOverwrite(target)));
+            continue;
         }
 
         // > or >> or < redirects
@@ -165,30 +172,50 @@ pub fn lex(input: &str) -> Vec<Token> {
                 // Here-document: <<EOF or <<-EOF
                 pos += 2;
                 let strip_tabs = pos < len && chars[pos] == '-';
-                if strip_tabs { pos += 1; }
+                if strip_tabs {
+                    pos += 1;
+                }
                 skip_whitespace(&chars, &mut pos);
 
                 // Read delimiter (may be quoted with ' or ")
                 let (delimiter, _quoted) = read_heredoc_delimiter(&chars, &mut pos);
 
                 // Skip to next newline, then read content lines until delimiter
-                while pos < len && chars[pos] != '\n' { pos += 1; }
-                if pos < len { pos += 1; } // skip newline
+                while pos < len && chars[pos] != '\n' {
+                    pos += 1;
+                }
+                if pos < len {
+                    pos += 1;
+                } // skip newline
 
                 let mut content = String::new();
                 loop {
-                    if pos >= len { break; }
+                    if pos >= len {
+                        break;
+                    }
                     let line_start = pos;
-                    while pos < len && chars[pos] != '\n' { pos += 1; }
+                    while pos < len && chars[pos] != '\n' {
+                        pos += 1;
+                    }
                     let line: String = chars[line_start..pos].iter().collect();
-                    let trimmed = if strip_tabs { line.trim_start_matches('\t') } else { &line };
+                    let trimmed = if strip_tabs {
+                        line.trim_start_matches('\t')
+                    } else {
+                        &line
+                    };
                     if trimmed.trim() == delimiter {
-                        if pos < len { pos += 1; } // skip delimiter newline
+                        if pos < len {
+                            pos += 1;
+                        } // skip delimiter newline
                         break;
                     }
                     content.push_str(&line);
                     content.push('\n');
-                    if pos < len { pos += 1; } else { break; }
+                    if pos < len {
+                        pos += 1;
+                    } else {
+                        break;
+                    }
                 }
 
                 let rtype = if strip_tabs {
@@ -216,17 +243,27 @@ pub fn lex(input: &str) -> Vec<Token> {
                     let mut depth = 1;
                     let mut expr = String::new();
                     while pos < len && depth > 0 {
-                        if chars[pos] == '(' { depth += 1; }
+                        if chars[pos] == '(' {
+                            depth += 1;
+                        }
                         if chars[pos] == ')' {
                             depth -= 1;
-                            if depth == 0 { break; }
+                            if depth == 0 {
+                                break;
+                            }
                         }
                         expr.push(chars[pos]);
                         pos += 1;
                     }
-                    if pos < len { pos += 1; } // skip inner )
-                    if pos < len && chars[pos] == ')' { pos += 1; } // skip outer )
-                    tokens.push(Token::DoubleQuoted(vec![WordPart::ArithmeticExpansion(expr)]));
+                    if pos < len {
+                        pos += 1;
+                    } // skip inner )
+                    if pos < len && chars[pos] == ')' {
+                        pos += 1;
+                    } // skip outer )
+                    tokens.push(Token::DoubleQuoted(vec![WordPart::ArithmeticExpansion(
+                        expr,
+                    )]));
                     continue;
                 }
                 // Command substitution: $(...)
@@ -241,7 +278,10 @@ pub fn lex(input: &str) -> Vec<Token> {
                 let var = read_until_char(&chars, &mut pos, '}');
                 let part = parse_braced_var(&var);
                 match part {
-                    WordPart::Variable(_) => tokens.push(Token::Variable(match part { WordPart::Variable(v) => v, _ => unreachable!() })),
+                    WordPart::Variable(_) => tokens.push(Token::Variable(match part {
+                        WordPart::Variable(v) => v,
+                        _ => unreachable!(),
+                    })),
                     _ => tokens.push(Token::DoubleQuoted(vec![part])),
                 }
                 continue;
@@ -318,8 +358,16 @@ fn read_redirect_target(chars: &[char], pos: &mut usize) -> String {
     let mut result = String::new();
     while *pos < chars.len() {
         let ch = chars[*pos];
-        if ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '|' || ch == '&'
-            || ch == '>' || ch == '<' || ch == '(' || ch == ')'
+        if ch == ' '
+            || ch == '\t'
+            || ch == '\n'
+            || ch == ';'
+            || ch == '|'
+            || ch == '&'
+            || ch == '>'
+            || ch == '<'
+            || ch == '('
+            || ch == ')'
         {
             break;
         }
@@ -405,16 +453,24 @@ fn lex_double_quoted(chars: &[char], pos: &mut usize) -> Vec<WordPart> {
                     let mut depth = 1;
                     let mut expr = String::new();
                     while *pos < chars.len() && depth > 0 {
-                        if chars[*pos] == '(' { depth += 1; }
+                        if chars[*pos] == '(' {
+                            depth += 1;
+                        }
                         if chars[*pos] == ')' {
                             depth -= 1;
-                            if depth == 0 { break; }
+                            if depth == 0 {
+                                break;
+                            }
                         }
                         expr.push(chars[*pos]);
                         *pos += 1;
                     }
-                    if *pos < chars.len() { *pos += 1; } // skip inner )
-                    if *pos < chars.len() && chars[*pos] == ')' { *pos += 1; } // skip outer )
+                    if *pos < chars.len() {
+                        *pos += 1;
+                    } // skip inner )
+                    if *pos < chars.len() && chars[*pos] == ')' {
+                        *pos += 1;
+                    } // skip outer )
                     parts.push(WordPart::ArithmeticExpansion(expr));
                     continue;
                 }
@@ -495,9 +551,18 @@ fn read_word(chars: &[char], pos: &mut usize) -> String {
         let ch = chars[*pos];
 
         // Stop at word boundaries (but handle $ specially after = for assignments)
-        if ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '|' || ch == '&'
-            || ch == '>' || ch == '<' || ch == '(' || ch == ')'
-            || ch == '\'' || ch == '"'
+        if ch == ' '
+            || ch == '\t'
+            || ch == '\n'
+            || ch == ';'
+            || ch == '|'
+            || ch == '&'
+            || ch == '>'
+            || ch == '<'
+            || ch == '('
+            || ch == ')'
+            || ch == '\''
+            || ch == '"'
         {
             break;
         }
@@ -740,10 +805,7 @@ mod tests {
         let tokens = lex("echo $(date)");
         assert_eq!(
             tokens,
-            vec![
-                Token::Word("echo".into()),
-                Token::CommandSub("date".into()),
-            ]
+            vec![Token::Word("echo".into()), Token::CommandSub("date".into()),]
         );
     }
 
@@ -788,10 +850,7 @@ mod tests {
     #[test]
     fn assignment() {
         let tokens = lex("FOO=bar");
-        assert_eq!(
-            tokens,
-            vec![Token::Assignment("FOO".into(), "bar".into()),]
-        );
+        assert_eq!(tokens, vec![Token::Assignment("FOO".into(), "bar".into()),]);
     }
 
     #[test]
@@ -854,10 +913,7 @@ mod tests {
         let tokens = lex("echo `date`");
         assert_eq!(
             tokens,
-            vec![
-                Token::Word("echo".into()),
-                Token::CommandSub("date".into()),
-            ]
+            vec![Token::Word("echo".into()), Token::CommandSub("date".into()),]
         );
     }
 

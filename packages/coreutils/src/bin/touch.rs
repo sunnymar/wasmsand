@@ -18,7 +18,12 @@ fn main() {
         // Open with create flag - creates if missing, opens if exists.
         // Opening an existing file and immediately closing it updates access time
         // on most systems. For WASI this is the best we can portably do.
-        match OpenOptions::new().create(true).write(true).open(path) {
+        match OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+        {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("touch: cannot touch '{}': {}", path, e);

@@ -30,7 +30,10 @@ fn main() {
                 // Not a KEY=VALUE pair; treat as command name.
                 // Under WASI we cannot exec, so just warn and print env.
                 if modified {
-                    eprintln!("env: cannot execute '{}': not supported under WASI", args[i]);
+                    eprintln!(
+                        "env: cannot execute '{}': not supported under WASI",
+                        args[i]
+                    );
                 }
                 break;
             }

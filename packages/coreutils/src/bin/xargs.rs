@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, Read, Write, BufWriter};
+use std::io::{self, BufWriter, Read, Write};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -23,7 +23,9 @@ fn main() {
     io::stdin().read_to_string(&mut input).unwrap_or(0);
 
     let items: Vec<&str> = input.split_whitespace().collect();
-    if items.is_empty() { return; }
+    if items.is_empty() {
+        return;
+    }
 
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());

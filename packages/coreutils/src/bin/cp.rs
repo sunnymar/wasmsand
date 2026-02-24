@@ -8,26 +8,28 @@ struct Options {
 }
 
 fn copy_file(src: &Path, dst: &Path) -> Result<(), String> {
-    fs::copy(src, dst)
-        .map(|_| ())
-        .map_err(|e| format!("cannot copy '{}' to '{}': {}", src.display(), dst.display(), e))
+    fs::copy(src, dst).map(|_| ()).map_err(|e| {
+        format!(
+            "cannot copy '{}' to '{}': {}",
+            src.display(),
+            dst.display(),
+            e
+        )
+    })
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     if !dst.exists() {
-        fs::create_dir(dst).map_err(|e| {
-            format!("cannot create directory '{}': {}", dst.display(), e)
-        })?;
+        fs::create_dir(dst)
+            .map_err(|e| format!("cannot create directory '{}': {}", dst.display(), e))?;
     }
 
-    let entries = fs::read_dir(src).map_err(|e| {
-        format!("cannot read directory '{}': {}", src.display(), e)
-    })?;
+    let entries = fs::read_dir(src)
+        .map_err(|e| format!("cannot read directory '{}': {}", src.display(), e))?;
 
     for entry in entries {
-        let entry = entry.map_err(|e| {
-            format!("error reading entry in '{}': {}", src.display(), e)
-        })?;
+        let entry =
+            entry.map_err(|e| format!("error reading entry in '{}': {}", src.display(), e))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
@@ -104,9 +106,10 @@ fn main() {
         }
         for src_arg in sources {
             let src = Path::new(src_arg);
-            let target = dst.join(src.file_name().unwrap_or_else(|| {
-                std::ffi::OsStr::new(src_arg)
-            }));
+            let target = dst.join(
+                src.file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new(src_arg)),
+            );
             if let Err(e) = copy_source(src, &target, &opts) {
                 eprintln!("cp: {}", e);
                 exit_code = 1;
@@ -116,9 +119,10 @@ fn main() {
         // Single source
         let src = Path::new(&sources[0]);
         let target: PathBuf = if dst.is_dir() {
-            dst.join(src.file_name().unwrap_or_else(|| {
-                std::ffi::OsStr::new(&sources[0])
-            }))
+            dst.join(
+                src.file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new(&sources[0])),
+            )
         } else {
             dst.to_path_buf()
         };

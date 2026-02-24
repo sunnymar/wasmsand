@@ -5,7 +5,11 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process;
 
-fn cat_reader<R: BufRead>(reader: R, number_lines: bool, stdout: &mut impl Write) -> io::Result<()> {
+fn cat_reader<R: BufRead>(
+    reader: R,
+    number_lines: bool,
+    stdout: &mut impl Write,
+) -> io::Result<()> {
     if number_lines {
         for (i, line) in reader.lines().enumerate() {
             let line = line?;

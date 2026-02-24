@@ -13,6 +13,7 @@ use std::process;
 // ---- Lexer ----
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 enum Token {
     // Literals
     Number(f64),
@@ -20,8 +21,8 @@ enum Token {
     Regex(String),
     // Identifiers
     Ident(String),
-    Field(usize),     // $0, $1, ...
-    FieldExpr,        // $ followed by expression
+    Field(usize), // $0, $1, ...
+    FieldExpr,    // $ followed by expression
     // Keywords
     Begin,
     End,
@@ -43,7 +44,7 @@ enum Token {
     Star,
     Slash,
     Percent,
-    Power,     // ^
+    Power, // ^
     Assign,
     PlusAssign,
     MinusAssign,
@@ -58,10 +59,10 @@ enum Token {
     And,
     Or,
     Not,
-    Match,     // ~
-    NotMatch,  // !~
-    Append,    // >>
-    Pipe,      // |
+    Match,    // ~
+    NotMatch, // !~
+    Append,   // >>
+    Pipe,     // |
     // Delimiters
     LParen,
     RParen,
@@ -114,7 +115,10 @@ impl Lexer {
                 while self.pos < self.chars.len() && self.chars[self.pos] != '\n' {
                     self.pos += 1;
                 }
-            } else if ch == '\\' && self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '\n' {
+            } else if ch == '\\'
+                && self.pos + 1 < self.chars.len()
+                && self.chars[self.pos + 1] == '\n'
+            {
                 // Line continuation
                 self.pos += 2;
             } else {
@@ -156,15 +160,23 @@ impl Lexer {
 
     fn read_number(&mut self) -> f64 {
         let start = self.pos - 1;
-        while self.pos < self.chars.len() && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.') {
+        while self.pos < self.chars.len()
+            && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.')
+        {
             self.pos += 1;
         }
-        self.chars[start..self.pos].iter().collect::<String>().parse().unwrap_or(0.0)
+        self.chars[start..self.pos]
+            .iter()
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0.0)
     }
 
     fn read_ident(&mut self) -> String {
         let start = self.pos - 1;
-        while self.pos < self.chars.len() && (self.chars[self.pos].is_alphanumeric() || self.chars[self.pos] == '_') {
+        while self.pos < self.chars.len()
+            && (self.chars[self.pos].is_alphanumeric() || self.chars[self.pos] == '_')
+        {
             self.pos += 1;
         }
         self.chars[start..self.pos].iter().collect()
@@ -185,12 +197,24 @@ impl Lexer {
                 '\'' => tokens.push(Token::Str(self.read_string('\''))),
                 '/' => {
                     // Regex if previous token allows it
-                    let can_be_regex = tokens.is_empty() || matches!(
-                        tokens.last(),
-                        Some(Token::Newline | Token::Semi | Token::LBrace | Token::LParen
-                            | Token::Comma | Token::Not | Token::And | Token::Or
-                            | Token::Match | Token::NotMatch | Token::Begin | Token::End)
-                    );
+                    let can_be_regex = tokens.is_empty()
+                        || matches!(
+                            tokens.last(),
+                            Some(
+                                Token::Newline
+                                    | Token::Semi
+                                    | Token::LBrace
+                                    | Token::LParen
+                                    | Token::Comma
+                                    | Token::Not
+                                    | Token::And
+                                    | Token::Or
+                                    | Token::Match
+                                    | Token::NotMatch
+                                    | Token::Begin
+                                    | Token::End
+                            )
+                        );
                     if can_be_regex {
                         tokens.push(Token::Regex(self.read_string('/')));
                     } else if self.peek() == '=' {
@@ -287,7 +311,11 @@ impl Lexer {
                         while self.pos < self.chars.len() && self.chars[self.pos].is_ascii_digit() {
                             self.pos += 1;
                         }
-                        let n: usize = self.chars[start..self.pos].iter().collect::<String>().parse().unwrap_or(0);
+                        let n: usize = self.chars[start..self.pos]
+                            .iter()
+                            .collect::<String>()
+                            .parse()
+                            .unwrap_or(0);
                         tokens.push(Token::Field(n));
                     } else {
                         tokens.push(Token::Dollar);
@@ -326,6 +354,7 @@ impl Lexer {
 // ---- AST ----
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum Expr {
     Num(f64),
     Str(String),
@@ -345,15 +374,26 @@ enum Expr {
 
 #[derive(Debug, Clone)]
 enum BinOp {
-    Add, Sub, Mul, Div, Mod, Pow,
-    Eq, Ne, Lt, Le, Gt, Ge,
-    And, Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone)]
 enum Stmt {
     Expr(Expr),
-    Print(Vec<Expr>, Option<String>),  // exprs, output_redirect
+    Print(Vec<Expr>, Option<String>), // exprs, output_redirect
     Printf(String, Vec<Expr>),
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
     While(Expr, Box<Stmt>),
@@ -454,7 +494,10 @@ impl Parser {
             self.parse_block()
         } else {
             // Default action: print $0
-            vec![Stmt::Print(vec![Expr::Field(Box::new(Expr::Num(0.0)))], None)]
+            vec![Stmt::Print(
+                vec![Expr::Field(Box::new(Expr::Num(0.0)))],
+                None,
+            )]
         };
 
         Some(Rule { pattern, action })
@@ -481,7 +524,10 @@ impl Parser {
                 self.advance();
                 let mut exprs = Vec::new();
                 let mut redirect = None;
-                if !matches!(self.peek(), Token::Newline | Token::Semi | Token::RBrace | Token::Eof | Token::Pipe) {
+                if !matches!(
+                    self.peek(),
+                    Token::Newline | Token::Semi | Token::RBrace | Token::Eof | Token::Pipe
+                ) {
                     exprs.push(self.parse_expr());
                     while matches!(self.peek(), Token::Comma) {
                         self.advance();
@@ -499,7 +545,11 @@ impl Parser {
             }
             Token::Printf => {
                 self.advance();
-                let fmt = if let Token::Str(s) = self.advance() { s } else { String::new() };
+                let fmt = if let Token::Str(s) = self.advance() {
+                    s
+                } else {
+                    String::new()
+                };
                 let mut args = Vec::new();
                 while matches!(self.peek(), Token::Comma) {
                     self.advance();
@@ -569,7 +619,10 @@ impl Parser {
             }
             Token::Exit => {
                 self.advance();
-                let code = if !matches!(self.peek(), Token::Newline | Token::Semi | Token::RBrace | Token::Eof) {
+                let code = if !matches!(
+                    self.peek(),
+                    Token::Newline | Token::Semi | Token::RBrace | Token::Eof
+                ) {
                     Some(self.parse_expr())
                 } else {
                     None
@@ -725,14 +778,16 @@ impl Parser {
         // This is tricky in awk — for now only concat explicit string/var sequences
         // We detect concat when next token starts a primary but isn't an operator
         let mut parts = vec![first];
-        loop {
-            match self.peek() {
-                Token::Number(_) | Token::Str(_) | Token::Ident(_)
-                | Token::Field(_) | Token::Dollar | Token::LParen => {
-                    parts.push(self.parse_addition());
-                }
-                _ => break,
-            }
+        while matches!(
+            self.peek(),
+            Token::Number(_)
+                | Token::Str(_)
+                | Token::Ident(_)
+                | Token::Field(_)
+                | Token::Dollar
+                | Token::LParen
+        ) {
+            parts.push(self.parse_addition());
         }
         if parts.len() == 1 {
             parts.pop().unwrap()
@@ -964,7 +1019,8 @@ impl AwkInterp {
             line.split_whitespace().map(|s| s.to_string()).collect()
         };
         self.nf = self.fields.len();
-        self.vars.insert("NF".to_string(), Value::Num(self.nf as f64));
+        self.vars
+            .insert("NF".to_string(), Value::Num(self.nf as f64));
     }
 
     fn get_field(&self, n: usize) -> String {
@@ -997,7 +1053,11 @@ impl AwkInterp {
             "FS" => Value::Str(self.fs.clone()),
             "OFS" => Value::Str(self.ofs.clone()),
             "ORS" => Value::Str(self.ors.clone()),
-            "FILENAME" => self.vars.get("FILENAME").cloned().unwrap_or(Value::Str(String::new())),
+            "FILENAME" => self
+                .vars
+                .get("FILENAME")
+                .cloned()
+                .unwrap_or(Value::Str(String::new())),
             _ => self.vars.get(name).cloned().unwrap_or(Value::Num(0.0)),
         }
     }
@@ -1008,7 +1068,9 @@ impl AwkInterp {
             "OFS" => self.ofs = val.to_str(),
             "ORS" => self.ors = val.to_str(),
             "NR" => self.nr = val.to_num() as usize,
-            _ => { self.vars.insert(name.to_string(), val); }
+            _ => {
+                self.vars.insert(name.to_string(), val);
+            }
         }
     }
 
@@ -1022,8 +1084,16 @@ impl AwkInterp {
             }
             Expr::Var(name) => self.get_var(name),
             Expr::ArrayRef(name, keys) => {
-                let key = keys.iter().map(|k| self.eval_expr(k).to_str()).collect::<Vec<_>>().join("\x1c");
-                self.arrays.get(name).and_then(|m| m.get(&key)).cloned().unwrap_or(Value::Num(0.0))
+                let key = keys
+                    .iter()
+                    .map(|k| self.eval_expr(k).to_str())
+                    .collect::<Vec<_>>()
+                    .join("\x1c");
+                self.arrays
+                    .get(name)
+                    .and_then(|m| m.get(&key))
+                    .cloned()
+                    .unwrap_or(Value::Num(0.0))
             }
             Expr::Assign(lhs, rhs) => {
                 let val = self.eval_expr(rhs);
@@ -1071,7 +1141,11 @@ impl AwkInterp {
                 }
             }
             Expr::UnaryMinus(e) => Value::Num(-self.eval_expr(e).to_num()),
-            Expr::Not(e) => Value::Num(if self.eval_expr(e).is_true() { 0.0 } else { 1.0 }),
+            Expr::Not(e) => Value::Num(if self.eval_expr(e).is_true() {
+                0.0
+            } else {
+                1.0
+            }),
             Expr::Concat(parts) => {
                 let s: String = parts.iter().map(|p| self.eval_expr(p).to_str()).collect();
                 Value::Str(s)
@@ -1084,7 +1158,7 @@ impl AwkInterp {
             Expr::Getline => Value::Num(0.0), // Not implemented for simple use
             Expr::InArray(arr, key) => {
                 let k = self.eval_expr(key).to_str();
-                let exists = self.arrays.get(arr).map_or(false, |m| m.contains_key(&k));
+                let exists = self.arrays.get(arr).is_some_and(|m| m.contains_key(&k));
                 Value::Num(if exists { 1.0 } else { 0.0 })
             }
         }
@@ -1098,8 +1172,15 @@ impl AwkInterp {
                 self.set_field(n, val.to_str());
             }
             Expr::ArrayRef(name, keys) => {
-                let key = keys.iter().map(|k| self.eval_expr(k).to_str()).collect::<Vec<_>>().join("\x1c");
-                self.arrays.entry(name.clone()).or_default().insert(key, val);
+                let key = keys
+                    .iter()
+                    .map(|k| self.eval_expr(k).to_str())
+                    .collect::<Vec<_>>()
+                    .join("\x1c");
+                self.arrays
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(key, val);
             }
             _ => {}
         }
@@ -1131,7 +1212,11 @@ impl AwkInterp {
             }
             "split" => {
                 let s = self.eval_expr(&args[0]).to_str();
-                let arr_name = if let Expr::Var(name) = &args[1] { name.clone() } else { return Value::Num(0.0) };
+                let arr_name = if let Expr::Var(name) = &args[1] {
+                    name.clone()
+                } else {
+                    return Value::Num(0.0);
+                };
                 let sep = if args.len() > 2 {
                     self.eval_expr(&args[2]).to_str()
                 } else {
@@ -1171,35 +1256,19 @@ impl AwkInterp {
                 }
                 Value::Num(count as f64)
             }
-            "tolower" => {
-                Value::Str(self.eval_expr(&args[0]).to_str().to_lowercase())
-            }
-            "toupper" => {
-                Value::Str(self.eval_expr(&args[0]).to_str().to_uppercase())
-            }
+            "tolower" => Value::Str(self.eval_expr(&args[0]).to_str().to_lowercase()),
+            "toupper" => Value::Str(self.eval_expr(&args[0]).to_str().to_uppercase()),
             "sprintf" => {
                 let fmt = self.eval_expr(&args[0]).to_str();
                 let vals: Vec<Value> = args[1..].iter().map(|a| self.eval_expr(a)).collect();
                 Value::Str(awk_sprintf(&fmt, &vals))
             }
-            "int" => {
-                Value::Num(self.eval_expr(&args[0]).to_num() as i64 as f64)
-            }
-            "sqrt" => {
-                Value::Num(self.eval_expr(&args[0]).to_num().sqrt())
-            }
-            "log" => {
-                Value::Num(self.eval_expr(&args[0]).to_num().ln())
-            }
-            "exp" => {
-                Value::Num(self.eval_expr(&args[0]).to_num().exp())
-            }
-            "sin" => {
-                Value::Num(self.eval_expr(&args[0]).to_num().sin())
-            }
-            "cos" => {
-                Value::Num(self.eval_expr(&args[0]).to_num().cos())
-            }
+            "int" => Value::Num(self.eval_expr(&args[0]).to_num() as i64 as f64),
+            "sqrt" => Value::Num(self.eval_expr(&args[0]).to_num().sqrt()),
+            "log" => Value::Num(self.eval_expr(&args[0]).to_num().ln()),
+            "exp" => Value::Num(self.eval_expr(&args[0]).to_num().exp()),
+            "sin" => Value::Num(self.eval_expr(&args[0]).to_num().sin()),
+            "cos" => Value::Num(self.eval_expr(&args[0]).to_num().cos()),
             _ => Value::Num(0.0),
         }
     }
@@ -1214,7 +1283,8 @@ impl AwkInterp {
                 if exprs.is_empty() {
                     self.output.push_str(&self.get_field(0));
                 } else {
-                    let parts: Vec<String> = exprs.iter().map(|e| self.eval_expr(e).to_str()).collect();
+                    let parts: Vec<String> =
+                        exprs.iter().map(|e| self.eval_expr(e).to_str()).collect();
                     self.output.push_str(&parts.join(&self.ofs));
                 }
                 self.output.push_str(&self.ors);
@@ -1261,7 +1331,10 @@ impl AwkInterp {
                 ControlFlow::Normal
             }
             Stmt::ForIn(var, arr, body) => {
-                let keys: Vec<String> = self.arrays.get(arr).map_or(Vec::new(), |m| m.keys().cloned().collect());
+                let keys: Vec<String> = self
+                    .arrays
+                    .get(arr)
+                    .map_or(Vec::new(), |m| m.keys().cloned().collect());
                 for key in keys {
                     self.set_var(var, Value::Str(key));
                     match self.exec_stmt(body) {
@@ -1283,14 +1356,20 @@ impl AwkInterp {
             }
             Stmt::Next => ControlFlow::Next,
             Stmt::Exit(code) => {
-                let c = code.as_ref().map_or(0, |e| self.eval_expr(e).to_num() as i32);
+                let c = code
+                    .as_ref()
+                    .map_or(0, |e| self.eval_expr(e).to_num() as i32);
                 ControlFlow::Exit(c)
             }
             Stmt::Delete(name, keys) => {
                 if keys.is_empty() {
                     self.arrays.remove(name);
                 } else {
-                    let key = keys.iter().map(|k| self.eval_expr(k).to_str()).collect::<Vec<_>>().join("\x1c");
+                    let key = keys
+                        .iter()
+                        .map(|k| self.eval_expr(k).to_str())
+                        .collect::<Vec<_>>()
+                        .join("\x1c");
                     if let Some(m) = self.arrays.get_mut(name) {
                         m.remove(&key);
                     }
@@ -1388,7 +1467,12 @@ fn awk_sprintf(fmt: &str, args: &[Value]) -> String {
                 'd' | 'i' => format!("{}", val.to_num() as i64),
                 'f' => {
                     if width_str.contains('.') {
-                        let prec: usize = width_str.split('.').nth(1).unwrap_or("6").parse().unwrap_or(6);
+                        let prec: usize = width_str
+                            .split('.')
+                            .nth(1)
+                            .unwrap_or("6")
+                            .parse()
+                            .unwrap_or(6);
                         format!("{:.prec$}", val.to_num())
                     } else {
                         format!("{:.6}", val.to_num())
@@ -1405,7 +1489,12 @@ fn awk_sprintf(fmt: &str, args: &[Value]) -> String {
             };
 
             // Apply width
-            let width: usize = width_str.split('.').next().unwrap_or("0").parse().unwrap_or(0);
+            let width: usize = width_str
+                .split('.')
+                .next()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
             if width > 0 && formatted.len() < width {
                 if left_align {
                     result.push_str(&formatted);
@@ -1443,7 +1532,7 @@ fn awk_sprintf(fmt: &str, args: &[Value]) -> String {
 
 fn read_input(input: &mut dyn Read) -> Vec<String> {
     let reader = BufReader::new(input);
-    reader.lines().filter_map(|l| l.ok()).collect()
+    reader.lines().map_while(Result::ok).collect()
 }
 
 fn main() {
@@ -1528,20 +1617,23 @@ fn main() {
             interp.nr += 1;
             interp.fnr += 1;
             interp.set_record(line);
-            interp.vars.insert("NR".to_string(), Value::Num(interp.nr as f64));
-            interp.vars.insert("FNR".to_string(), Value::Num(interp.fnr as f64));
-            match interp.exec_rules(&rules, line) {
-                ControlFlow::Exit(code) => {
-                    exit_code = code;
-                    break;
-                }
-                _ => {}
+            interp
+                .vars
+                .insert("NR".to_string(), Value::Num(interp.nr as f64));
+            interp
+                .vars
+                .insert("FNR".to_string(), Value::Num(interp.fnr as f64));
+            if let ControlFlow::Exit(code) = interp.exec_rules(&rules, line) {
+                exit_code = code;
+                break;
             }
         }
     } else {
         'outer: for file in &files {
             interp.fnr = 0;
-            interp.vars.insert("FILENAME".to_string(), Value::Str(file.clone()));
+            interp
+                .vars
+                .insert("FILENAME".to_string(), Value::Str(file.clone()));
             let lines = match File::open(file) {
                 Ok(mut f) => read_input(&mut f),
                 Err(e) => {
@@ -1553,14 +1645,15 @@ fn main() {
                 interp.nr += 1;
                 interp.fnr += 1;
                 interp.set_record(line);
-                interp.vars.insert("NR".to_string(), Value::Num(interp.nr as f64));
-                interp.vars.insert("FNR".to_string(), Value::Num(interp.fnr as f64));
-                match interp.exec_rules(&rules, line) {
-                    ControlFlow::Exit(code) => {
-                        exit_code = code;
-                        break 'outer;
-                    }
-                    _ => {}
+                interp
+                    .vars
+                    .insert("NR".to_string(), Value::Num(interp.nr as f64));
+                interp
+                    .vars
+                    .insert("FNR".to_string(), Value::Num(interp.fnr as f64));
+                if let ControlFlow::Exit(code) = interp.exec_rules(&rules, line) {
+                    exit_code = code;
+                    break 'outer;
                 }
             }
         }
