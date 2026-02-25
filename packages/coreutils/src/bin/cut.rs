@@ -137,6 +137,14 @@ fn main() {
                 process::exit(1);
             }
             delimiter = d[0];
+        } else if args[i].starts_with("-d") {
+            // Attached form: -d: or -d,
+            let d: Vec<char> = args[i][2..].chars().collect();
+            if d.is_empty() {
+                eprintln!("cut: delimiter must be a single character");
+                process::exit(1);
+            }
+            delimiter = d[0];
         } else if args[i] == "-f" {
             i += 1;
             if i >= args.len() {

@@ -111,7 +111,8 @@ enum Expr {
     Not(Box<Expr>),
     // Actions
     Print,
-    Exec(Vec<String>), // command tokens; {} is placeholder
+    Exec(Vec<String>),      // command tokens; {} is placeholder, terminated by ;
+    ExecBatch(Vec<String>), // command tokens; {} is placeholder, terminated by +
     Delete,
     // Always true (no-op placeholder)
     True,
@@ -121,6 +122,172 @@ enum Expr {
 struct SizeSpec {
     op: char,   // '+', '-', or '='
     bytes: u64, // value in bytes (only 'c' suffix supported for now)
+}
+
+/// Execute a command with {} replaced by paths.
+/// For `-exec cmd {} ;`, paths will contain a single path.
+/// For `-exec cmd {} +`, paths will contain all accumulated paths.
+fn exec_command(tokens: &[String], paths: &[String], printed: &mut bool) -> bool {
+    // Build the command with {} replaced by path(s)
+    let mut output: Vec<String> = Vec::new();
+    for t in tokens {
+        if t == "{}" {
+            output.extend(paths.iter().cloned());
+        } else {
+            output.push(t.clone());
+        }
+    }
+
+    if output.is_empty() {
+        return true;
+    }
+
+    let cmd = output[0].as_str();
+    let args = &output[1..];
+
+    match cmd {
+        "echo" => {
+            println!("{}", args.join(" "));
+            *printed = true;
+        }
+        "cat" => {
+            for arg in args {
+                if let Ok(contents) = fs::read_to_string(arg) {
+                    print!("{}", contents);
+                }
+            }
+            *printed = true;
+        }
+        "wc" => {
+            // Simple wc: parse flags, count for each file argument
+            let mut flag_l = false;
+            let mut flag_w = false;
+            let mut flag_c = false;
+            let mut files = Vec::new();
+            for arg in args {
+                if let Some(flags) = arg.strip_prefix('-') {
+                    for ch in flags.chars() {
+                        match ch {
+                            'l' => flag_l = true,
+                            'w' => flag_w = true,
+                            'c' => flag_c = true,
+                            _ => {}
+                        }
+                    }
+                } else {
+                    files.push(arg.as_str());
+                }
+            }
+            // If no flags, show all
+            if !flag_l && !flag_w && !flag_c {
+                flag_l = true;
+                flag_w = true;
+                flag_c = true;
+            }
+            let mut total_lines = 0usize;
+            let mut total_words = 0usize;
+            let mut total_bytes = 0usize;
+            for file in &files {
+                if let Ok(contents) = fs::read_to_string(file) {
+                    let lines = contents.lines().count();
+                    let words = contents.split_whitespace().count();
+                    let bytes = contents.len();
+                    let mut parts = Vec::new();
+                    if flag_l {
+                        parts.push(format!("{:>8}", lines));
+                    }
+                    if flag_w {
+                        parts.push(format!("{:>8}", words));
+                    }
+                    if flag_c {
+                        parts.push(format!("{:>8}", bytes));
+                    }
+                    println!("{} {}", parts.join(""), file);
+                    total_lines += lines;
+                    total_words += words;
+                    total_bytes += bytes;
+                }
+            }
+            if files.len() > 1 {
+                let mut parts = Vec::new();
+                if flag_l {
+                    parts.push(format!("{:>8}", total_lines));
+                }
+                if flag_w {
+                    parts.push(format!("{:>8}", total_words));
+                }
+                if flag_c {
+                    parts.push(format!("{:>8}", total_bytes));
+                }
+                println!("{} total", parts.join(""));
+            }
+            *printed = true;
+        }
+        "rm" => {
+            for arg in args {
+                if arg.starts_with('-') {
+                    continue;
+                }
+                let p = std::path::Path::new(arg);
+                if p.is_file() {
+                    let _ = fs::remove_file(p);
+                } else if p.is_dir() {
+                    let _ = fs::remove_dir_all(p);
+                }
+            }
+            *printed = true;
+        }
+        "ls" => {
+            for arg in args {
+                if arg.starts_with('-') {
+                    continue;
+                }
+                println!("{}", arg);
+            }
+            *printed = true;
+        }
+        "chmod" => {
+            // Best effort: just print (chmod doesn't work well in WASM VFS)
+            *printed = true;
+        }
+        "grep" => {
+            // Simple grep: first non-flag arg is pattern, rest are files
+            let mut pattern = None;
+            let mut files = Vec::new();
+            for arg in args {
+                if arg.starts_with('-') {
+                    continue;
+                }
+                if pattern.is_none() {
+                    pattern = Some(arg.as_str());
+                } else {
+                    files.push(arg.as_str());
+                }
+            }
+            if let Some(pat) = pattern {
+                for file in &files {
+                    if let Ok(contents) = fs::read_to_string(file) {
+                        for line in contents.lines() {
+                            if line.contains(pat) {
+                                if files.len() > 1 {
+                                    println!("{}:{}", file, line);
+                                } else {
+                                    println!("{}", line);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            *printed = true;
+        }
+        _ => {
+            // Unknown command: print the expanded command line (best effort)
+            println!("{}", output.join(" "));
+            *printed = true;
+        }
+    }
+    true
 }
 
 fn eval_expr(expr: &Expr, path: &Path, printed: &mut bool) -> bool {
@@ -202,37 +369,11 @@ fn eval_expr(expr: &Expr, path: &Path, printed: &mut bool) -> bool {
             true
         }
         Expr::Exec(tokens) => {
-            // Build the command string with {} replaced by the path
             let path_str = path.display().to_string();
-            let output: Vec<String> = tokens
-                .iter()
-                .map(|t| {
-                    if t == "{}" {
-                        path_str.clone()
-                    } else {
-                        t.clone()
-                    }
-                })
-                .collect();
-            // For echo, just print the arguments
-            if !output.is_empty() && output[0] == "echo" {
-                println!("{}", output[1..].join(" "));
-                *printed = true;
-                return true;
-            }
-            // For cat, read and print the file
-            if !output.is_empty() && output[0] == "cat" {
-                for arg in &output[1..] {
-                    if let Ok(contents) = fs::read_to_string(arg) {
-                        print!("{}", contents);
-                    }
-                }
-                *printed = true;
-                return true;
-            }
-            // For other commands, just print the path (best effort in WASM)
-            println!("{}", path_str);
-            *printed = true;
+            exec_command(tokens, &[path_str], printed)
+        }
+        Expr::ExecBatch(_) => {
+            // Batch mode: always match, accumulation happens in walk()
             true
         }
         Expr::Delete => {
@@ -260,10 +401,20 @@ fn is_symlink(path: &Path) -> bool {
 /// Check whether the expression tree contains any action (Print, Exec, Delete).
 fn has_action(expr: &Expr) -> bool {
     match expr {
-        Expr::Print | Expr::Exec(_) | Expr::Delete => true,
+        Expr::Print | Expr::Exec(_) | Expr::ExecBatch(_) | Expr::Delete => true,
         Expr::And(a, b) | Expr::Or(a, b) => has_action(a) || has_action(b),
         Expr::Not(e) => has_action(e),
         _ => false,
+    }
+}
+
+/// Collect ExecBatch tokens from expression tree (if any).
+fn collect_exec_batch(expr: &Expr) -> Option<&Vec<String>> {
+    match expr {
+        Expr::ExecBatch(tokens) => Some(tokens),
+        Expr::And(a, b) | Expr::Or(a, b) => collect_exec_batch(a).or_else(|| collect_exec_batch(b)),
+        Expr::Not(e) => collect_exec_batch(e),
+        _ => None,
     }
 }
 
@@ -446,15 +597,25 @@ fn parse_primary(tokens: &[String]) -> (Expr, &[String]) {
             // Collect tokens until ";" or "+"
             let mut cmd_tokens = Vec::new();
             let mut idx = 1;
+            let mut batch_mode = false;
             while idx < tokens.len() {
                 if tokens[idx] == ";" {
+                    idx += 1;
+                    break;
+                }
+                if tokens[idx] == "+" {
+                    batch_mode = true;
                     idx += 1;
                     break;
                 }
                 cmd_tokens.push(tokens[idx].clone());
                 idx += 1;
             }
-            (Expr::Exec(cmd_tokens), &tokens[idx..])
+            if batch_mode {
+                (Expr::ExecBatch(cmd_tokens), &tokens[idx..])
+            } else {
+                (Expr::Exec(cmd_tokens), &tokens[idx..])
+            }
         }
         // Handle -mindepth / -maxdepth that might appear mixed with predicates
         "-mindepth" | "-maxdepth" => {
@@ -514,6 +675,7 @@ fn walk(
     min_depth: Option<usize>,
     max_depth: Option<usize>,
     has_act: bool,
+    batch_paths: &mut Vec<String>,
 ) {
     if let Some(max) = max_depth {
         if depth > max {
@@ -529,9 +691,15 @@ fn walk(
     if should_eval {
         let mut printed = false;
         let matched = eval_expr(expr, dir, &mut printed);
-        // If there's no explicit action in the expression, default to -print
-        if matched && !has_act && !printed {
-            println!("{}", dir.display());
+        if matched {
+            // Accumulate for batch exec
+            if collect_exec_batch(expr).is_some() {
+                batch_paths.push(dir.display().to_string());
+            }
+            // If there's no explicit action in the expression, default to -print
+            if !has_act && !printed {
+                println!("{}", dir.display());
+            }
         }
     }
 
@@ -554,7 +722,15 @@ fn walk(
         for entry in entries {
             let child = entry.path();
             if child.is_dir() && !is_symlink(&child) {
-                walk(&child, expr, depth + 1, min_depth, max_depth, has_act);
+                walk(
+                    &child,
+                    expr,
+                    depth + 1,
+                    min_depth,
+                    max_depth,
+                    has_act,
+                    batch_paths,
+                );
             } else {
                 // File or symlink
                 if let Some(max) = max_depth {
@@ -569,8 +745,13 @@ fn walk(
                 if should_eval_child {
                     let mut printed = false;
                     let matched = eval_expr(expr, &child, &mut printed);
-                    if matched && !has_act && !printed {
-                        println!("{}", child.display());
+                    if matched {
+                        if collect_exec_batch(expr).is_some() {
+                            batch_paths.push(child.display().to_string());
+                        }
+                        if !has_act && !printed {
+                            println!("{}", child.display());
+                        }
                     }
                 }
             }
@@ -583,7 +764,25 @@ fn main() {
     let (paths, min_depth, max_depth, expr) = parse_args(&args);
     let has_act = has_action(&expr);
 
+    let mut batch_paths = Vec::new();
+
     for path in &paths {
-        walk(Path::new(path), &expr, 0, min_depth, max_depth, has_act);
+        walk(
+            Path::new(path),
+            &expr,
+            0,
+            min_depth,
+            max_depth,
+            has_act,
+            &mut batch_paths,
+        );
+    }
+
+    // If there's a batch exec, run it now with all accumulated paths
+    if let Some(tokens) = collect_exec_batch(&expr) {
+        if !batch_paths.is_empty() {
+            let mut printed = false;
+            exec_command(tokens, &batch_paths, &mut printed);
+        }
     }
 }

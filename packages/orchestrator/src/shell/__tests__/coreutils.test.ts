@@ -280,6 +280,11 @@ describe('Coreutils Integration', () => {
       const result = await runner.run('cut -d , -f 1 /home/user/data.csv');
       expect(result.stdout).toBe('alice\nbob\n');
     });
+
+    it('cut -d: with attached delimiter', async () => {
+      const r = await runner.run(`echo "a:b:c" | cut -d: -f2`);
+      expect(r.stdout).toBe('b\n');
+    });
   });
 
   describe('find', () => {
@@ -300,6 +305,12 @@ describe('Coreutils Integration', () => {
       const result = await runner.run('find /home/user/project -type d');
       expect(result.stdout).toContain('/home/user/project');
       expect(result.stdout).toContain('src');
+    });
+
+    it('find -exec with general command', async () => {
+      await runner.run('echo "hello" > /tmp/fexec.txt');
+      const r = await runner.run('find /tmp/fexec.txt -exec cat {} \\;');
+      expect(r.stdout).toContain('hello');
     });
   });
 
@@ -1028,6 +1039,16 @@ describe('Coreutils Integration', () => {
     it('xargs -n 1 one per line', async () => {
       const result = await runner.run('printf "a\\nb\\nc\\n" | xargs -n 1');
       expect(result.stdout).toBe('a\nb\nc\n');
+    });
+
+    it('xargs -I{} replaces placeholder', async () => {
+      const r = await runner.run(`printf "a\\nb\\nc\\n" | xargs -I{} echo "item: {}"`);
+      expect(r.stdout).toBe('echo item: a\necho item: b\necho item: c\n');
+    });
+
+    it('xargs -I with different placeholder', async () => {
+      const r = await runner.run(`printf "x\\ny\\n" | xargs -IX echo "val=X"`);
+      expect(r.stdout).toBe('echo val=x\necho val=y\n');
     });
 
     it('expr arithmetic', async () => {
