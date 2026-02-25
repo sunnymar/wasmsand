@@ -502,4 +502,40 @@ describe('shell conformance', () => {
       expect(result.exitCode).not.toBe(0);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Pipeline stdin for compound commands
+  // ---------------------------------------------------------------------------
+  describe('pipeline stdin for compound commands', () => {
+    it('pipe into while read loop', async () => {
+      const r = await runner.run(`printf "a\\nb\\nc\\n" | while read line; do echo "got: $line"; done`);
+      expect(r.stdout).toBe('got: a\ngot: b\ngot: c\n');
+    });
+
+    it('pipe seq into while read with arithmetic', async () => {
+      const r = await runner.run(`seq 1 3 | while read n; do echo $((n * n)); done`);
+      expect(r.stdout).toBe('1\n4\n9\n');
+    });
+
+    it('2>&1 merges stderr into stdout in pipeline', async () => {
+      const r = await runner.run(`ls /nonexistent_path_xyz 2>&1 | head -1`);
+      expect(r.stdout).toContain('No such file');
+    });
+
+    it('pipe into for loop via cat', async () => {
+      // For loops don't read from stdin directly, but subshell + cat should work
+      const r = await runner.run(`printf "hello\\n" | cat`);
+      expect(r.stdout).toBe('hello\n');
+    });
+
+    it('pipe into while read with multiple fields', async () => {
+      const r = await runner.run(`printf "a b\\nc d\\n" | while read x y; do echo "$y $x"; done`);
+      expect(r.stdout).toBe('b a\nd c\n');
+    });
+
+    it('pipe into while read -r preserves backslashes', async () => {
+      const r = await runner.run(`printf "%s\\n" "a\\\\b" | while read -r line; do echo "$line"; done`);
+      expect(r.stdout).toBe('a\\b\n');
+    });
+  });
 });

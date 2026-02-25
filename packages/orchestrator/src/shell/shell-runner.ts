@@ -150,6 +150,8 @@ export class ShellRunner {
   private shellFlags = new Set<string>();
   /** Whether we're in a conditional context (if condition, || / && chains). */
   private inConditionalContext = false;
+  /** Pipe stdin data threaded through compound commands (while, for, if, subshell). */
+  private pipeStdin: Uint8Array | undefined;
 
   constructor(
     vfs: VfsLike,
@@ -555,6 +557,10 @@ export class ShellRunner {
         stdinData = new TextEncoder().encode(rt.HeredocStrip);
       }
     }
+    // Fall back to pipe stdin from enclosing pipeline (for compound commands)
+    if (!stdinData && this.pipeStdin) {
+      stdinData = this.pipeStdin;
+    }
 
     // Handle shell builtins — capture result, then fall through to redirect handling
     let result: RunResult | undefined;
@@ -846,9 +852,24 @@ export class ShellRunner {
             };
           }
         }
+
+        // Handle 2>&1 redirect in pipeline Simple commands: merge stderr into stdout
+        for (const redirect of simple.redirects) {
+          if (redirect.redirect_type === 'StderrToStdout') {
+            lastResult = { ...lastResult, stdout: lastResult.stdout + lastResult.stderr, stderr: '' };
+          }
+        }
       } else {
-        // For non-simple commands in a pipeline, execute them normally
-        lastResult = await this.execCommand(cmd);
+        // For non-simple commands in a pipeline, thread stdin through
+        // via the pipeStdin field so compound commands (while, for, if, subshell)
+        // can access it.
+        const savedPipeStdin = this.pipeStdin;
+        this.pipeStdin = stdinData;
+        try {
+          lastResult = await this.execCommand(cmd);
+        } finally {
+          this.pipeStdin = savedPipeStdin;
+        }
       }
 
       stdinData = encoder.encode(lastResult.stdout);
@@ -1948,7 +1969,8 @@ export class ShellRunner {
 
     // Get first line from stdin
     const input = stdinData ? new TextDecoder().decode(stdinData) : '';
-    const firstLine = input.split('\n')[0];
+    const nlIndex = input.indexOf('\n');
+    const firstLine = nlIndex !== -1 ? input.slice(0, nlIndex) : input;
     if (!stdinData?.length || (firstLine === '' && input === '')) {
       return { exitCode: 1, stdout: '', stderr: '', executionTimeMs: 0 };
     }
@@ -1962,6 +1984,16 @@ export class ShellRunner {
         this.env.set(varNames[i], parts[i] ?? '');
       }
     }
+
+    // Advance pipeStdin past the consumed line so the next `read` in a
+    // while loop gets the next line instead of re-reading the same one.
+    if (this.pipeStdin && stdinData === this.pipeStdin) {
+      const remaining = nlIndex !== -1 ? input.slice(nlIndex + 1) : '';
+      this.pipeStdin = remaining.length > 0
+        ? new TextEncoder().encode(remaining)
+        : undefined;
+    }
+
     return { ...EMPTY_RESULT };
   }
 
