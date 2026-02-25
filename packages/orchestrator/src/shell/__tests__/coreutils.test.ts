@@ -1495,6 +1495,12 @@ describe('Coreutils Integration', () => {
       expect(r.exitCode).toBe(0);
       expect(r.stdout.trim()).toBe('60');
     });
+
+    it('sqlite3 on-disk database works', async () => {
+      const r = await runner.run(`sqlite3 /tmp/test_task7.db "CREATE TABLE t(id INTEGER, name TEXT); INSERT INTO t VALUES(1,'alice'); INSERT INTO t VALUES(2,'bob'); SELECT name FROM t ORDER BY id;"`);
+      expect(r.stdout).toBe('alice\nbob\n');
+      expect(r.exitCode).toBe(0);
+    });
   });
 
   describe('hostname', () => {

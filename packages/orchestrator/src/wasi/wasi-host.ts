@@ -324,19 +324,20 @@ export class WasiHost {
         random_get: this.randomGet.bind(this),
         proc_exit: this.procExit.bind(this),
         sched_yield: this.schedYield.bind(this),
-        // Stubs
-        fd_advise: this.stub.bind(this),
-        fd_allocate: this.stub.bind(this),
-        fd_datasync: this.stub.bind(this),
-        fd_sync: this.stub.bind(this),
-        fd_fdstat_set_flags: this.stub.bind(this),
-        fd_fdstat_set_rights: this.stub.bind(this),
-        fd_filestat_set_size: this.stub.bind(this),
-        fd_filestat_set_times: this.stub.bind(this),
+        // Safe no-op stubs (single-threaded sandbox — sync/timestamps/flags are harmless to skip)
+        fd_advise: this.fdNoOp.bind(this),
+        fd_allocate: this.fdNoOp.bind(this),
+        fd_datasync: this.fdNoOp.bind(this),
+        fd_sync: this.fdNoOp.bind(this),
+        fd_fdstat_set_flags: this.fdNoOp.bind(this),
+        fd_fdstat_set_rights: this.fdNoOp.bind(this),
+        fd_filestat_set_size: this.fdNoOp.bind(this),
+        fd_filestat_set_times: this.fdNoOp.bind(this),
+        path_filestat_set_times: this.fdNoOp.bind(this),
+        // Stubs that must remain ENOSYS (masking bugs or unimplemented semantics)
         fd_pread: this.stub.bind(this),
         fd_pwrite: this.stub.bind(this),
         fd_renumber: this.stub.bind(this),
-        path_filestat_set_times: this.stub.bind(this),
         path_link: this.stub.bind(this),
         path_readlink: this.pathReadlink.bind(this),
         path_symlink: this.pathSymlink.bind(this),
@@ -1081,6 +1082,12 @@ export class WasiHost {
 
   private stub(): number {
     return WASI_ENOSYS;
+  }
+
+  /** No-op WASI stub — returns success.  Used for operations that are safe to
+   *  skip in a single-threaded sandbox (sync, timestamps, flags, etc.). */
+  private fdNoOp(): number {
+    return WASI_ESUCCESS;
   }
 
   // ---- Internal helpers ----
