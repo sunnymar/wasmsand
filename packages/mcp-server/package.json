@@ -1,0 +1,17 @@
+{
+  "name": "@wasmsand/mcp-server",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@wasmsand/sandbox": "*",
+    "@modelcontextprotocol/sdk": "^1.27",
+    "zod": "^3.25"
+  },
+  "devDependencies": {
+    "typescript": "^5.7"
+  }
+}
