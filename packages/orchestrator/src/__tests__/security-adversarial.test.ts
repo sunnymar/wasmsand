@@ -84,8 +84,8 @@ describe('Security: adversarial inputs', () => {
       adapter: new NodeAdapter(),
       security: { limits: { stdoutBytes: 1024 } },
     });
-    // Generate many lines of output that far exceeds the 1024-byte limit
-    const result = await sb.run('for i in $(seq 1 1000); do echo "line $i padding padding padding padding"; done');
+    // Generate a single command whose output far exceeds the 1024-byte limit
+    const result = await sb.run('seq 1 5000');
     // Allow for truncation marker overhead; output should be bounded
     expect(result.stdout.length).toBeLessThan(2048);
     sb.destroy();

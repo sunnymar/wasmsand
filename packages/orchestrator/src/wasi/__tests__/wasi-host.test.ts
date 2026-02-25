@@ -485,17 +485,19 @@ describe('WasiHost', () => {
     });
   });
 
-  describe('stubs return ENOSYS', () => {
-    it('fd_advise returns ENOSYS', () => {
+  describe('safe no-op stubs return ESUCCESS', () => {
+    it('fd_advise returns ESUCCESS', () => {
       const { wasi } = getImportsAndView(host, memory);
-      expect(wasi.fd_advise(3, BigInt(0), BigInt(0), 0)).toBe(WASI_ENOSYS);
+      expect(wasi.fd_advise(3, BigInt(0), BigInt(0), 0)).toBe(WASI_ESUCCESS);
     });
 
-    it('fd_allocate returns ENOSYS', () => {
+    it('fd_allocate returns ESUCCESS', () => {
       const { wasi } = getImportsAndView(host, memory);
-      expect(wasi.fd_allocate(3, BigInt(0), BigInt(0))).toBe(WASI_ENOSYS);
+      expect(wasi.fd_allocate(3, BigInt(0), BigInt(0))).toBe(WASI_ESUCCESS);
     });
+  });
 
+  describe('unsupported stubs return ENOSYS', () => {
     it('sock_accept returns ENOSYS', () => {
       const { wasi } = getImportsAndView(host, memory);
       expect(wasi.sock_accept(3, 0, 0)).toBe(WASI_ENOSYS);
