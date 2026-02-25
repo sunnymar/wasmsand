@@ -8,7 +8,277 @@ const PACKAGES: PackageMetadata[] = [
     dependencies: [],
     native: false,
     pythonFiles: {
-      'requests/__init__.py': '__version__ = "2.31.0"\n# placeholder - real impl in Task 4\n',
+      'requests/__init__.py': `"""
+requests - HTTP library for Python (minimal urllib.request wrapper)
+"""
+
+__version__ = "2.31.0"
+
+from requests.exceptions import (
+    RequestException,
+    HTTPError,
+    ConnectionError,
+    Timeout,
+)
+from requests.models import Response
+from requests.sessions import Session
+from requests.api import (
+    request,
+    get,
+    post,
+    put,
+    delete,
+    head,
+    patch,
+)
+`,
+      'requests/exceptions.py': `"""
+requests.exceptions
+~~~~~~~~~~~~~~~~~~~
+
+Exception classes for the requests library.
+"""
+
+
+class RequestException(IOError):
+    """Base exception for requests."""
+
+    def __init__(self, *args, response=None, **kwargs):
+        self.response = response
+        super().__init__(*args, **kwargs)
+
+
+class HTTPError(RequestException):
+    """HTTP error (status >= 400)."""
+    pass
+
+
+class ConnectionError(RequestException):
+    """Connection error."""
+    pass
+
+
+class Timeout(RequestException):
+    """Request timed out."""
+    pass
+`,
+      'requests/models.py': `"""
+requests.models
+~~~~~~~~~~~~~~~
+
+Response model for the requests library.
+"""
+
+import json as _json
+from requests.exceptions import HTTPError
+
+
+class Response:
+    """Minimal Response object compatible with the requests library API."""
+
+    def __init__(self):
+        self.status_code = None
+        self.headers = {}
+        self.content = b""
+        self.url = ""
+        self.encoding = "utf-8"
+        self._text = None
+
+    @property
+    def ok(self):
+        return self.status_code is not None and self.status_code < 400
+
+    @property
+    def text(self):
+        if self._text is None:
+            self._text = self.content.decode(self.encoding or "utf-8", errors="replace")
+        return self._text
+
+    def json(self, **kwargs):
+        return _json.loads(self.text, **kwargs)
+
+    def raise_for_status(self):
+        if self.status_code is not None and self.status_code >= 400:
+            raise HTTPError(
+                f"{self.status_code} Error for url: {self.url}",
+                response=self,
+            )
+
+    def __repr__(self):
+        return f"<Response [{self.status_code}]>"
+`,
+      'requests/api.py': `"""
+requests.api
+~~~~~~~~~~~~
+
+Core API functions wrapping urllib.request.
+All urllib imports are deferred to call time so the module can be
+imported even when the _socket C extension is not available (e.g. WASM).
+"""
+
+import json as _json
+
+from requests.models import Response
+from requests.exceptions import (
+    RequestException,
+    HTTPError,
+    ConnectionError,
+    Timeout,
+)
+
+
+def request(method, url, **kwargs):
+    """Send an HTTP request.
+
+    Args:
+        method: HTTP method (GET, POST, PUT, DELETE, HEAD, PATCH).
+        url: URL to send the request to.
+        **kwargs: Optional arguments:
+            params: dict of query string parameters.
+            data: body as str, bytes, or dict (url-encoded if dict).
+            json: body as dict/list (JSON-encoded, sets Content-Type).
+            headers: dict of HTTP headers.
+            timeout: request timeout in seconds.
+
+    Returns:
+        Response object.
+    """
+    # Lazy imports -- urllib.request pulls in socket which needs _socket
+    from urllib.request import Request, urlopen
+    from urllib.parse import urlencode
+    from urllib.error import HTTPError as _HTTPError, URLError as _URLError
+
+    params = kwargs.get("params")
+    data = kwargs.get("data")
+    json_body = kwargs.get("json")
+    headers = dict(kwargs.get("headers") or {})
+    timeout = kwargs.get("timeout")
+
+    # Append query string parameters
+    if params:
+        sep = "&" if "?" in url else "?"
+        url = url + sep + urlencode(params)
+
+    # Prepare body
+    body = None
+    if json_body is not None:
+        body = _json.dumps(json_body).encode("utf-8")
+        headers.setdefault("Content-Type", "application/json")
+    elif data is not None:
+        if isinstance(data, dict):
+            body = urlencode(data).encode("utf-8")
+            headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        elif isinstance(data, str):
+            body = data.encode("utf-8")
+        else:
+            body = data
+
+    req = Request(url, data=body, headers=headers, method=method.upper())
+
+    resp = Response()
+    resp.url = url
+
+    try:
+        timeout_args = {"timeout": timeout} if timeout is not None else {}
+        http_resp = urlopen(req, **timeout_args)
+        resp.status_code = http_resp.status
+        resp.headers = dict(http_resp.headers)
+        resp.content = http_resp.read()
+        # Detect encoding from Content-Type header
+        ct = resp.headers.get("Content-Type", "")
+        if "charset=" in ct:
+            resp.encoding = ct.split("charset=")[-1].split(";")[0].strip()
+    except _HTTPError as e:
+        resp.status_code = e.code
+        resp.headers = dict(e.headers)
+        resp.content = e.read()
+    except _URLError as e:
+        raise ConnectionError(str(e.reason), response=None) from e
+    except Exception as e:
+        if "timed out" in str(e).lower():
+            raise Timeout(str(e), response=None) from e
+        raise RequestException(str(e), response=None) from e
+
+    return resp
+
+
+def get(url, **kwargs):
+    """Send a GET request."""
+    return request("GET", url, **kwargs)
+
+
+def post(url, **kwargs):
+    """Send a POST request."""
+    return request("POST", url, **kwargs)
+
+
+def put(url, **kwargs):
+    """Send a PUT request."""
+    return request("PUT", url, **kwargs)
+
+
+def delete(url, **kwargs):
+    """Send a DELETE request."""
+    return request("DELETE", url, **kwargs)
+
+
+def head(url, **kwargs):
+    """Send a HEAD request."""
+    return request("HEAD", url, **kwargs)
+
+
+def patch(url, **kwargs):
+    """Send a PATCH request."""
+    return request("PATCH", url, **kwargs)
+`,
+      'requests/sessions.py': `"""
+requests.sessions
+~~~~~~~~~~~~~~~~~
+
+Minimal Session class for the requests library.
+"""
+
+from requests import api
+
+
+class Session:
+    """Minimal Session that merges default headers into each request."""
+
+    def __init__(self):
+        self.headers = {}
+
+    def request(self, method, url, **kwargs):
+        # Merge session headers with per-request headers
+        merged = dict(self.headers)
+        if "headers" in kwargs and kwargs["headers"]:
+            merged.update(kwargs["headers"])
+        kwargs["headers"] = merged
+        return api.request(method, url, **kwargs)
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url, **kwargs):
+        return self.request("PUT", url, **kwargs)
+
+    def delete(self, url, **kwargs):
+        return self.request("DELETE", url, **kwargs)
+
+    def head(self, url, **kwargs):
+        return self.request("HEAD", url, **kwargs)
+
+    def patch(self, url, **kwargs):
+        return self.request("PATCH", url, **kwargs)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+`,
     },
   },
   {
