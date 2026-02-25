@@ -6,6 +6,8 @@
  * builtins (curl, wget) and the WASI socket bridge.
  */
 
+import { matchesHostList } from './host-match.js';
+
 export interface NetworkPolicy {
   /** Whitelist mode: only these hosts allowed. Supports wildcards (*.example.com). */
   allowedHosts?: string[];
@@ -54,7 +56,7 @@ export class NetworkGateway {
 
     // If allowedHosts is set, use whitelist mode
     if (allowedHosts !== undefined) {
-      if (this.matchesHostList(host, allowedHosts)) {
+      if (matchesHostList(host, allowedHosts)) {
         return { allowed: true };
       }
       return { allowed: false, reason: `host ${host} not in allowedHosts` };
@@ -62,7 +64,7 @@ export class NetworkGateway {
 
     // If blockedHosts is set, use blacklist mode
     if (blockedHosts !== undefined) {
-      if (this.matchesHostList(host, blockedHosts)) {
+      if (matchesHostList(host, blockedHosts)) {
         return { allowed: false, reason: `host ${host} is in blockedHosts` };
       }
       return { allowed: true };
@@ -194,21 +196,4 @@ export class NetworkGateway {
     }
   }
 
-  private matchesHostList(host: string, list: string[]): boolean {
-    for (const pattern of list) {
-      if (pattern.startsWith('*.')) {
-        const suffix = pattern.slice(2);
-        if (
-          host.endsWith(suffix) &&
-          host.length > suffix.length &&
-          host[host.length - suffix.length - 1] === '.'
-        ) {
-          return true;
-        }
-      } else if (host === pattern) {
-        return true;
-      }
-    }
-    return false;
-  }
 }

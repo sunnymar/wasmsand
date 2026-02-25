@@ -12,6 +12,7 @@
 
 import type { Worker } from 'node:worker_threads';
 import type { NetworkGateway } from './gateway.js';
+import { HOST_MATCH_SOURCE } from './host-match.js';
 
 const SAB_SIZE = 16 * 1024 * 1024; // 16MB
 const STATUS_IDLE = 0;
@@ -60,21 +61,7 @@ export class NetworkBridge implements NetworkBridgeLike {
       const encoder = new TextEncoder();
       const decoder = new TextDecoder();
 
-      function matchesHostList(host, list) {
-        for (const pattern of list) {
-          if (pattern.startsWith('*.')) {
-            const suffix = pattern.slice(2);
-            if (
-              host.endsWith(suffix) &&
-              host.length > suffix.length &&
-              host[host.length - suffix.length - 1] === '.'
-            ) return true;
-          } else if (host === pattern) {
-            return true;
-          }
-        }
-        return false;
-      }
+      ${HOST_MATCH_SOURCE}
 
       function checkAccess(url) {
         let host;

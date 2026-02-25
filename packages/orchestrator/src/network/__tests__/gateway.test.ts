@@ -1,6 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test';
 import { NetworkGateway, NetworkAccessDenied } from '../gateway.js';
 import type { NetworkPolicy } from '../gateway.js';
+import { matchesHostList, HOST_MATCH_SOURCE } from '../host-match.js';
 
 describe('NetworkGateway', () => {
   describe('checkAccess', () => {
@@ -25,6 +26,12 @@ describe('NetworkGateway', () => {
       const gw = new NetworkGateway({ allowedHosts: ['*.example.com'] });
       expect(gw.checkAccess('https://api.example.com/data', 'GET').allowed).toBe(true);
       expect(gw.checkAccess('https://example.com', 'GET').allowed).toBe(false);
+    });
+
+    it('supports bare * wildcard to allow all hosts', () => {
+      const gw = new NetworkGateway({ allowedHosts: ['*'] });
+      expect(gw.checkAccess('https://anything.example.com', 'GET').allowed).toBe(true);
+      expect(gw.checkAccess('https://evil.com', 'GET').allowed).toBe(true);
     });
 
     it('blockedHosts blocks specific hosts', () => {
@@ -87,5 +94,43 @@ describe('NetworkGateway', () => {
         globalThis.fetch = originalFetch;
       }
     });
+  });
+});
+
+describe('matchesHostList', () => {
+  it('matches exact host', () => {
+    expect(matchesHostList('example.com', ['example.com'])).toBe(true);
+  });
+
+  it('does not match different host', () => {
+    expect(matchesHostList('evil.com', ['example.com'])).toBe(false);
+  });
+
+  it('matches wildcard subdomain', () => {
+    expect(matchesHostList('api.example.com', ['*.example.com'])).toBe(true);
+  });
+
+  it('wildcard does not match the base domain itself', () => {
+    expect(matchesHostList('example.com', ['*.example.com'])).toBe(false);
+  });
+
+  it('bare * matches any host', () => {
+    expect(matchesHostList('anything.example.com', ['*'])).toBe(true);
+    expect(matchesHostList('evil.com', ['*'])).toBe(true);
+  });
+
+  it('matches deep subdomain with wildcard', () => {
+    expect(matchesHostList('deep.sub.example.com', ['*.example.com'])).toBe(true);
+  });
+
+  it('does not match partial suffix', () => {
+    expect(matchesHostList('notexample.com', ['*.example.com'])).toBe(false);
+  });
+
+  it('HOST_MATCH_SOURCE contains the same logic as matchesHostList', () => {
+    // Verify the source string contains the key patterns
+    expect(HOST_MATCH_SOURCE).toContain("pattern === '*'");
+    expect(HOST_MATCH_SOURCE).toContain("pattern.startsWith('*.')");
+    expect(HOST_MATCH_SOURCE).toContain('host === pattern');
   });
 });
