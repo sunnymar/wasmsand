@@ -32,6 +32,7 @@ const TOOLS = [
   'fmt', 'fold', 'nl', 'expand', 'unexpand', 'paste', 'comm', 'join',
   'split', 'strings', 'od', 'cksum', 'truncate',
   'tree', 'patch', 'file', 'column', 'cmp', 'timeout', 'numfmt', 'csplit', 'zip', 'unzip',
+  'rg',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */

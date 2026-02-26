@@ -315,6 +315,11 @@ path = "src/bin/zip.rs"
 name = "unzip"
 path = "src/bin/unzip.rs"
 
+[[bin]]
+name = "rg"
+path = "src/bin/rg.rs"
+
 [dependencies]
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 tar = "0.4"
