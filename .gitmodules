@@ -1,3 +1,3 @@
 [submodule "packages/numpy-rust"]
 	path = packages/numpy-rust
-	url = https://github.com/sunnymar/numpy-rust.git
+	url = https://github.com/codepod-sandbox/numpy-rust.git
