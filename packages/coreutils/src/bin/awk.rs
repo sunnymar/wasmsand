@@ -4,6 +4,7 @@
 //! print/printf, arithmetic, string functions, associative arrays,
 //! if/else, while, for, -F flag.
 
+use regex::Regex;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -1631,272 +1632,20 @@ impl AwkInterp {
     }
 }
 
-// ---- Simple regex engine ----
+// ---- Regex functions (using regex crate) ----
 
-/// A minimal regex engine supporting: literal chars, `.`, `*`, `+`, `?`, `^`, `$`,
-/// character classes `[abc]`, `[a-z]`, `[^abc]`, `\d`, `\w`, `\s`, and `|` alternation.
-/// Returns Some((start, end)) for the first match in the string, or None.
 fn regex_find(pattern: &str, text: &str) -> Option<(usize, usize)> {
-    let pchars: Vec<char> = pattern.chars().collect();
-    // Handle alternation at top level: split on unbracketed '|'
-    let alts = split_alternatives(&pchars);
-    if alts.len() > 1 {
-        let mut best: Option<(usize, usize)> = None;
-        for alt in &alts {
-            if let Some((s, e)) = regex_find_single(alt, text) {
-                match best {
-                    None => best = Some((s, e)),
-                    Some((bs, _)) if s < bs => best = Some((s, e)),
-                    _ => {}
-                }
-            }
-        }
-        return best;
+    match Regex::new(pattern) {
+        Ok(re) => re.find(text).map(|m| (m.start(), m.end())),
+        Err(_) => None,
     }
-    regex_find_single(&pchars, text)
-}
-
-fn split_alternatives(pchars: &[char]) -> Vec<Vec<char>> {
-    let mut alts = Vec::new();
-    let mut current = Vec::new();
-    let mut in_bracket = false;
-    for &ch in pchars {
-        if ch == '[' && !in_bracket {
-            in_bracket = true;
-            current.push(ch);
-        } else if ch == ']' && in_bracket {
-            in_bracket = false;
-            current.push(ch);
-        } else if ch == '|' && !in_bracket {
-            alts.push(current.clone());
-            current.clear();
-        } else {
-            current.push(ch);
-        }
-    }
-    alts.push(current);
-    alts
-}
-
-/// Element of a compiled regex pattern
-#[derive(Debug, Clone)]
-enum Re {
-    Literal(char),
-    Dot,
-    Class(Vec<(char, char)>, bool), // ranges, negated
-    #[allow(dead_code)]
-    Anchor(bool), // true = start ^, false = end $
-}
-
-fn compile_pattern(pchars: &[char]) -> (Vec<(Re, Quantifier)>, bool, bool) {
-    let mut items = Vec::new();
-    let mut anchored_start = false;
-    let mut anchored_end = false;
-    let mut i = 0;
-
-    if !pchars.is_empty() && pchars[0] == '^' {
-        anchored_start = true;
-        i = 1;
-    }
-
-    while i < pchars.len() {
-        if pchars[i] == '$' && i + 1 >= pchars.len() {
-            anchored_end = true;
-            i += 1;
-            continue;
-        }
-        let elem = match pchars[i] {
-            '.' => {
-                i += 1;
-                Re::Dot
-            }
-            '[' => {
-                i += 1;
-                let negated = i < pchars.len() && pchars[i] == '^';
-                if negated {
-                    i += 1;
-                }
-                let mut ranges = Vec::new();
-                while i < pchars.len() && pchars[i] != ']' {
-                    let ch = pchars[i];
-                    i += 1;
-                    if i + 1 < pchars.len() && pchars[i] == '-' && pchars[i + 1] != ']' {
-                        let end = pchars[i + 1];
-                        i += 2;
-                        ranges.push((ch, end));
-                    } else {
-                        ranges.push((ch, ch));
-                    }
-                }
-                if i < pchars.len() {
-                    i += 1; // skip ']'
-                }
-                Re::Class(ranges, negated)
-            }
-            '\\' => {
-                i += 1;
-                if i < pchars.len() {
-                    let esc = pchars[i];
-                    i += 1;
-                    match esc {
-                        'd' => Re::Class(vec![('0', '9')], false),
-                        'w' => {
-                            Re::Class(vec![('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_')], false)
-                        }
-                        's' => Re::Class(vec![(' ', ' '), ('\t', '\t'), ('\n', '\n')], false),
-                        _ => Re::Literal(esc),
-                    }
-                } else {
-                    Re::Literal('\\')
-                }
-            }
-            ch => {
-                i += 1;
-                Re::Literal(ch)
-            }
-        };
-
-        let quant = if i < pchars.len() {
-            match pchars[i] {
-                '*' => {
-                    i += 1;
-                    Quantifier::Star
-                }
-                '+' => {
-                    i += 1;
-                    Quantifier::Plus
-                }
-                '?' => {
-                    i += 1;
-                    Quantifier::Opt
-                }
-                _ => Quantifier::One,
-            }
-        } else {
-            Quantifier::One
-        };
-
-        items.push((elem, quant));
-    }
-    (items, anchored_start, anchored_end)
-}
-
-#[derive(Debug, Clone)]
-enum Quantifier {
-    One,
-    Star,
-    Plus,
-    Opt,
-}
-
-fn re_match_elem(elem: &Re, ch: char) -> bool {
-    match elem {
-        Re::Literal(c) => ch == *c,
-        Re::Dot => ch != '\n',
-        Re::Class(ranges, negated) => {
-            let in_class = ranges.iter().any(|(lo, hi)| ch >= *lo && ch <= *hi);
-            if *negated {
-                !in_class
-            } else {
-                in_class
-            }
-        }
-        Re::Anchor(_) => false,
-    }
-}
-
-fn re_match_at(items: &[(Re, Quantifier)], text: &[char], pos: usize) -> Option<usize> {
-    re_match_items(items, 0, text, pos)
-}
-
-fn re_match_items(
-    items: &[(Re, Quantifier)],
-    item_idx: usize,
-    text: &[char],
-    pos: usize,
-) -> Option<usize> {
-    if item_idx >= items.len() {
-        return Some(pos);
-    }
-    let (ref elem, ref quant) = items[item_idx];
-    match quant {
-        Quantifier::One => {
-            if pos < text.len() && re_match_elem(elem, text[pos]) {
-                re_match_items(items, item_idx + 1, text, pos + 1)
-            } else {
-                None
-            }
-        }
-        Quantifier::Opt => {
-            // Try matching one, then zero
-            if pos < text.len() && re_match_elem(elem, text[pos]) {
-                if let Some(end) = re_match_items(items, item_idx + 1, text, pos + 1) {
-                    return Some(end);
-                }
-            }
-            re_match_items(items, item_idx + 1, text, pos)
-        }
-        Quantifier::Star => {
-            // Greedy: try matching as many as possible, then backtrack
-            let mut count = 0;
-            while pos + count < text.len() && re_match_elem(elem, text[pos + count]) {
-                count += 1;
-            }
-            for c in (0..=count).rev() {
-                if let Some(end) = re_match_items(items, item_idx + 1, text, pos + c) {
-                    return Some(end);
-                }
-            }
-            None
-        }
-        Quantifier::Plus => {
-            // Must match at least one
-            let mut count = 0;
-            while pos + count < text.len() && re_match_elem(elem, text[pos + count]) {
-                count += 1;
-            }
-            for c in (1..=count).rev() {
-                if let Some(end) = re_match_items(items, item_idx + 1, text, pos + c) {
-                    return Some(end);
-                }
-            }
-            None
-        }
-    }
-}
-
-fn regex_find_single(pchars: &[char], text: &str) -> Option<(usize, usize)> {
-    let tchars: Vec<char> = text.chars().collect();
-    let (items, anchored_start, anchored_end) = compile_pattern(pchars);
-
-    if anchored_start {
-        if let Some(end) = re_match_at(&items, &tchars, 0) {
-            if anchored_end && end != tchars.len() {
-                return None;
-            }
-            // Convert char indices to byte offsets
-            let byte_start = 0;
-            let byte_end: usize = tchars[..end].iter().map(|c| c.len_utf8()).sum();
-            return Some((byte_start, byte_end));
-        }
-        return None;
-    }
-
-    for start in 0..=tchars.len() {
-        if let Some(end) = re_match_at(&items, &tchars, start) {
-            if anchored_end && end != tchars.len() {
-                continue;
-            }
-            let byte_start: usize = tchars[..start].iter().map(|c| c.len_utf8()).sum();
-            let byte_end: usize = tchars[..end].iter().map(|c| c.len_utf8()).sum();
-            return Some((byte_start, byte_end));
-        }
-    }
-    None
 }
 
 fn regex_matches(pattern: &str, text: &str) -> bool {
-    regex_find(pattern, text).is_some()
+    match Regex::new(pattern) {
+        Ok(re) => re.is_match(text),
+        Err(_) => false,
+    }
 }
 
 /// Check if a string looks like it contains regex metacharacters
@@ -1918,29 +1667,17 @@ fn regex_split(pattern: &str, text: &str) -> Vec<String> {
     if pattern.is_empty() {
         return vec![text.to_string()];
     }
-    let mut parts = Vec::new();
-    let mut pos = 0;
-    loop {
-        if let Some((start, end)) = regex_find(pattern, &text[pos..]) {
-            if start == end && start == 0 {
-                // Zero-length match at current position; take one char and advance
-                if pos < text.len() {
-                    let ch_len = text[pos..].chars().next().map_or(1, |c| c.len_utf8());
-                    parts.push(text[pos..pos + ch_len].to_string());
-                    pos += ch_len;
-                } else {
-                    break;
-                }
-                continue;
+    match Regex::new(pattern) {
+        Ok(re) => {
+            let parts: Vec<String> = re.split(text).map(|s| s.to_string()).collect();
+            if parts.is_empty() {
+                vec![text.to_string()]
+            } else {
+                parts
             }
-            parts.push(text[pos..pos + start].to_string());
-            pos += end;
-        } else {
-            parts.push(text[pos..].to_string());
-            break;
         }
+        Err(_) => vec![text.to_string()],
     }
-    parts
 }
 
 /// Replace regex matches in a string
@@ -1948,44 +1685,31 @@ fn regex_replace(s: &str, pattern: &str, repl: &str, global: bool) -> (String, u
     if pattern.is_empty() {
         return (s.to_string(), 0);
     }
-    let mut result = String::new();
-    let mut count = 0;
-    let mut pos = 0;
-    while pos <= s.len() {
-        if let Some((start, end)) = regex_find(pattern, &s[pos..]) {
-            if start == end && start == 0 {
-                // Zero-length match
-                if pos < s.len() {
-                    result.push_str(repl);
-                    count += 1;
-                    let ch_len = s[pos..].chars().next().map_or(1, |c| c.len_utf8());
-                    result.push_str(&s[pos..pos + ch_len]);
-                    pos += ch_len;
-                } else {
-                    result.push_str(repl);
-                    count += 1;
-                    break;
-                }
+    match Regex::new(pattern) {
+        Ok(re) => {
+            let mut result = String::new();
+            let mut count = 0;
+            let mut last_end = 0;
+            for m in re.find_iter(s) {
+                result.push_str(&s[last_end..m.start()]);
+                // Handle & in replacement (refers to matched text)
+                let expanded = repl.replace('&', m.as_str());
+                result.push_str(&expanded);
+                last_end = m.end();
+                count += 1;
                 if !global {
-                    result.push_str(&s[pos..]);
+                    result.push_str(&s[last_end..]);
                     return (result, count);
                 }
-                continue;
             }
-            result.push_str(&s[pos..pos + start]);
-            result.push_str(repl);
-            pos += end;
-            count += 1;
-            if !global {
-                result.push_str(&s[pos..]);
-                return (result, count);
+            if count == 0 {
+                return (s.to_string(), 0);
             }
-        } else {
-            result.push_str(&s[pos..]);
-            break;
+            result.push_str(&s[last_end..]);
+            (result, count)
         }
+        Err(_) => (s.to_string(), 0),
     }
-    (result, count)
 }
 
 /// Extract a regex pattern string from an Expr, or evaluate as a string.

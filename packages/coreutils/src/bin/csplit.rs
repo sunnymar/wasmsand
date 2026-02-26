@@ -1,5 +1,6 @@
 //! csplit - split a file into sections determined by context lines
 
+use regex::Regex;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -11,89 +12,10 @@ enum Pattern {
 }
 
 fn matches_line(pattern: &str, line: &str) -> bool {
-    regex_match(pattern, line)
-}
-
-fn regex_match(pattern: &str, text: &str) -> bool {
-    let pat_chars: Vec<char> = pattern.chars().collect();
-
-    if pat_chars.is_empty() {
-        return true;
+    match Regex::new(pattern) {
+        Ok(re) => re.is_match(line),
+        Err(_) => false,
     }
-
-    let anchored_start = pat_chars[0] == '^';
-    let start = if anchored_start { 1 } else { 0 };
-
-    let anchored_end = pat_chars.last() == Some(&'$');
-    let end = if anchored_end {
-        pat_chars.len() - 1
-    } else {
-        pat_chars.len()
-    };
-
-    let pat = &pat_chars[start..end];
-
-    if anchored_start {
-        return match_at(pat, text, 0, anchored_end);
-    }
-
-    for i in 0..=text.len() {
-        if match_at(pat, text, i, anchored_end) {
-            return true;
-        }
-    }
-    false
-}
-
-fn match_at(pat: &[char], text: &str, start: usize, anchored_end: bool) -> bool {
-    let text_chars: Vec<char> = text.chars().collect();
-    let mut pi = 0;
-    let mut ti = start;
-
-    while pi < pat.len() {
-        if pi + 1 < pat.len() && pat[pi + 1] == '*' {
-            let ch = pat[pi];
-            pi += 2;
-            let save = ti;
-            while ti < text_chars.len() && char_matches(ch, text_chars[ti]) {
-                ti += 1;
-            }
-            while ti >= save {
-                if match_at(&pat[pi..], text, ti, anchored_end) {
-                    return true;
-                }
-                if ti == save {
-                    break;
-                }
-                ti -= 1;
-            }
-            return false;
-        }
-
-        if ti >= text_chars.len() {
-            return false;
-        }
-
-        if !char_matches(pat[pi], text_chars[ti]) {
-            return false;
-        }
-
-        pi += 1;
-        ti += 1;
-    }
-
-    if anchored_end {
-        ti == text_chars.len()
-    } else {
-        true
-    }
-}
-
-fn char_matches(pat: char, ch: char) -> bool {
-    if pat == '.' {
-        return true;
-    }
-    pat == ch
 }
 
 fn parse_patterns(args: &[String]) -> Vec<Pattern> {
