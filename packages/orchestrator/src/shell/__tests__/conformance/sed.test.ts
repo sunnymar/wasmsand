@@ -10,7 +10,7 @@ import { VFS } from '../../../vfs/vfs.js';
 import { NodeAdapter } from '../../../platform/node-adapter.js';
 
 const FIXTURES = resolve(import.meta.dirname, '../../../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../fixtures/codepod-shell.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',

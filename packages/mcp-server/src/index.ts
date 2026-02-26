@@ -1,5 +1,5 @@
 /**
- * MCP server for wasmsand — exposes a WASM sandbox via the Model Context Protocol.
+ * MCP server for codepod — exposes a WASM sandbox via the Model Context Protocol.
  *
  * Provides four tools: run_command, read_file, write_file, list_directory.
  * All debug/error output goes to stderr (stdout is reserved for MCP protocol).
@@ -10,9 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Sandbox } from '@wasmsand/sandbox';
-import type { NetworkPolicy } from '@wasmsand/sandbox';
-import { NodeAdapter, HostFsProvider } from '@wasmsand/sandbox/node';
+import { Sandbox } from '@codepod/sandbox';
+import type { NetworkPolicy } from '@codepod/sandbox';
+import { NodeAdapter, HostFsProvider } from '@codepod/sandbox/node';
 import { loadConfig } from './config.js';
 
 const __dirname = resolve(fileURLToPath(import.meta.url), '..');
@@ -25,14 +25,14 @@ function log(msg: string): void {
 const config = loadConfig(process.argv.slice(2), {
   timeoutMs: 30_000,
   fsLimitBytes: 256 * 1024 * 1024,
-  wasmDir: process.env.WASMSAND_WASM_DIR
+  wasmDir: process.env.CODEPOD_WASM_DIR
     ?? resolve(__dirname, '../../orchestrator/src/platform/__tests__/fixtures'),
-  shellWasm: process.env.WASMSAND_SHELL_WASM
-    ?? resolve(__dirname, '../../orchestrator/src/shell/__tests__/fixtures/wasmsand-shell.wasm'),
+  shellWasm: process.env.CODEPOD_SHELL_WASM
+    ?? resolve(__dirname, '../../orchestrator/src/shell/__tests__/fixtures/codepod-shell.wasm'),
 });
 
 async function main(): Promise<void> {
-  log('Starting wasmsand MCP server...');
+  log('Starting codepod MCP server...');
   log(`  wasmDir:    ${config.wasmDir}`);
   log(`  shellWasm:  ${config.shellWasm}`);
   log(`  timeoutMs:  ${config.timeoutMs}`);
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
 
   // --- Create MCP server ---
   const server = new McpServer({
-    name: 'wasmsand',
+    name: 'codepod',
     version: '0.0.1',
   });
 

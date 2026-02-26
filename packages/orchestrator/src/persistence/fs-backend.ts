@@ -1,7 +1,7 @@
 /**
  * Node.js filesystem-backed persistence backend.
  *
- * State files are stored under `~/.wasmsand/persistence/<namespace>.wsnd`.
+ * State files are stored under `~/.codepod/persistence/<namespace>.wsnd`.
  * Namespace is sanitized to [a-zA-Z0-9_-] characters only.
  */
 
@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { PersistenceBackend } from './backend.js';
 
-const DEFAULT_DIR = join(homedir(), '.wasmsand', 'persistence');
+const DEFAULT_DIR = join(homedir(), '.codepod', 'persistence');
 
 /** Sanitize namespace to safe filesystem characters. */
 function sanitize(namespace: string): string {

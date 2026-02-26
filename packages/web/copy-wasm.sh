@@ -8,7 +8,7 @@ OUT="public/wasm"
 mkdir -p "$OUT"
 
 # Shell parser
-cp "$SHELL_FIXTURES/wasmsand-shell.wasm" "$OUT/"
+cp "$SHELL_FIXTURES/codepod-shell.wasm" "$OUT/"
 
 # All coreutils + python
 cp "$FIXTURES"/*.wasm "$OUT/"

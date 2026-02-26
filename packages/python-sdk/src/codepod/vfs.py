@@ -6,7 +6,7 @@ interface, plus a MemoryFS convenience class for in-memory file trees.
 
 Usage::
 
-    from wasmsand import Sandbox, MemoryFS
+    from codepod import Sandbox, MemoryFS
 
     fs = MemoryFS({
         "lib/__init__.py": b"",

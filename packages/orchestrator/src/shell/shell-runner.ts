@@ -206,7 +206,7 @@ export class ShellRunner {
       for (const tool of allTools) {
         const path = `${dir}/${tool}`;
         try {
-          this.vfs.writeFile(path, encoder.encode(`#!/bin/wasmsand\n# ${tool}\n`));
+          this.vfs.writeFile(path, encoder.encode(`#!/bin/codepod\n# ${tool}\n`));
           this.vfs.chmod(path, 0o755);
         } catch { /* ignore */ }
       }
@@ -259,7 +259,7 @@ export class ShellRunner {
       const enc = new TextEncoder();
       for (const name of registry.getCommandNames()) {
         try {
-          this.vfs.writeFile(`/bin/${name}`, enc.encode(`#!/bin/wasmsand\n# extension: ${name}\n`));
+          this.vfs.writeFile(`/bin/${name}`, enc.encode(`#!/bin/codepod\n# extension: ${name}\n`));
           this.vfs.chmod(`/bin/${name}`, 0o755);
         } catch { /* ignore if exists */ }
       }
@@ -467,7 +467,7 @@ export class ShellRunner {
     const encoder = new TextEncoder();
     const host = new WasiHost({
       vfs: this.vfs,
-      args: ['wasmsand-shell'],
+      args: ['codepod-shell'],
       env: Object.fromEntries(this.env),
       preopens: { '/': '/' },
       stdin: encoder.encode(command),
@@ -2750,7 +2750,7 @@ export class ShellRunner {
 
       // Write a stub to /bin so `which` and `ls /bin` see it
       this.vfs.withWriteAccess(() => {
-        this.vfs.writeFile('/bin/' + name, encoder.encode('#!/bin/wasmsand\n# ' + name + '\n'));
+        this.vfs.writeFile('/bin/' + name, encoder.encode('#!/bin/codepod\n# ' + name + '\n'));
         try {
           this.vfs.chmod('/bin/' + name, 0o755);
         } catch { /* ignore */ }

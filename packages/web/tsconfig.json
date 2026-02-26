@@ -10,7 +10,7 @@
     "rootDir": "src",
     "baseUrl": ".",
     "paths": {
-      "@wasmsand/sandbox": ["../orchestrator/src/index.ts"]
+      "@codepod/sandbox": ["../orchestrator/src/index.ts"]
     }
   },
   "include": ["src"]

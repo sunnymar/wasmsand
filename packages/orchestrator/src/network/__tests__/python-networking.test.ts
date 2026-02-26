@@ -6,7 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
 const WASM_DIR = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/codepod-shell.wasm');
 const PYTHON_WASM = resolve(WASM_DIR, 'python3.wasm');
 
 // Skip all tests if python3.wasm is not available

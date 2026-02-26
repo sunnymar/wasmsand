@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * wasmsand CLI — interactive shell running entirely in the WASM sandbox.
+ * codepod CLI — interactive shell running entirely in the WASM sandbox.
  */
 
 import { createInterface } from 'node:readline';
@@ -15,7 +15,7 @@ import { ShellRunner } from './shell/shell-runner.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const FIXTURES = resolve(__dirname, 'platform/__tests__/fixtures');
-const SHELL_WASM = resolve(__dirname, 'shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(__dirname, 'shell/__tests__/fixtures/codepod-shell.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
@@ -63,7 +63,7 @@ async function main() {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: 'wasmsand$ ',
+    prompt: 'codepod$ ',
   });
 
   const queue: string[] = [];
@@ -103,7 +103,7 @@ async function main() {
     }
   }
 
-  console.log('wasmsand — WASM sandbox shell');
+  console.log('codepod — WASM sandbox shell');
   console.log(`${TOOLS.length} tools + python3 available. Type "exit" to quit.\n`);
   rl.prompt();
 

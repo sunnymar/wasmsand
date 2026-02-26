@@ -4,7 +4,7 @@ Tests the full round-trip: Python host registers extension -> sandbox runs it
 -> handler called -> result returned.
 """
 import pytest
-from wasmsand import Sandbox, Extension, PythonPackage
+from codepod import Sandbox, Extension, PythonPackage
 
 
 class TestExtensionCommands:

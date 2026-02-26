@@ -1,4 +1,4 @@
-import { VFS, ProcessManager, ShellRunner, BrowserAdapter } from '@wasmsand/sandbox';
+import { VFS, ProcessManager, ShellRunner, BrowserAdapter } from '@codepod/sandbox';
 import { createTerminal } from './terminal.js';
 import '@xterm/xterm/css/xterm.css';
 
@@ -18,7 +18,7 @@ async function boot(): Promise<void> {
   // Register python3
   mgr.registerTool('python3', `${WASM_BASE}/python3.wasm`);
 
-  const shellWasmUrl = `${WASM_BASE}/wasmsand-shell.wasm`;
+  const shellWasmUrl = `${WASM_BASE}/codepod-shell.wasm`;
   const runner = new ShellRunner(vfs, mgr, adapter, shellWasmUrl);
 
   const container = document.getElementById('terminal');

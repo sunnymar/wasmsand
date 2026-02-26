@@ -32,7 +32,7 @@ jobs:
         run: cd packages/web && bash copy-wasm.sh
 
       - name: Build web app
-        run: cd packages/web && VITE_BASE=/wasmsand/ bun run build
+        run: cd packages/web && VITE_BASE=/codepod/ bun run build
 
       - uses: actions/configure-pages@v5
 

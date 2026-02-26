@@ -10,7 +10,7 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
 
 describe('Sandbox', () => {
   let sandbox: Sandbox;
@@ -106,7 +106,7 @@ describe('Sandbox', () => {
   it('discovers tools via scanTools', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
     const result = await sandbox.run('uname');
-    expect(result.stdout.trim()).toBe('wasmsand');
+    expect(result.stdout.trim()).toBe('codepod');
   });
 
   describe('snapshot and restore', () => {

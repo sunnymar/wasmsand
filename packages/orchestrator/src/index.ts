@@ -1,4 +1,4 @@
-// @wasmsand/sandbox - WASM AI Sandbox
+// @codepod/sandbox - WASM AI Sandbox
 export { VFS } from './vfs/vfs.js';
 export type { VfsOptions } from './vfs/vfs.js';
 export { ProcessManager } from './process/manager.js';
@@ -8,7 +8,7 @@ export { Sandbox } from './sandbox.js';
 export type { SandboxOptions, MountConfig } from './sandbox.js';
 export { BrowserAdapter } from './platform/browser-adapter.js';
 // NodeAdapter not re-exported — imports node:fs/promises which breaks browser bundlers.
-// Node consumers: import { NodeAdapter } from '@wasmsand/sandbox/node'
+// Node consumers: import { NodeAdapter } from '@codepod/sandbox/node'
 export type { PlatformAdapter } from './platform/adapter.js';
 export type { SpawnOptions, SpawnResult } from './process/process.js';
 export type { RunResult } from './shell/shell-runner.js';
@@ -37,7 +37,7 @@ export { PersistenceManager } from './persistence/manager.js';
 export type { PersistenceManagerOptions } from './persistence/manager.js';
 export { exportState, importState } from './persistence/serializer.js';
 // FsBackend not re-exported — imports node:fs which breaks browser bundlers.
-// Node consumers: import { FsBackend } from '@wasmsand/sandbox/node'
+// Node consumers: import { FsBackend } from '@codepod/sandbox/node'
 export { CommandHistory } from './shell/history.js';
 export type { HistoryEntry } from './shell/history.js';
 export type { ExtensionConfig, ExtensionHandler, ExtensionInvokeArgs, ExtensionInvokeResult, PythonPackageSpec } from './extension/types.js';

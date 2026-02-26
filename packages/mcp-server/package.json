@@ -1,5 +1,5 @@
 {
-  "name": "@wasmsand/mcp-server",
+  "name": "@codepod/mcp-server",
   "version": "0.0.1",
   "type": "module",
   "main": "src/index.ts",
@@ -7,7 +7,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@wasmsand/sandbox": "*",
+    "@codepod/sandbox": "*",
     "@modelcontextprotocol/sdk": "^1.27",
     "zod": "^3.25"
   },

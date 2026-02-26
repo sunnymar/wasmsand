@@ -1,5 +1,5 @@
 /**
- * Stdio JSON-RPC server for the wasmsand SDK.
+ * Stdio JSON-RPC server for the codepod SDK.
  *
  * Reads newline-delimited JSON-RPC 2.0 from stdin, routes to the Dispatcher,
  * and writes JSON-RPC responses to stdout. The first RPC call must be `create`
@@ -9,9 +9,9 @@
  */
 
 import { createInterface } from 'node:readline';
-import { Sandbox } from '@wasmsand/sandbox';
-import type { ExtensionConfig, ExtensionInvokeArgs, ExtensionInvokeResult } from '@wasmsand/sandbox';
-import { NodeAdapter } from '@wasmsand/sandbox/node';
+import { Sandbox } from '@codepod/sandbox';
+import type { ExtensionConfig, ExtensionInvokeArgs, ExtensionInvokeResult } from '@codepod/sandbox';
+import { NodeAdapter } from '@codepod/sandbox/node';
 import { Dispatcher } from './dispatcher.js';
 
 interface JsonRpcRequest {

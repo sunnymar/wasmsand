@@ -1,17 +1,17 @@
 {
-  "name": "@wasmsand/sdk-server",
+  "name": "@codepod/sdk-server",
   "version": "0.0.1",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
-    "wasmsand-server": "dist/server.js"
+    "codepod-server": "dist/server.js"
   },
   "scripts": {
     "test": "bun test",
     "build": "tsup src/server.ts --format esm --dts"
   },
   "dependencies": {
-    "@wasmsand/sandbox": "*"
+    "@codepod/sandbox": "*"
   },
   "devDependencies": {
     "tsup": "^8.0",

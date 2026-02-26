@@ -3,11 +3,11 @@ from __future__ import annotations
 import base64
 import os
 import shutil
-from wasmsand._rpc import RpcClient
-from wasmsand.commands import Commands
-from wasmsand.extension import Extension
-from wasmsand.files import Files
-from wasmsand.vfs import VirtualFileSystem, _encode_files_for_rpc
+from codepod._rpc import RpcClient
+from codepod.commands import Commands
+from codepod.extension import Extension
+from codepod.files import Files
+from codepod.vfs import VirtualFileSystem, _encode_files_for_rpc
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 _BUNDLED_DIR = os.path.join(_PKG_DIR, "_bundled")
@@ -23,7 +23,7 @@ def _bundled_paths() -> tuple[str, str, str, str]:
     runtime = os.path.join(_BUNDLED_DIR, "bun")
     server = os.path.join(_BUNDLED_DIR, "server.js")
     wasm_dir = os.path.join(_BUNDLED_DIR, "wasm")
-    shell_wasm = os.path.join(wasm_dir, "wasmsand-shell.wasm")
+    shell_wasm = os.path.join(wasm_dir, "codepod-shell.wasm")
     return runtime, server, wasm_dir, shell_wasm
 
 
@@ -40,7 +40,7 @@ def _dev_paths() -> tuple[str, str, str, str]:
     )
     shell_wasm = os.path.join(
         repo_root, "packages", "orchestrator", "src", "shell", "__tests__", "fixtures",
-        "wasmsand-shell.wasm",
+        "codepod-shell.wasm",
     )
     return runtime_path, server, wasm_dir, shell_wasm
 
@@ -57,9 +57,9 @@ class Sandbox:
         fs_limit_bytes: Maximum VFS size in bytes.
         mounts: List of ``(path, files)`` tuples to mount at creation time.
             Each ``files`` can be a ``dict[str, bytes|str]`` or a
-            :class:`~wasmsand.vfs.VirtualFileSystem` instance.
+            :class:`~codepod.vfs.VirtualFileSystem` instance.
         python_path: Directories to add to PYTHONPATH (in addition to /usr/lib/python).
-        extensions: List of :class:`~wasmsand.Extension` instances to register.
+        extensions: List of :class:`~codepod.Extension` instances to register.
     """
 
     def __init__(
@@ -145,7 +145,7 @@ class Sandbox:
         Args:
             path: Absolute mount path (e.g. ``'/mnt/tools'``).
             files: Either a ``dict[str, bytes|str]`` mapping relative paths
-                to file contents, or a :class:`~wasmsand.vfs.VirtualFileSystem`
+                to file contents, or a :class:`~codepod.vfs.VirtualFileSystem`
                 instance.
 
         Example::
@@ -154,7 +154,7 @@ class Sandbox:
             sb.mount("/mnt/tools", {"hello.sh": b"#!/bin/sh\\necho hi"})
 
             # VirtualFileSystem mount
-            from wasmsand import MemoryFS
+            from codepod import MemoryFS
             fs = MemoryFS({"lib/utils.py": b"def greet(): return 'hello'"})
             sb.mount("/mnt/pkg", fs)
         """

@@ -117,8 +117,8 @@ describe('parseCli', () => {
 describe('parseEnv', () => {
   it('parses indexed mounts', () => {
     const result = parseEnv({
-      WASMSAND_MOUNT_0: '/src:/mnt/src:ro',
-      WASMSAND_MOUNT_1: '/tmp:/mnt/tmp:rw',
+      CODEPOD_MOUNT_0: '/src:/mnt/src:ro',
+      CODEPOD_MOUNT_1: '/tmp:/mnt/tmp:rw',
     });
     expect(result.mounts).toEqual([
       { hostPath: '/src', sandboxPath: '/mnt/src', writable: false },
@@ -128,8 +128,8 @@ describe('parseEnv', () => {
 
   it('stops at first missing index', () => {
     const result = parseEnv({
-      WASMSAND_MOUNT_0: '/a:/b',
-      WASMSAND_MOUNT_2: '/c:/d', // skipped, index 1 missing
+      CODEPOD_MOUNT_0: '/a:/b',
+      CODEPOD_MOUNT_2: '/c:/d', // skipped, index 1 missing
     });
     expect(result.mounts).toEqual([
       { hostPath: '/a', sandboxPath: '/b', writable: false },
@@ -138,8 +138,8 @@ describe('parseEnv', () => {
 
   it('parses comma-separated network lists', () => {
     const result = parseEnv({
-      WASMSAND_NETWORK_ALLOW: '*.pypi.org, npmjs.com',
-      WASMSAND_NETWORK_BLOCK: 'evil.com',
+      CODEPOD_NETWORK_ALLOW: '*.pypi.org, npmjs.com',
+      CODEPOD_NETWORK_BLOCK: 'evil.com',
     });
     expect(result.networkAllow).toEqual(['*.pypi.org', 'npmjs.com']);
     expect(result.networkBlock).toEqual(['evil.com']);
@@ -147,11 +147,11 @@ describe('parseEnv', () => {
 
   it('parses scalar env vars', () => {
     const result = parseEnv({
-      WASMSAND_CONFIG: 'config.json',
-      WASMSAND_TIMEOUT_MS: '60000',
-      WASMSAND_FS_LIMIT_BYTES: '536870912',
-      WASMSAND_WASM_DIR: '/wasm',
-      WASMSAND_SHELL_WASM: '/shell.wasm',
+      CODEPOD_CONFIG: 'config.json',
+      CODEPOD_TIMEOUT_MS: '60000',
+      CODEPOD_FS_LIMIT_BYTES: '536870912',
+      CODEPOD_WASM_DIR: '/wasm',
+      CODEPOD_SHELL_WASM: '/shell.wasm',
     });
     expect(result.configPath).toBe('config.json');
     expect(result.timeoutMs).toBe(60000);
@@ -208,16 +208,16 @@ describe('loadConfig', () => {
 
   it('CLI mounts override env mounts', () => {
     // Set env mount, then override with CLI
-    const origEnv = process.env.WASMSAND_MOUNT_0;
-    process.env.WASMSAND_MOUNT_0 = '/env:/mnt/env:ro';
+    const origEnv = process.env.CODEPOD_MOUNT_0;
+    process.env.CODEPOD_MOUNT_0 = '/env:/mnt/env:ro';
     try {
       const config = loadConfig(['--mount', '/cli:/mnt/cli:rw'], defaults);
       expect(config.mounts).toEqual([
         { hostPath: '/cli', sandboxPath: '/mnt/cli', writable: true },
       ]);
     } finally {
-      if (origEnv === undefined) delete process.env.WASMSAND_MOUNT_0;
-      else process.env.WASMSAND_MOUNT_0 = origEnv;
+      if (origEnv === undefined) delete process.env.CODEPOD_MOUNT_0;
+      else process.env.CODEPOD_MOUNT_0 = origEnv;
     }
   });
 

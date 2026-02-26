@@ -1,5 +1,5 @@
 [project]
-name = "wasmsand"
+name = "codepod"
 version = "0.0.1"
 description = "WASM sandbox for AI agents"
 requires-python = ">=3.10"
@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-wasmsand = ["_bundled/**/*"]
+codepod = ["_bundled/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

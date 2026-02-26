@@ -57,7 +57,7 @@ export class PersistenceManager {
     this.timer = setTimeout(() => {
       this.timer = null;
       this.save().catch(err => {
-        console.warn('[wasmsand] autosave failed:', err);
+        console.warn('[codepod] autosave failed:', err);
       });
     }, this.autosaveMs);
   }
@@ -74,7 +74,7 @@ export class PersistenceManager {
       const data = exportState(this.vfs, this.getEnv());
       await this.backend.save(this.namespace, data);
     } catch (err) {
-      console.warn('[wasmsand] save failed:', err);
+      console.warn('[codepod] save failed:', err);
     } finally {
       this.saving = false;
     }
@@ -96,7 +96,7 @@ export class PersistenceManager {
       }
       return true;
     } catch (err) {
-      console.warn('[wasmsand] load failed:', err);
+      console.warn('[codepod] load failed:', err);
       return false;
     }
   }
@@ -106,7 +106,7 @@ export class PersistenceManager {
     try {
       await this.backend.delete(this.namespace);
     } catch (err) {
-      console.warn('[wasmsand] clear failed:', err);
+      console.warn('[codepod] clear failed:', err);
     }
   }
 
@@ -127,7 +127,7 @@ export class PersistenceManager {
         const data = exportState(this.vfs, this.getEnv());
         await this.backend.save(this.namespace, data);
       } catch (err) {
-        console.warn('[wasmsand] dispose flush failed:', err);
+        console.warn('[codepod] dispose flush failed:', err);
       }
     }
   }

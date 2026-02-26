@@ -1,6 +1,6 @@
 """Integration tests for mount and PYTHONPATH support."""
 
-from wasmsand import Sandbox, MemoryFS
+from codepod import Sandbox, MemoryFS
 
 
 class TestMount:

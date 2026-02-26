@@ -1,10 +1,10 @@
-# wasmsand
+# codepod
 
 A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 95+ commands, and a Python runtime — no containers, no kernel, no hardware emulation. Ships with an [MCP server](#mcp-server) so Claude can use it directly as a tool.
 
-**[Try it in your browser](https://sunnymar.github.io/wasmsand/)**
+**[Try it in your browser](https://sunnymar.github.io/codepod/)**
 
-LLMs are trained on enormous amounts of shell and Python usage. Rather than inventing a new API for code execution, wasmsand speaks the language they already know: bash, coreutils, and Python 3.
+LLMs are trained on enormous amounts of shell and Python usage. Rather than inventing a new API for code execution, codepod speaks the language they already know: bash, coreutils, and Python 3.
 
 ## What it does
 
@@ -26,13 +26,13 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 **TypeScript (npm):**
 
 ```bash
-npm install @wasmsand/sandbox
+npm install @codepod/sandbox
 ```
 
 **Python (PyPI):**
 
 ```bash
-pip install wasmsand
+pip install codepod
 ```
 
 The Python wheel is self-contained — it bundles the Bun runtime, the RPC server, and all WASM binaries. No extra dependencies needed.
@@ -42,12 +42,12 @@ The Python wheel is self-contained — it bundles the Bun runtime, the RPC serve
 ### TypeScript
 
 ```typescript
-import { Sandbox } from '@wasmsand/sandbox';
-import { NodeAdapter } from '@wasmsand/sandbox/node';
+import { Sandbox } from '@codepod/sandbox';
+import { NodeAdapter } from '@codepod/sandbox/node';
 
 const sandbox = await Sandbox.create({
   adapter: new NodeAdapter(),
-  wasmDir: './node_modules/@wasmsand/sandbox/wasm',
+  wasmDir: './node_modules/@codepod/sandbox/wasm',
 });
 
 const result = await sandbox.run('echo hello world | wc -w');
@@ -59,8 +59,8 @@ sandbox.destroy();
 In the browser, use `BrowserAdapter` instead:
 
 ```typescript
-import { Sandbox } from '@wasmsand/sandbox';
-import { BrowserAdapter } from '@wasmsand/sandbox/browser';
+import { Sandbox } from '@codepod/sandbox';
+import { BrowserAdapter } from '@codepod/sandbox/browser';
 
 const sandbox = await Sandbox.create({
   adapter: new BrowserAdapter(),
@@ -71,7 +71,7 @@ const sandbox = await Sandbox.create({
 ### Python
 
 ```python
-from wasmsand import Sandbox
+from codepod import Sandbox
 
 with Sandbox() as sb:
     result = sb.commands.run("ls -la /home/user")
@@ -137,7 +137,7 @@ sb.files.rm("/tmp/msg.txt")
 File operations raise `RpcError` on failure:
 
 ```python
-from wasmsand._rpc import RpcError
+from codepod._rpc import RpcError
 
 try:
     sb.files.read("/nonexistent")
@@ -148,7 +148,7 @@ except RpcError as e:
 
 ### MCP Server
 
-wasmsand includes an MCP (Model Context Protocol) server, so AI assistants like Claude can use the sandbox directly as a tool.
+codepod includes an MCP (Model Context Protocol) server, so AI assistants like Claude can use the sandbox directly as a tool.
 
 **Claude Code** (`~/.claude/settings.json`):
 
@@ -157,7 +157,7 @@ wasmsand includes an MCP (Model Context Protocol) server, so AI assistants like 
   "mcpServers": {
     "sandbox": {
       "command": "bun",
-      "args": ["run", "/path/to/wasmsand/packages/mcp-server/src/index.ts"]
+      "args": ["run", "/path/to/codepod/packages/mcp-server/src/index.ts"]
     }
   }
 }
@@ -170,7 +170,7 @@ wasmsand includes an MCP (Model Context Protocol) server, so AI assistants like 
   "mcpServers": {
     "sandbox": {
       "command": "bun",
-      "args": ["run", "/path/to/wasmsand/packages/mcp-server/src/index.ts"]
+      "args": ["run", "/path/to/codepod/packages/mcp-server/src/index.ts"]
     }
   }
 }
@@ -189,9 +189,9 @@ Configuration via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WASMSAND_TIMEOUT_MS` | 30000 | Per-command timeout |
-| `WASMSAND_FS_LIMIT_BYTES` | 268435456 | VFS size limit (256 MB) |
-| `WASMSAND_WASM_DIR` | auto | Path to WASM binaries |
+| `CODEPOD_TIMEOUT_MS` | 30000 | Per-command timeout |
+| `CODEPOD_FS_LIMIT_BYTES` | 268435456 | VFS size limit (256 MB) |
+| `CODEPOD_WASM_DIR` | auto | Path to WASM binaries |
 
 ## Available tools
 
@@ -274,7 +274,7 @@ Mount points are visible in parent directory listings (`ls /mnt` shows `tools`).
 **Python:**
 
 ```python
-from wasmsand import Sandbox, MemoryFS
+from codepod import Sandbox, MemoryFS
 
 # At creation time
 with Sandbox(
@@ -290,7 +290,7 @@ sb.mount("/mnt/uploads", {"data.csv": b"a,b,c\n1,2,3\n"})
 For structured file trees, use `MemoryFS` — a `VirtualFileSystem` implementation with the standard FS interface (read, write, stat, readdir, exists):
 
 ```python
-from wasmsand import Sandbox, MemoryFS
+from codepod import Sandbox, MemoryFS
 
 fs = MemoryFS({
     "mylib/__init__.py": b"",
@@ -304,7 +304,7 @@ with Sandbox(mounts=[("/mnt/pkg", fs)], python_path=["/mnt/pkg"]) as sb:
 You can also subclass `VirtualFileSystem` to implement custom file sources (local disk, database, HTTP):
 
 ```python
-from wasmsand import VirtualFileSystem, FileStat, DirEntry
+from codepod import VirtualFileSystem, FileStat, DirEntry
 
 class LocalDirFS(VirtualFileSystem):
     def __init__(self, root: str):
@@ -367,7 +367,7 @@ const sandbox = await Sandbox.create({
         version: '1.0.0',
         summary: 'Vector database client',
         files: {
-          '__init__.py': 'from wasmsand_ext import call as _call\n\ndef search(q): return _call("vecdb", "search", query=q)\n',
+          '__init__.py': 'from codepod_ext import call as _call\n\ndef search(q): return _call("vecdb", "search", query=q)\n',
         },
       },
     },
@@ -390,7 +390,7 @@ await sandbox.run('pip show vecdb');   // metadata + file list
 **Python:**
 
 ```python
-from wasmsand import Sandbox, Extension, PythonPackage
+from codepod import Sandbox, Extension, PythonPackage
 
 def my_llm_handler(args, stdin, env, cwd):
     prompt = " ".join(args) or stdin
@@ -412,7 +412,7 @@ with Sandbox(extensions=[
             summary="Vector database client",
             files={
                 "__init__.py": (
-                    "from wasmsand_ext import call as _call\n"
+                    "from codepod_ext import call as _call\n"
                     "def search(q): return _call('vecdb', 'search', query=q)\n"
                 ),
             },
@@ -425,7 +425,7 @@ with Sandbox(extensions=[
 
 Extension commands receive `args`, `stdin`, `env`, and `cwd`. They return `stdout`, optional `stderr`, and `exitCode`. Commands support `--help` (returns the description), piped input, output redirection, and chaining with `&&`/`||`/`;`.
 
-Python packages are installed in the VFS at `/usr/lib/python/<name>/` and use the `wasmsand_ext` bridge module to call back to the host. Python package extensions require worker execution mode (`security.hardKill: true` in TypeScript) since the synchronous WASI fd bridge needs the main thread free to run async handlers.
+Python packages are installed in the VFS at `/usr/lib/python/<name>/` and use the `codepod_ext` bridge module to call back to the host. Python package extensions require worker execution mode (`security.hardKill: true` in TypeScript) since the synchronous WASI fd bridge needs the main thread free to run async handlers.
 
 ## Package manager
 
@@ -607,7 +607,7 @@ Also available via the RPC API: `shell.history.list`, `shell.history.clear`.
 ### Data types
 
 ```python
-from wasmsand import CommandResult, FileInfo, MemoryFS, VirtualFileSystem, FileStat, DirEntry, Extension, PythonPackage
+from codepod import CommandResult, FileInfo, MemoryFS, VirtualFileSystem, FileStat, DirEntry, Extension, PythonPackage
 
 # CommandResult (returned by commands.run)
 result.stdout: str
@@ -698,19 +698,19 @@ make wheel
 
 ## Related projects
 
-wasmsand occupies a specific point in the design space: a lightweight WASM-based sandbox with real POSIX semantics, designed for LLM code execution on both server and browser. Here's how it compares to related projects.
+codepod occupies a specific point in the design space: a lightweight WASM-based sandbox with real POSIX semantics, designed for LLM code execution on both server and browser. Here's how it compares to related projects.
 
 ### RustPython
 
-[RustPython](https://github.com/RustPython/RustPython) (21k+ stars) is a Python 3 interpreter written in Rust. wasmsand uses RustPython compiled to WASI as its Python runtime — it runs as a standard WASI binary through the same process manager as coreutils, sharing the virtual filesystem and I/O plumbing with no special-case integration.
+[RustPython](https://github.com/RustPython/RustPython) (21k+ stars) is a Python 3 interpreter written in Rust. codepod uses RustPython compiled to WASI as its Python runtime — it runs as a standard WASI binary through the same process manager as coreutils, sharing the virtual filesystem and I/O plumbing with no special-case integration.
 
-RustPython gives wasmsand near-complete Python 3 coverage (classes, generators, decorators, context managers, and stdlib modules like `json`, `re`, `math`, `collections`) in a single ~12MB WASM binary. The tradeoff is startup latency (hundreds of milliseconds for the first invocation, cached after) and no C extension support — `numpy`, `pandas`, and anything requiring native code won't work. For LLM use cases this is rarely a limitation since agents primarily use the standard library.
+RustPython gives codepod near-complete Python 3 coverage (classes, generators, decorators, context managers, and stdlib modules like `json`, `re`, `math`, `collections`) in a single ~12MB WASM binary. The tradeoff is startup latency (hundreds of milliseconds for the first invocation, cached after) and no C extension support — `numpy`, `pandas`, and anything requiring native code won't work. For LLM use cases this is rarely a limitation since agents primarily use the standard library.
 
 ### Monty (Pydantic)
 
 [Monty](https://github.com/pydantic/monty) (5.7k stars) is a minimal Python interpreter from the Pydantic team, explicitly targeting LLM-generated code. It prioritizes microsecond startup (~0.06ms), tiny footprint, and strict isolation via a controlled external-function model — filesystem, network, and environment access only happen through developer-approved callbacks.
 
-wasmsand initially used Monty but switched to RustPython because Monty's Python subset was too restrictive for practical agent use: no classes, limited stdlib (only `sys`, `typing`, `asyncio`), and no modules like `json` or `re` that LLMs reach for constantly. Monty is the right choice if you need sub-millisecond startup and can constrain your agent to simple procedural scripts. wasmsand chose broader Python coverage at the cost of higher startup latency, since commands are typically batched and the WASM module is cached after first load.
+codepod initially used Monty but switched to RustPython because Monty's Python subset was too restrictive for practical agent use: no classes, limited stdlib (only `sys`, `typing`, `asyncio`), and no modules like `json` or `re` that LLMs reach for constantly. Monty is the right choice if you need sub-millisecond startup and can constrain your agent to simple procedural scripts. codepod chose broader Python coverage at the cost of higher startup latency, since commands are typically batched and the WASM module is cached after first load.
 
 Monty is still early and actively developing — classes and `json` support are on their roadmap. It's worth watching.
 
@@ -718,9 +718,9 @@ Monty is still early and actively developing — classes and `json` support are 
 
 [lifo](https://github.com/lifo-sh/lifo) is a browser-native Unix environment — 60+ commands, a bash-like shell, a virtual filesystem with IndexedDB persistence, and Node.js compatibility shims. It positions itself as [zero-cost AI sandboxing](https://lifo.sh/): no server, no VM, instant boot.
 
-The key architectural difference: lifo implements commands in JavaScript against browser APIs, while wasmsand compiles real Rust coreutils and a Rust shell parser to WebAssembly running under WASI. This has significant implications:
+The key architectural difference: lifo implements commands in JavaScript against browser APIs, while codepod compiles real Rust coreutils and a Rust shell parser to WebAssembly running under WASI. This has significant implications:
 
-| | wasmsand | lifo |
+| | codepod | lifo |
 |---|---|---|
 | **Execution model** | WASM binaries under WASI host | JS functions against browser APIs |
 | **Process isolation** | Each command is an isolated WASM instance with its own linear memory | Shared JS thread, no memory isolation between commands |
@@ -730,9 +730,9 @@ The key architectural difference: lifo implements commands in JavaScript against
 | **Persistence** | In-memory VFS with snapshot/restore/fork, export/import, and auto-persist to IndexedDB or filesystem | IndexedDB-backed VFS |
 | **Networking** | Opt-in with domain allowlist, sync bridge for WASI | Browser fetch (no policy layer) |
 
-lifo is a good fit for lightweight browser-side demos and prototyping where the browser sandbox is sufficient. wasmsand is designed for the harder problem: running untrusted LLM-generated code in production on both server and browser, where you need real process isolation, configurable security policies, and hard-kill guarantees.
+lifo is a good fit for lightweight browser-side demos and prototyping where the browser sandbox is sufficient. codepod is designed for the harder problem: running untrusted LLM-generated code in production on both server and browser, where you need real process isolation, configurable security policies, and hard-kill guarantees.
 
-wasmsand has adopted several ideas from lifo's design — a package manager concept, persistence modes, and shell ergonomics for long autonomous runs — adapted to work within the WASM security boundary rather than as bare JS.
+codepod has adopted several ideas from lifo's design — a package manager concept, persistence modes, and shell ergonomics for long autonomous runs — adapted to work within the WASM security boundary rather than as bare JS.
 
 ## Origin
 

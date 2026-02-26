@@ -1,7 +1,7 @@
 import os
 import shutil
 import pytest
-from wasmsand._rpc import RpcClient, RpcError
+from codepod._rpc import RpcClient, RpcError
 
 SERVER_SCRIPT = os.path.join(
     os.path.dirname(__file__), "..", "..", "sdk-server", "src", "server.ts"
@@ -10,7 +10,7 @@ WASM_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "orchestrator", "src", "platform", "__tests__", "fixtures"
 )
 SHELL_WASM = os.path.join(
-    os.path.dirname(__file__), "..", "..", "orchestrator", "src", "shell", "__tests__", "fixtures", "wasmsand-shell.wasm"
+    os.path.dirname(__file__), "..", "..", "orchestrator", "src", "shell", "__tests__", "fixtures", "codepod-shell.wasm"
 )
 
 

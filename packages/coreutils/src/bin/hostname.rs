@@ -10,8 +10,8 @@ fn main() {
         return;
     }
     if args.iter().any(|a| a == "-f") {
-        println!("wasmsand.local");
+        println!("codepod.local");
     } else {
-        println!("wasmsand");
+        println!("codepod");
     }
 }

@@ -11,7 +11,7 @@ import { NodeAdapter } from '../platform/node-adapter.js';
 import type { ExtensionConfig } from '../extension/types.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
 
 describe('Extension commands', () => {
   let sandbox: Sandbox;
@@ -265,7 +265,7 @@ describe('Extension Python packages', () => {
     expect(utils).toContain('def hello');
   });
 
-  it('wasmsand_ext.py bridge is installed when packages exist', async () => {
+  it('codepod_ext.py bridge is installed when packages exist', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
@@ -275,7 +275,7 @@ describe('Extension Python packages', () => {
         pythonPackage: { version: '1.0', files: { '__init__.py': '' } },
       }],
     });
-    const content = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/wasmsand_ext.py'));
+    const content = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/codepod_ext.py'));
     expect(content).toContain('_EXTENSION_FD = 1022');
     expect(content).toContain('def call(');
   });

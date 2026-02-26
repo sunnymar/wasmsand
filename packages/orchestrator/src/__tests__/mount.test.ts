@@ -8,7 +8,7 @@ import { NodeAdapter } from '../platform/node-adapter.js';
 import { HostMount } from '../vfs/host-mount.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
 const enc = (s: string) => new TextEncoder().encode(s);
 
 describe('mounts', () => {

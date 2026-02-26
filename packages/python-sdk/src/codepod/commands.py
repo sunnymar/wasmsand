@@ -1,5 +1,5 @@
-from wasmsand._rpc import RpcClient
-from wasmsand._types import CommandResult
+from codepod._rpc import RpcClient
+from codepod._types import CommandResult
 
 
 class Commands:

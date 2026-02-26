@@ -1,5 +1,5 @@
 /**
- * Unified configuration for the wasmsand MCP server.
+ * Unified configuration for the codepod MCP server.
  *
  * Three sources with precedence: CLI args > env vars > JSON config > defaults.
  * Higher-priority layer replaces (not merges) lower-priority mount/network lists.
@@ -171,28 +171,28 @@ interface EnvResult {
 export function parseEnv(env: Record<string, string | undefined>): EnvResult {
   const result: EnvResult = {};
 
-  // Indexed mounts: WASMSAND_MOUNT_0, WASMSAND_MOUNT_1, ...
+  // Indexed mounts: CODEPOD_MOUNT_0, CODEPOD_MOUNT_1, ...
   const mounts: MountEntry[] = [];
   for (let i = 0; ; i++) {
-    const val = env[`WASMSAND_MOUNT_${i}`];
+    const val = env[`CODEPOD_MOUNT_${i}`];
     if (val === undefined) break;
     mounts.push(parseMount(val));
   }
   if (mounts.length > 0) result.mounts = mounts;
 
   // Comma-separated network lists
-  if (env.WASMSAND_NETWORK_ALLOW) {
-    result.networkAllow = env.WASMSAND_NETWORK_ALLOW.split(',').map(s => s.trim()).filter(Boolean);
+  if (env.CODEPOD_NETWORK_ALLOW) {
+    result.networkAllow = env.CODEPOD_NETWORK_ALLOW.split(',').map(s => s.trim()).filter(Boolean);
   }
-  if (env.WASMSAND_NETWORK_BLOCK) {
-    result.networkBlock = env.WASMSAND_NETWORK_BLOCK.split(',').map(s => s.trim()).filter(Boolean);
+  if (env.CODEPOD_NETWORK_BLOCK) {
+    result.networkBlock = env.CODEPOD_NETWORK_BLOCK.split(',').map(s => s.trim()).filter(Boolean);
   }
 
-  if (env.WASMSAND_CONFIG) result.configPath = env.WASMSAND_CONFIG;
-  if (env.WASMSAND_TIMEOUT_MS) result.timeoutMs = Number(env.WASMSAND_TIMEOUT_MS);
-  if (env.WASMSAND_FS_LIMIT_BYTES) result.fsLimitBytes = Number(env.WASMSAND_FS_LIMIT_BYTES);
-  if (env.WASMSAND_WASM_DIR) result.wasmDir = env.WASMSAND_WASM_DIR;
-  if (env.WASMSAND_SHELL_WASM) result.shellWasm = env.WASMSAND_SHELL_WASM;
+  if (env.CODEPOD_CONFIG) result.configPath = env.CODEPOD_CONFIG;
+  if (env.CODEPOD_TIMEOUT_MS) result.timeoutMs = Number(env.CODEPOD_TIMEOUT_MS);
+  if (env.CODEPOD_FS_LIMIT_BYTES) result.fsLimitBytes = Number(env.CODEPOD_FS_LIMIT_BYTES);
+  if (env.CODEPOD_WASM_DIR) result.wasmDir = env.CODEPOD_WASM_DIR;
+  if (env.CODEPOD_SHELL_WASM) result.shellWasm = env.CODEPOD_SHELL_WASM;
 
   return result;
 }

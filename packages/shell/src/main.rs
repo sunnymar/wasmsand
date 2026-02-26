@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 
-use wasmsand_shell::parser::parse;
-use wasmsand_shell::serialize::serialize_command;
+use codepod_shell::parser::parse;
+use codepod_shell::serialize::serialize_command;
 
 fn main() {
     let mut input = String::new();

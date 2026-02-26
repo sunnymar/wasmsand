@@ -1,9 +1,9 @@
 /**
- * Python source for /usr/lib/python/wasmsand_ext.py — bridge to host
+ * Python source for /usr/lib/python/codepod_ext.py — bridge to host
  * extensions via extension fd 1022 (FD_MAX-2).
  */
-export const WASMSAND_EXT_SOURCE = `\
-"""wasmsand_ext -- bridge to host extensions via extension fd 1022 (FD_MAX-2)."""
+export const CODEPOD_EXT_SOURCE = `\
+"""codepod_ext -- bridge to host extensions via extension fd 1022 (FD_MAX-2)."""
 import os as _os
 import json as _json
 

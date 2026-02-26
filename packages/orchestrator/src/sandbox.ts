@@ -28,7 +28,7 @@ import { HostMount } from './vfs/host-mount.js';
 import type { VirtualProvider } from './vfs/provider.js';
 import { ExtensionRegistry } from './extension/registry.js';
 import type { ExtensionConfig } from './extension/types.js';
-import { WASMSAND_EXT_SOURCE } from './extension/wasmsand-ext-shim.js';
+import { CODEPOD_EXT_SOURCE } from './extension/codepod-ext-shim.js';
 import { PackageRegistry } from './packages/registry.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
@@ -50,7 +50,7 @@ export interface SandboxOptions {
   timeoutMs?: number;
   /** Max VFS size in bytes. Default 256MB. */
   fsLimitBytes?: number;
-  /** Path to the shell parser wasm. Defaults to `${wasmDir}/wasmsand-shell.wasm`. */
+  /** Path to the shell parser wasm. Defaults to `${wasmDir}/codepod-shell.wasm`. */
   shellWasmPath?: string;
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
@@ -157,7 +157,7 @@ export class Sandbox {
       }
     }
 
-    const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/wasmsand-shell.wasm`;
+    const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/codepod-shell.wasm`;
     const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
 
     // Wire extension registry to ShellRunner
@@ -216,8 +216,8 @@ export class Sandbox {
     if (extensionRegistry.getPackageNames().length > 0) {
       vfs.withWriteAccess(() => {
         vfs.mkdirp('/usr/lib/python');
-        vfs.writeFile('/usr/lib/python/wasmsand_ext.py',
-          new TextEncoder().encode(WASMSAND_EXT_SOURCE));
+        vfs.writeFile('/usr/lib/python/codepod_ext.py',
+          new TextEncoder().encode(CODEPOD_EXT_SOURCE));
         for (const name of extensionRegistry.getPackageNames()) {
           const ext = extensionRegistry.get(name)!;
           const pkg = ext.pythonPackage!;

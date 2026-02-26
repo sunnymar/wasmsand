@@ -15,7 +15,7 @@ import { FsBackend } from '../persistence/fs-backend.js';
 import { PersistenceManager } from '../persistence/manager.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
 
 /** Helper: encode a string as UTF-8 bytes. */
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -299,7 +299,7 @@ describe('FsBackend', () => {
   let backend: FsBackend;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), 'wasmsand-test-'));
+    tmpDir = await mkdtemp(join(tmpdir(), 'codepod-test-'));
     backend = new FsBackend(tmpDir);
   });
 

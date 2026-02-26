@@ -1,5 +1,5 @@
 import pytest
-from wasmsand import Sandbox
+from codepod import Sandbox
 
 
 class TestSandbox:
@@ -14,7 +14,7 @@ class TestSandbox:
 
     def test_missing_bun_raises(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda _: None)
-        monkeypatch.setattr("wasmsand.sandbox._is_bundled", lambda: False)
+        monkeypatch.setattr("codepod.sandbox._is_bundled", lambda: False)
         with pytest.raises(RuntimeError, match="Bun not found"):
             Sandbox()
 
@@ -100,7 +100,7 @@ class TestSandboxEndToEnd:
             sbx1.files.write("/tmp/only_in_1.txt", "sandbox1")
 
             with Sandbox() as sbx2:
-                from wasmsand._rpc import RpcError
+                from codepod._rpc import RpcError
 
                 with pytest.raises(RpcError) as exc_info:
                     sbx2.files.read("/tmp/only_in_1.txt")

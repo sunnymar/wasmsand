@@ -10,7 +10,7 @@ const FIXTURES = resolve(
   import.meta.dirname,
   '../../platform/__tests__/fixtures',
 );
-const SHELL_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/codepod-shell.wasm');
 
 describe('PythonRunner', () => {
   let vfs: VFS;

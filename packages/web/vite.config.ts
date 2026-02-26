@@ -5,7 +5,7 @@ export default defineConfig({
   base: process.env.VITE_BASE ?? '/',
   resolve: {
     alias: {
-      '@wasmsand/sandbox': resolve(__dirname, '../orchestrator/src/index.ts'),
+      '@codepod/sandbox': resolve(__dirname, '../orchestrator/src/index.ts'),
     },
   },
   build: {

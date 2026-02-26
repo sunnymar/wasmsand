@@ -80,7 +80,7 @@ fn main() {
         );
         println!(
             "{:<15}{:>10}{:>10}{:>10}{:>5}{:>9}{:>10}",
-            "wasmsand", size_str, used_str, avail_str, pct_str, file_count, file_limit_str
+            "codepod", size_str, used_str, avail_str, pct_str, file_count, file_limit_str
         );
     } else {
         println!(
@@ -89,7 +89,7 @@ fn main() {
         );
         println!(
             "{:<15}{:>12}{:>12}{:>12}{:>5}{:>9}{:>10}",
-            "wasmsand", size_str, used_str, avail_str, pct_str, file_count, file_limit_str
+            "codepod", size_str, used_str, avail_str, pct_str, file_count, file_limit_str
         );
     }
 }

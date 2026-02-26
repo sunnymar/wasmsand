@@ -1,14 +1,14 @@
 [package]
-name = "wasmsand-shell"
+name = "codepod-shell"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "wasmsand-shell"
+name = "codepod-shell"
 path = "src/main.rs"
 
 [lib]
-name = "wasmsand_shell"
+name = "codepod_shell"
 path = "src/lib.rs"
 
 [dependencies]

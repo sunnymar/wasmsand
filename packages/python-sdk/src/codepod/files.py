@@ -1,6 +1,6 @@
 import base64
-from wasmsand._rpc import RpcClient
-from wasmsand._types import FileInfo
+from codepod._rpc import RpcClient
+from codepod._types import FileInfo
 
 
 class Files:

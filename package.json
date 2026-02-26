@@ -1,5 +1,5 @@
 {
-  "name": "wasmsand",
+  "name": "codepod",
   "private": true,
   "workspaces": [
     "packages/*"

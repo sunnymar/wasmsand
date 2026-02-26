@@ -8,7 +8,7 @@ import { NodeAdapter } from '../../platform/node-adapter.js';
 import { NetworkGateway } from '../../network/gateway.js';
 
 const FIXTURES = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../__tests__/fixtures/codepod-shell.wasm');
 
 describe('ShellRunner', () => {
   let vfs: VFS;

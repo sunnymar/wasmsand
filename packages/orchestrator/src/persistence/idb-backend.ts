@@ -1,7 +1,7 @@
 /**
  * IndexedDB-backed persistence backend for browser environments.
  *
- * Each namespace gets its own database: `wasmsand_<namespace>`.
+ * Each namespace gets its own database: `codepod_<namespace>`.
  * State is stored in an `state` object store under the key `vfs_state`.
  */
 
@@ -11,7 +11,7 @@ const STORE_NAME = 'state';
 const KEY = 'vfs_state';
 
 function dbName(namespace: string): string {
-  return `wasmsand_${namespace}`;
+  return `codepod_${namespace}`;
 }
 
 function openDb(namespace: string): Promise<IDBDatabase> {

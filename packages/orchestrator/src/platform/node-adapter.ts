@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 
 import type { PlatformAdapter } from './adapter.js';
 
-const EXCLUDED = new Set(['wasmsand-shell.wasm', 'python3.wasm']);
+const EXCLUDED = new Set(['codepod-shell.wasm', 'python3.wasm']);
 
 function wasmToToolName(filename: string): string {
   if (filename === 'true-cmd.wasm') return 'true';

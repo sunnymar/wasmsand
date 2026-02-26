@@ -1,6 +1,6 @@
 import pytest
-from wasmsand import Sandbox, FileInfo
-from wasmsand._rpc import RpcError
+from codepod import Sandbox, FileInfo
+from codepod._rpc import RpcError
 
 
 @pytest.fixture

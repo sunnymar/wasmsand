@@ -1,6 +1,6 @@
 """Unit tests for the VFS module (no sandbox needed)."""
 
-from wasmsand.vfs import VirtualFileSystem, MemoryFS, FileStat, DirEntry
+from codepod.vfs import VirtualFileSystem, MemoryFS, FileStat, DirEntry
 
 
 class TestMemoryFS:

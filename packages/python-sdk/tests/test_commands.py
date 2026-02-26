@@ -1,5 +1,5 @@
 import pytest
-from wasmsand import Sandbox
+from codepod import Sandbox
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ const FIXTURES = resolve(
 );
 const SHELL_WASM = resolve(
   import.meta.dirname,
-  '../../shell/__tests__/fixtures/wasmsand-shell.wasm',
+  '../../shell/__tests__/fixtures/codepod-shell.wasm',
 );
 
 const TOOLS = ['cat', 'echo', 'grep', 'sort', 'wc', 'head'];

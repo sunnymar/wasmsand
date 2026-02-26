@@ -14,7 +14,7 @@ import type { VirtualProvider } from './provider.js';
 
 const PROC_FILES = new Set(['uptime', 'version', 'cpuinfo', 'meminfo', 'diskstats']);
 
-const VERSION_STRING = 'wasmsand 1.0.0 (WASI sandbox)\n';
+const VERSION_STRING = 'codepod 1.0.0 (WASI sandbox)\n';
 
 export interface StorageStats {
   totalBytes: number;

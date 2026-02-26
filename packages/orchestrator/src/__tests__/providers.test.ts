@@ -15,7 +15,7 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
 
 describe('DevProvider (/dev)', () => {
   it('/dev/null read returns empty bytes', () => {
@@ -152,7 +152,7 @@ describe('ProcProvider (/proc)', () => {
     const vfs = new VFS();
     const data = vfs.readFile('/proc/version');
     const text = new TextDecoder().decode(data);
-    expect(text).toContain('wasmsand');
+    expect(text).toContain('codepod');
     expect(text).toContain('WASI sandbox');
   });
 
@@ -255,7 +255,7 @@ describe('Provider integration with VFS', () => {
 
     // /proc should work in clone
     const version = new TextDecoder().decode(clone.readFile('/proc/version'));
-    expect(version).toContain('wasmsand');
+    expect(version).toContain('codepod');
 
     // Listing should work
     const devEntries = clone.readdir('/dev');
@@ -298,11 +298,11 @@ describe('providers via Sandbox.run()', () => {
     expect(result.stdout).toBe('');
   });
 
-  it('cat /proc/version returns wasmsand', async () => {
+  it('cat /proc/version returns codepod', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
     const result = await sandbox.run('cat /proc/version');
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('wasmsand');
+    expect(result.stdout).toContain('codepod');
   });
 
   it('ls /dev lists devices including null', async () => {
@@ -336,7 +336,7 @@ describe('providers after snapshot/restore and fork', () => {
     try {
       const data = child.readFile('/proc/version');
       const text = new TextDecoder().decode(data);
-      expect(text).toContain('wasmsand');
+      expect(text).toContain('codepod');
     } finally {
       child.destroy();
     }
@@ -376,14 +376,14 @@ describe('providers after snapshot/restore and fork', () => {
 
     // Providers should still work
     const version1 = new TextDecoder().decode(sandbox.readFile('/proc/version'));
-    expect(version1).toContain('wasmsand');
+    expect(version1).toContain('codepod');
 
     // Second snapshot/restore
     const snap2 = sandbox.snapshot();
     sandbox.restore(snap2);
 
     const version2 = new TextDecoder().decode(sandbox.readFile('/proc/version'));
-    expect(version2).toContain('wasmsand');
+    expect(version2).toContain('codepod');
 
     // /dev should also work
     const nullData = sandbox.readFile('/dev/null');
@@ -397,8 +397,8 @@ describe('providers after snapshot/restore and fork', () => {
       // Both parent and child should have working providers
       const parentVersion = new TextDecoder().decode(sandbox.readFile('/proc/version'));
       const childVersion = new TextDecoder().decode(child.readFile('/proc/version'));
-      expect(parentVersion).toContain('wasmsand');
-      expect(childVersion).toContain('wasmsand');
+      expect(parentVersion).toContain('codepod');
+      expect(childVersion).toContain('codepod');
 
       // Both should have working /dev/null
       expect(sandbox.readFile('/dev/null').byteLength).toBe(0);

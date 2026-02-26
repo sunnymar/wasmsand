@@ -1,6 +1,6 @@
 # Mounting Host Files into the Sandbox
 
-This guide covers how to inject files from the host into the wasmsand virtual filesystem. Common use cases:
+This guide covers how to inject files from the host into the codepod virtual filesystem. Common use cases:
 
 - Providing tools or scripts for the LLM to use
 - Making user-uploaded files accessible inside the sandbox
@@ -11,8 +11,8 @@ This guide covers how to inject files from the host into the wasmsand virtual fi
 ### TypeScript
 
 ```typescript
-import { Sandbox } from '@wasmsand/sandbox';
-import { NodeAdapter } from '@wasmsand/sandbox/node';
+import { Sandbox } from '@codepod/sandbox';
+import { NodeAdapter } from '@codepod/sandbox/node';
 
 const encode = (s: string) => new TextEncoder().encode(s);
 
@@ -37,7 +37,7 @@ await sandbox.run('ls /mnt/tools');
 ### Python
 
 ```python
-from wasmsand import Sandbox
+from codepod import Sandbox
 
 with Sandbox(mounts=[
     ("/mnt/tools", {
@@ -122,7 +122,7 @@ For structured file sources, use `MemoryFS` or subclass `VirtualFileSystem`:
 `MemoryFS` wraps a flat dict with the full filesystem interface:
 
 ```python
-from wasmsand import Sandbox, MemoryFS
+from codepod import Sandbox, MemoryFS
 
 fs = MemoryFS({
     "mylib/__init__.py": b"",
@@ -156,7 +156,7 @@ Subclass `VirtualFileSystem` to serve files from any source:
 
 ```python
 import os
-from wasmsand import VirtualFileSystem, FileStat, DirEntry
+from codepod import VirtualFileSystem, FileStat, DirEntry
 
 class LocalDirFS(VirtualFileSystem):
     """Serve files from a local directory."""
@@ -208,7 +208,7 @@ When mounted, the SDK walks the VFS via `readdir()` and `read_file()` to snapsho
 In TypeScript, `mount()` accepts either a flat file dict or a `VirtualProvider`:
 
 ```typescript
-import { HostMount } from '@wasmsand/sandbox';
+import { HostMount } from '@codepod/sandbox';
 
 // Using HostMount directly
 const provider = new HostMount({
@@ -258,7 +258,7 @@ await sandbox.run('python3 -c "from mymodule.core import GREETING; print(GREETIN
 ### Python
 
 ```python
-from wasmsand import Sandbox, MemoryFS
+from codepod import Sandbox, MemoryFS
 
 lib = MemoryFS({
     "mymodule/__init__.py": b"",

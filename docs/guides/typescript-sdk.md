@@ -1,11 +1,11 @@
 # TypeScript SDK Guide
 
-This guide covers the full TypeScript SDK for wasmsand. For Python, see the [README](../../README.md) or install via `pip install wasmsand`.
+This guide covers the full TypeScript SDK for codepod. For Python, see the [README](../../README.md) or install via `pip install codepod`.
 
 ## Installation
 
 ```bash
-npm install @wasmsand/sandbox
+npm install @codepod/sandbox
 ```
 
 The package includes all WASM binaries in the `wasm/` directory.
@@ -13,12 +13,12 @@ The package includes all WASM binaries in the `wasm/` directory.
 ## Quick start
 
 ```typescript
-import { Sandbox } from '@wasmsand/sandbox';
-import { NodeAdapter } from '@wasmsand/sandbox/node';
+import { Sandbox } from '@codepod/sandbox';
+import { NodeAdapter } from '@codepod/sandbox/node';
 
 const sandbox = await Sandbox.create({
   adapter: new NodeAdapter(),
-  wasmDir: './node_modules/@wasmsand/sandbox/wasm',
+  wasmDir: './node_modules/@codepod/sandbox/wasm',
 });
 
 const result = await sandbox.run('echo hello world | wc -w');
@@ -31,8 +31,8 @@ sandbox.destroy();
 In the browser, use `BrowserAdapter`:
 
 ```typescript
-import { Sandbox } from '@wasmsand/sandbox';
-import { BrowserAdapter } from '@wasmsand/sandbox/browser';
+import { Sandbox } from '@codepod/sandbox';
+import { BrowserAdapter } from '@codepod/sandbox/browser';
 
 const sandbox = await Sandbox.create({
   adapter: new BrowserAdapter(),
@@ -58,8 +58,8 @@ const sandbox = await Sandbox.create({
   // Max VFS size in bytes (default: 256MB)
   fsLimitBytes: 128 * 1024 * 1024,
 
-  // Path to shell parser WASM (default: ${wasmDir}/wasmsand-shell.wasm)
-  shellWasmPath: './wasm/wasmsand-shell.wasm',
+  // Path to shell parser WASM (default: ${wasmDir}/codepod-shell.wasm)
+  shellWasmPath: './wasm/codepod-shell.wasm',
 
   // Network access policy (disabled by default)
   network: { allowedHosts: ['api.example.com'] },
@@ -196,7 +196,7 @@ sandbox.mount('/mnt/uploads', {
 For dynamic file sources, implement the `VirtualProvider` interface:
 
 ```typescript
-import type { VirtualProvider } from '@wasmsand/sandbox';
+import type { VirtualProvider } from '@codepod/sandbox';
 
 const dbProvider: VirtualProvider = {
   readFile(subpath: string): Uint8Array {
@@ -223,7 +223,7 @@ sandbox.mount('/mnt/db', dbProvider);
 Or use the built-in `HostMount` class:
 
 ```typescript
-import { HostMount } from '@wasmsand/sandbox';
+import { HostMount } from '@codepod/sandbox';
 
 const mount = new HostMount({
   'config.json': encode('{}'),

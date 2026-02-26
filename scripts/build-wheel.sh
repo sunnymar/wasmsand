@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PKG="$ROOT/packages/python-sdk"
-BUNDLED="$PKG/src/wasmsand/_bundled"
+BUNDLED="$PKG/src/codepod/_bundled"
 
 # Detect platform for Bun download
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"

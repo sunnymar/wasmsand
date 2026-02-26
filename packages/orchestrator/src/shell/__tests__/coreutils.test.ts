@@ -12,7 +12,7 @@ import { VFS } from '../../vfs/vfs.js';
 import { NodeAdapter } from '../../platform/node-adapter.js';
 
 const FIXTURES = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, 'fixtures/wasmsand-shell.wasm');
+const SHELL_WASM = resolve(import.meta.dirname, 'fixtures/codepod-shell.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
@@ -911,14 +911,14 @@ describe('Coreutils Integration', () => {
   });
 
   describe('new coreutils', () => {
-    it('uname returns wasmsand', async () => {
+    it('uname returns codepod', async () => {
       const result = await runner.run('uname');
-      expect(result.stdout.trim()).toBe('wasmsand');
+      expect(result.stdout.trim()).toBe('codepod');
     });
 
     it('uname -a returns full info', async () => {
       const result = await runner.run('uname -a');
-      expect(result.stdout).toContain('wasmsand');
+      expect(result.stdout).toContain('codepod');
     });
 
     it('whoami returns user', async () => {
@@ -1092,18 +1092,18 @@ describe('Coreutils Integration', () => {
   });
 
   describe('df', () => {
-    it('df shows wasmsand and Filesystem header', async () => {
+    it('df shows codepod and Filesystem header', async () => {
       const result = await runner.run('df');
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Filesystem');
-      expect(result.stdout).toContain('wasmsand');
+      expect(result.stdout).toContain('codepod');
     });
 
     it('df -h shows human-readable output', async () => {
       const result = await runner.run('df -h');
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Size');
-      expect(result.stdout).toContain('wasmsand');
+      expect(result.stdout).toContain('codepod');
     });
 
     it('df reflects current usage', async () => {
@@ -1506,12 +1506,12 @@ describe('Coreutils Integration', () => {
   describe('hostname', () => {
     it('prints hostname', async () => {
       const result = await runner.run('hostname');
-      expect(result.stdout.trim()).toBe('wasmsand');
+      expect(result.stdout.trim()).toBe('codepod');
     });
 
     it('prints FQDN with -f', async () => {
       const result = await runner.run('hostname -f');
-      expect(result.stdout.trim()).toBe('wasmsand.local');
+      expect(result.stdout.trim()).toBe('codepod.local');
     });
   });
 
