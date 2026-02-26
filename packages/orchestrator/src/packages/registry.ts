@@ -361,9 +361,9 @@ class Session:
     summary: 'SQLite database (C FFI backed)',
     dependencies: [],
     native: true,
-    pythonFiles: {
-      'sqlite3/__init__.py': '# placeholder - real impl in Task 7\n',
-    },
+    // No pythonFiles needed: the native _sqlite3 module is provided by the
+    // WASM binary and the frozen stdlib sqlite3 package imports from it.
+    pythonFiles: {},
   },
 ];
 

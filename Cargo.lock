@@ -2433,6 +2433,11 @@ dependencies = [
 [[package]]
 name = "sqlite3-native"
 version = "0.1.0"
+dependencies = [
+ "cc",
+ "rustpython-derive",
+ "rustpython-vm",
+]
 
 [[package]]
 name = "static_assertions"

@@ -113,6 +113,65 @@ print('ok')
     expect(result.stdout.trim()).toBe('1.0');
   }, 30000);
 
+  it('sqlite3 in-memory database CRUD', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      shellWasmPath: SHELL_WASM,
+      adapter: new NodeAdapter(),
+      packages: ['sqlite3'],
+    });
+    const result = await sandbox.run(`python3 -c "
+import sqlite3
+conn = sqlite3.connect(':memory:')
+cur = conn.cursor()
+cur.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)')
+cur.execute('INSERT INTO users (name, age) VALUES (?, ?)', ('Alice', 30))
+cur.execute('INSERT INTO users (name, age) VALUES (?, ?)', ('Bob', 25))
+conn.commit()
+cur.execute('SELECT name, age FROM users ORDER BY name')
+rows = cur.fetchall()
+assert len(rows) == 2, f'Expected 2 rows, got {len(rows)}'
+assert rows[0] == ('Alice', 30), f'Row 0: {rows[0]}'
+assert rows[1] == ('Bob', 25), f'Row 1: {rows[1]}'
+# Test fetchone
+cur.execute('SELECT name FROM users WHERE age = ?', (30,))
+row = cur.fetchone()
+assert row == ('Alice',), f'fetchone: {row}'
+assert cur.fetchone() is None
+# Test description
+cur.execute('SELECT id, name, age FROM users')
+desc = cur.description
+assert len(desc) == 3
+assert desc[0][0] == 'id'
+assert desc[1][0] == 'name'
+assert desc[2][0] == 'age'
+conn.close()
+print('ok')
+"`);
+    expect(result.stdout.trim()).toBe('ok');
+  }, 30000);
+
+  it('sqlite3 connection.execute shortcut', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      shellWasmPath: SHELL_WASM,
+      adapter: new NodeAdapter(),
+      packages: ['sqlite3'],
+    });
+    const result = await sandbox.run(`python3 -c "
+import sqlite3
+conn = sqlite3.connect(':memory:')
+cursor = conn.execute('CREATE TABLE t (x INTEGER)')
+conn.execute('INSERT INTO t VALUES (?)', (42,))
+cursor = conn.execute('SELECT x FROM t')
+rows = cursor.fetchall()
+assert rows == [(42,)], f'Got: {rows}'
+conn.close()
+print('ok')
+"`);
+    expect(result.stdout.trim()).toBe('ok');
+  }, 30000);
+
   it('works with no packages option', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
