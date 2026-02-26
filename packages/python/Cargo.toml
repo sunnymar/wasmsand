@@ -13,7 +13,7 @@ all-packages = ["numpy", "pandas", "pil", "matplotlib", "sklearn", "sqlite3"]
 numpy = ["dep:numpy-rust-python"]
 pandas = ["numpy", "dep:pandas-native"]
 pil = ["dep:pil-native"]
-matplotlib = ["numpy", "dep:matplotlib-native"]
+matplotlib = ["numpy", "pil"]
 sklearn = ["numpy", "dep:sklearn-native"]
 sqlite3 = ["dep:sqlite3-native"]
 
@@ -30,6 +30,5 @@ rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca6389
 numpy-rust-python = { path = "../numpy-rust/crates/numpy-rust-python", optional = true }
 pandas-native = { path = "crates/pandas", optional = true }
 pil-native = { package = "pil-rust-python", path = "../pillow-rust/crates/pil-rust-python", optional = true }
-matplotlib-native = { path = "crates/matplotlib", optional = true }
 sklearn-native = { path = "crates/sklearn", optional = true }
 sqlite3-native = { path = "crates/sqlite3", optional = true }

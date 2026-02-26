@@ -23,10 +23,7 @@ fn main() -> ExitCode {
     #[cfg(feature = "pil")]
     let config = config.add_native_module(pil_def);
 
-    #[cfg(feature = "matplotlib")]
-    let matplotlib_def = matplotlib_native::module_def(&config.ctx);
-    #[cfg(feature = "matplotlib")]
-    let config = config.add_native_module(matplotlib_def);
+    // matplotlib is pure Python — no native module needed.
 
     #[cfg(feature = "sklearn")]
     let sklearn_def = sklearn_native::module_def(&config.ctx);

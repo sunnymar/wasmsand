@@ -338,12 +338,12 @@ class Session:
   {
     name: 'matplotlib',
     version: '3.8.0',
-    summary: 'Plotting (plotters + resvg backed)',
-    dependencies: ['numpy'],
-    native: true,
-    pythonFiles: {
-      'matplotlib/__init__.py': '# placeholder - real impl in Task 10\n',
-    },
+    summary: 'Plotting (SVG + PIL backend)',
+    dependencies: ['numpy', 'PIL'],
+    native: false,
+    pythonFiles: {},
+    pythonDir: 'matplotlib-py/python',
+    pythonDirPrefix: 'matplotlib-py/python',
   },
   {
     name: 'sklearn',

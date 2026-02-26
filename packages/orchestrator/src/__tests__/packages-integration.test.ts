@@ -235,6 +235,101 @@ print(img2.size, img2.getpixel((0, 0)))
     expect(result.stdout.trim()).toBe('(10, 10) (42, 43, 44)');
   }, 30000);
 
+  it('matplotlib plot + savefig SVG', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      shellWasmPath: SHELL_WASM,
+      adapter: new NodeAdapter(),
+      packages: ['matplotlib'],
+    });
+    const result = await sandbox.run(`python3 -c "
+import matplotlib.pyplot as plt
+plt.plot([1, 2, 3], [4, 5, 6])
+plt.title('Test')
+plt.savefig('/tmp/test.svg')
+with open('/tmp/test.svg') as f:
+    content = f.read()
+print(content[:4])
+"`);
+    expect(result.stdout.trim()).toBe('<svg');
+  }, 30000);
+
+  it('matplotlib bar chart SVG', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      shellWasmPath: SHELL_WASM,
+      adapter: new NodeAdapter(),
+      packages: ['matplotlib'],
+    });
+    const result = await sandbox.run(`python3 -c "
+import matplotlib.pyplot as plt
+plt.bar([1, 2, 3], [10, 20, 15])
+plt.savefig('/tmp/bar.svg')
+with open('/tmp/bar.svg') as f:
+    content = f.read()
+assert '<svg' in content
+assert '<rect' in content
+print('ok')
+"`);
+    expect(result.stdout.trim()).toBe('ok');
+  }, 30000);
+
+  it('matplotlib scatter plot SVG', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      shellWasmPath: SHELL_WASM,
+      adapter: new NodeAdapter(),
+      packages: ['matplotlib'],
+    });
+    const result = await sandbox.run(`python3 -c "
+import matplotlib.pyplot as plt
+plt.scatter([1, 2, 3, 4], [10, 20, 15, 25])
+plt.savefig('/tmp/scatter.svg')
+with open('/tmp/scatter.svg') as f:
+    content = f.read()
+assert '<circle' in content
+print('ok')
+"`);
+    expect(result.stdout.trim()).toBe('ok');
+  }, 30000);
+
+  it('matplotlib histogram', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      shellWasmPath: SHELL_WASM,
+      adapter: new NodeAdapter(),
+      packages: ['matplotlib'],
+    });
+    const result = await sandbox.run(`python3 -c "
+import matplotlib.pyplot as plt
+data = [1, 2, 2, 3, 3, 3, 4, 4, 5]
+counts, edges, _ = plt.hist(data, bins=5)
+assert len(counts) == 5
+assert sum(counts) == len(data)
+print('ok')
+"`);
+    expect(result.stdout.trim()).toBe('ok');
+  }, 30000);
+
+  it('matplotlib savefig PNG via PIL backend', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      shellWasmPath: SHELL_WASM,
+      adapter: new NodeAdapter(),
+      packages: ['matplotlib'],
+    });
+    const result = await sandbox.run(`python3 -c "
+import matplotlib.pyplot as plt
+plt.plot([1, 2, 3], [4, 5, 6])
+plt.savefig('/tmp/test.png')
+import os
+size = os.path.getsize('/tmp/test.png')
+assert size > 100, f'PNG too small: {size}'
+print('ok')
+"`);
+    expect(result.stdout.trim()).toBe('ok');
+  }, 30000);
+
   it('works with no packages option', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
