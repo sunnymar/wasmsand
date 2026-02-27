@@ -4,6 +4,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process;
+use std::time::SystemTime;
 
 // ---------------------------------------------------------------------------
 // Glob matching (supports *, ?, and [abc] character classes)
@@ -104,6 +105,8 @@ enum Expr {
     Path(String),
     Type(char),
     Size(SizeSpec),
+    Mtime(MtimeSpec),
+    Newer(SystemTime),
     Empty,
     // Logical
     And(Box<Expr>, Box<Expr>),
@@ -123,6 +126,12 @@ enum Expr {
 struct SizeSpec {
     op: char,   // '+', '-', or '='
     bytes: u64, // value in bytes (only 'c' suffix supported for now)
+}
+
+#[derive(Debug)]
+struct MtimeSpec {
+    op: char,  // '+', '-', or '='
+    days: u64, // number of days
 }
 
 /// Execute a command with {} replaced by paths.
@@ -328,6 +337,34 @@ fn eval_expr(expr: &Expr, path: &Path, printed: &mut bool) -> bool {
                     '+' => size > spec.bytes,
                     '-' => size < spec.bytes,
                     _ => size == spec.bytes,
+                }
+            } else {
+                false
+            }
+        }
+        Expr::Mtime(spec) => {
+            if let Ok(meta) = fs::symlink_metadata(path) {
+                if let Ok(mtime) = meta.modified() {
+                    let age = SystemTime::now().duration_since(mtime).unwrap_or_default();
+                    let age_days = age.as_secs() / 86400;
+                    match spec.op {
+                        '+' => age_days > spec.days,
+                        '-' => age_days < spec.days,
+                        _ => age_days == spec.days,
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        Expr::Newer(ref_time) => {
+            if let Ok(meta) = fs::symlink_metadata(path) {
+                if let Ok(mtime) = meta.modified() {
+                    mtime > *ref_time
+                } else {
+                    false
                 }
             } else {
                 false
@@ -596,6 +633,28 @@ fn parse_primary(tokens: &[String]) -> (Expr, &[String]) {
             let spec = parse_size(&tokens[1]);
             (Expr::Size(spec), &tokens[2..])
         }
+        "-mtime" => {
+            if tokens.len() < 2 {
+                eprintln!("find: missing argument to '-mtime'");
+                process::exit(1);
+            }
+            let spec = parse_mtime(&tokens[1]);
+            (Expr::Mtime(spec), &tokens[2..])
+        }
+        "-newer" => {
+            if tokens.len() < 2 {
+                eprintln!("find: missing argument to '-newer'");
+                process::exit(1);
+            }
+            let ref_time = match fs::metadata(&tokens[1]) {
+                Ok(meta) => meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                Err(e) => {
+                    eprintln!("find: '{}': {}", tokens[1], e);
+                    process::exit(1);
+                }
+            };
+            (Expr::Newer(ref_time), &tokens[2..])
+        }
         "-empty" => (Expr::Empty, &tokens[1..]),
         "-print" => (Expr::Print, &tokens[1..]),
         "-print0" => (Expr::Print0, &tokens[1..]),
@@ -669,6 +728,24 @@ fn parse_size(s: &str) -> SizeSpec {
         _ => n * 512,       // default: 512-byte blocks
     };
     SizeSpec { op, bytes }
+}
+
+fn parse_mtime(s: &str) -> MtimeSpec {
+    let mut chars = s.chars().peekable();
+    let op = match chars.peek() {
+        Some('+') => {
+            chars.next();
+            '+'
+        }
+        Some('-') => {
+            chars.next();
+            '-'
+        }
+        _ => '=',
+    };
+    let num_str: String = chars.take_while(|c| c.is_ascii_digit()).collect();
+    let days: u64 = num_str.parse().unwrap_or(0);
+    MtimeSpec { op, days }
 }
 
 // ---------------------------------------------------------------------------

@@ -34,12 +34,29 @@ fn stat_format(path: &str, format: &str) -> i32 {
             let mut output = String::new();
             let chars: Vec<char> = format.chars().collect();
             let mut i = 0;
+            // Synthetic permissions: 755 for dirs, 644 for files
+            let mode: u32 = if meta.is_dir() { 0o40755 } else { 0o100644 };
+            let perm_bits: u32 = mode & 0o7777;
             while i < chars.len() {
                 if chars[i] == '%' && i + 1 < chars.len() {
                     match chars[i + 1] {
                         'n' => output.push_str(path),
                         's' => output.push_str(&meta.len().to_string()),
                         'F' => output.push_str(file_type(&meta)),
+                        'a' => output.push_str(&format!("{:o}", perm_bits)),
+                        'A' => output.push_str(&format_permissions(mode)),
+                        'f' => output.push_str(&format!("{:x}", mode)),
+                        'i' => output.push('0'), // inode not available in WASM VFS
+                        'h' => output.push('1'), // hard link count
+                        'd' => output.push('0'), // device number
+                        'U' => output.push_str("root"),
+                        'G' => output.push_str("root"),
+                        'u' => output.push('0'), // uid
+                        'g' => output.push('0'), // gid
+                        'X' => output.push('0'), // atime epoch
+                        'Y' => output.push('0'), // mtime epoch
+                        'Z' => output.push('0'), // ctime epoch
+                        'W' => output.push('0'), // birth epoch
                         other => {
                             output.push('%');
                             output.push(other);
@@ -70,6 +87,25 @@ fn stat_format(path: &str, format: &str) -> i32 {
             1
         }
     }
+}
+
+/// Format permission bits as ls-style string (e.g. -rw-r--r--)
+fn format_permissions(mode: u32) -> String {
+    let file_type_ch = match mode & 0o170000 {
+        0o040000 => 'd',
+        0o120000 => 'l',
+        _ => '-',
+    };
+    let perms = mode & 0o777;
+    let mut s = String::with_capacity(10);
+    s.push(file_type_ch);
+    for shift in [6, 3, 0] {
+        let bits = (perms >> shift) & 7;
+        s.push(if bits & 4 != 0 { 'r' } else { '-' });
+        s.push(if bits & 2 != 0 { 'w' } else { '-' });
+        s.push(if bits & 1 != 0 { 'x' } else { '-' });
+    }
+    s
 }
 
 fn main() {

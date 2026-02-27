@@ -764,19 +764,34 @@ export class ShellRunner extends ShellBuiltins {
         result = { ...EMPTY_RESULT };
       }
     } else if (cmdName === 'readonly') {
-      // readonly VAR=value or readonly VAR
-      for (const arg of args) {
-        const eqIdx = arg.indexOf('=');
-        if (eqIdx !== -1) {
-          const name = arg.slice(0, eqIdx);
-          const value = arg.slice(eqIdx + 1);
-          this.env.set(name, value);
-          this.readonlyVars.add(name);
-        } else {
-          this.readonlyVars.add(arg);
+      // readonly -p: print all readonly variables
+      if (args.length === 0 || (args.length === 1 && args[0] === '-p')) {
+        let stdout = '';
+        const sorted = [...this.readonlyVars].sort();
+        for (const name of sorted) {
+          const value = this.env.get(name);
+          if (value !== undefined) {
+            stdout += `declare -r ${name}="${value}"\n`;
+          } else {
+            stdout += `declare -r ${name}\n`;
+          }
         }
+        result = { exitCode: 0, stdout, stderr: '', executionTimeMs: 0 };
+      } else {
+        // readonly VAR=value or readonly VAR
+        for (const arg of args) {
+          const eqIdx = arg.indexOf('=');
+          if (eqIdx !== -1) {
+            const name = arg.slice(0, eqIdx);
+            const value = arg.slice(eqIdx + 1);
+            this.env.set(name, value);
+            this.readonlyVars.add(name);
+          } else {
+            this.readonlyVars.add(arg);
+          }
+        }
+        result = { ...EMPTY_RESULT };
       }
-      result = { ...EMPTY_RESULT };
     } else if (cmdName === 'trap') {
       result = this.builtinTrap(args);
     } else if (cmdName === 'declare' || cmdName === 'typeset') {

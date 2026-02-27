@@ -219,8 +219,8 @@ describe('ShellRunner', () => {
       runner.setEnv('A', '1');
       runner.setEnv('B', '2');
       const result = await runner.run('export');
-      expect(result.stdout).toContain('A=1');
-      expect(result.stdout).toContain('B=2');
+      expect(result.stdout).toContain('declare -x A="1"');
+      expect(result.stdout).toContain('declare -x B="2"');
     });
 
     it('export FOO with no value is a no-op', async () => {

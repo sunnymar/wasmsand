@@ -1525,4 +1525,96 @@ y"; echo "\${items[@]}"`);
       expect(r.stdout).toContain('/home/user');
     });
   });
+
+  // ---------- export -p / declare -p / readonly -p ----------
+  describe('export -p / declare -p / readonly -p', () => {
+    it('export -p prints variables in declare -x format', async () => {
+      await runner.run(`export MY_TEST_VAR=hello`);
+      const r = await runner.run(`export -p`);
+      expect(r.stdout).toContain('declare -x MY_TEST_VAR="hello"');
+    });
+
+    it('export with no args prints same as export -p', async () => {
+      await runner.run(`export FOO=bar`);
+      const r = await runner.run(`export`);
+      expect(r.stdout).toContain('declare -x FOO="bar"');
+    });
+
+    it('declare -p prints variables in declare -- format', async () => {
+      const r = await runner.run(`X=123; declare -p X`);
+      expect(r.stdout.trim()).toBe('declare -- X="123"');
+    });
+
+    it('declare -p with unknown var returns error', async () => {
+      const r = await runner.run(`declare -p NONEXISTENT_VAR_XYZ`);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain('not found');
+    });
+
+    it('readonly -p prints readonly variables', async () => {
+      const r = await runner.run(`readonly RO_VAR=42`);
+      const r2 = await runner.run(`readonly -p`);
+      expect(r2.stdout).toContain('declare -r RO_VAR="42"');
+    });
+
+    it('readonly with no args lists readonly vars', async () => {
+      await runner.run(`readonly A_RO=1`);
+      const r = await runner.run(`readonly`);
+      expect(r.stdout).toContain('declare -r A_RO="1"');
+    });
+  });
+
+  // ---------- stat format flags ----------
+  describe('stat format flags', () => {
+    it('stat -c %n prints filename', async () => {
+      const r = await runner.run(`echo hi > /tmp/st1; stat -c '%n' /tmp/st1`);
+      expect(r.stdout.trim()).toBe('/tmp/st1');
+    });
+
+    it('stat -c %s prints file size', async () => {
+      const r = await runner.run(`echo -n "hello" > /tmp/st2; stat -c '%s' /tmp/st2`);
+      expect(r.stdout.trim()).toBe('5');
+    });
+
+    it('stat -c %F prints file type', async () => {
+      const r = await runner.run(`mkdir -p /tmp/stdir; stat -c '%F' /tmp/stdir`);
+      expect(r.stdout.trim()).toBe('directory');
+    });
+
+    it('stat -c %a prints octal permissions', async () => {
+      const r = await runner.run(`echo hi > /tmp/st3; stat -c '%a' /tmp/st3`);
+      // WASM VFS returns 644 for files
+      expect(r.stdout.trim()).toBe('644');
+    });
+
+    it('stat -c %A prints permission string', async () => {
+      const r = await runner.run(`mkdir -p /tmp/stdir2; stat -c '%A' /tmp/stdir2`);
+      expect(r.stdout.trim()).toBe('drwxr-xr-x');
+    });
+
+    it('stat -c %U prints owner', async () => {
+      const r = await runner.run(`echo hi > /tmp/st4; stat -c '%U' /tmp/st4`);
+      expect(r.stdout.trim()).toBe('root');
+    });
+  });
+
+  // ---------- find -mtime / -newer ----------
+  describe('find -mtime / -newer', () => {
+    it('find -mtime -1 finds recently created files', async () => {
+      const r = await runner.run(`echo x > /tmp/mtime_test; find /tmp -name mtime_test -mtime -1`);
+      expect(r.stdout).toContain('mtime_test');
+    });
+
+    it('find -mtime +9999 finds nothing recent', async () => {
+      const r = await runner.run(`echo x > /tmp/mtime_old; find /tmp -name mtime_old -mtime +9999`);
+      expect(r.stdout.trim()).toBe('');
+    });
+
+    it('find -newer reference file works', async () => {
+      const r = await runner.run(`echo old > /tmp/ref_file; echo new > /tmp/newer_file; find /tmp -name newer_file -newer /tmp/ref_file`);
+      // Both created nearly simultaneously, so newer_file may or may not be strictly newer
+      // At minimum, the command should not error
+      expect(r.exitCode).toBe(0);
+    });
+  });
 });

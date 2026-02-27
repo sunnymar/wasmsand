@@ -103,10 +103,12 @@ export abstract class ShellBuiltins {
 
   /** Builtin: export — set env variables (alias for assignment). */
   protected builtinExport(args: string[]): RunResult {
-    if (args.length === 0) {
+    // export -p: print all exported variables in declarable form
+    if (args.length === 0 || (args.length === 1 && args[0] === '-p')) {
       let stdout = '';
-      for (const [key, value] of this.env) {
-        stdout += `${key}=${value}\n`;
+      const sorted = [...this.env.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [key, value] of sorted) {
+        stdout += `declare -x ${key}="${value}"\n`;
       }
       return { exitCode: 0, stdout, stderr: '', executionTimeMs: 0 };
     }
@@ -172,6 +174,7 @@ export abstract class ShellBuiltins {
     let assoc = false;
     let indexed = false;
     let doExport = false;
+    let printMode = false;
     const assignments: string[] = [];
 
     for (let i = 0; i < args.length; i++) {
@@ -184,12 +187,35 @@ export abstract class ShellBuiltins {
             case 'i': break; // integer attribute — ignored
             case 'x': doExport = true; break;
             case 'r': break; // readonly — ignored
+            case 'p': printMode = true; break;
             default: break;
           }
         }
       } else {
         assignments.push(arg);
       }
+    }
+
+    // declare -p [NAME...]: print variables in declarable form
+    if (printMode) {
+      let stdout = '';
+      if (assignments.length === 0) {
+        // Print all variables
+        const sorted = [...this.env.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+        for (const [key, value] of sorted) {
+          stdout += `declare -- ${key}="${value}"\n`;
+        }
+      } else {
+        for (const name of assignments) {
+          const value = this.env.get(name);
+          if (value !== undefined) {
+            stdout += `declare -- ${name}="${value}"\n`;
+          } else {
+            return { exitCode: 1, stdout, stderr: `declare: ${name}: not found\n`, executionTimeMs: 0 };
+          }
+        }
+      }
+      return { exitCode: 0, stdout, stderr: '', executionTimeMs: 0 };
     }
 
     for (const assign of assignments) {
