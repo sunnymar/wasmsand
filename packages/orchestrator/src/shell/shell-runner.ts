@@ -520,6 +520,16 @@ export class ShellRunner extends ShellBuiltins {
     if ('Case' in cmd) {
       return this.execCase((cmd as { Case: { word: Word; items: CaseItem[] } }).Case);
     }
+    if ('DoubleBracket' in cmd) {
+      const expr = (cmd as { DoubleBracket: { expr: string } }).DoubleBracket.expr;
+      const result = await this.evalDoubleBracket(expr);
+      return { exitCode: result ? 0 : 1, stdout: '', stderr: '', executionTimeMs: 0 };
+    }
+    if ('ArithmeticCommand' in cmd) {
+      const expr = (cmd as { ArithmeticCommand: { expr: string } }).ArithmeticCommand.expr;
+      const val = this.evalArithmetic(expr);
+      return { exitCode: val !== 0 ? 0 : 1, stdout: '', stderr: '', executionTimeMs: 0 };
+    }
     return EMPTY_RESULT;
   }
 
@@ -784,6 +794,17 @@ export class ShellRunner extends ShellBuiltins {
         exitCode = val === 0 ? 1 : 0;
       }
       result = { exitCode, stdout: '', stderr: '', executionTimeMs: 0 };
+    } else if (cmdName === 'printf') {
+      // Handle printf -v (assign to variable) as builtin
+      if (args.length >= 3 && args[0] === '-v') {
+        const varName = args[1];
+        const output = this.formatPrintf(args.slice(2));
+        this.env.set(varName, output);
+        result = { exitCode: 0, stdout: '', stderr: '', executionTimeMs: 0 };
+      }
+      // Without -v, fall through to external printf tool
+    } else if (cmdName === 'mapfile' || cmdName === 'readarray') {
+      result = this.builtinMapfile(args, stdinData);
     }
 
     if (!result) {
@@ -1910,6 +1931,55 @@ export class ShellRunner extends ShellBuiltins {
     return result;
   }
 
+  /** Simple printf format string processor for -v flag. */
+  private formatPrintf(args: string[]): string {
+    if (args.length === 0) return '';
+    const fmt = args[0];
+    const fmtArgs = args.slice(1);
+    let result = '';
+    let argIdx = 0;
+    let i = 0;
+    while (i < fmt.length) {
+      if (fmt[i] === '\\') {
+        i++;
+        if (i < fmt.length) {
+          switch (fmt[i]) {
+            case 'n': result += '\n'; break;
+            case 't': result += '\t'; break;
+            case '\\': result += '\\'; break;
+            case '0': result += '\0'; break;
+            default: result += '\\' + fmt[i];
+          }
+          i++;
+        }
+      } else if (fmt[i] === '%') {
+        i++;
+        if (i >= fmt.length) break;
+        if (fmt[i] === '%') { result += '%'; i++; continue; }
+        // Skip flags, width, precision
+        while (i < fmt.length && '-+ 0#'.includes(fmt[i])) i++;
+        while (i < fmt.length && /\d/.test(fmt[i])) i++;
+        if (i < fmt.length && fmt[i] === '.') { i++; while (i < fmt.length && /\d/.test(fmt[i])) i++; }
+        const spec = i < fmt.length ? fmt[i] : '';
+        i++;
+        const arg = argIdx < fmtArgs.length ? fmtArgs[argIdx++] : '';
+        switch (spec) {
+          case 's': result += arg; break;
+          case 'd': case 'i': result += String(parseInt(arg) || 0); break;
+          case 'f': result += String(parseFloat(arg) || 0); break;
+          case 'x': result += (parseInt(arg) || 0).toString(16); break;
+          case 'X': result += (parseInt(arg) || 0).toString(16).toUpperCase(); break;
+          case 'o': result += (parseInt(arg) || 0).toString(8); break;
+          case 'c': result += arg.charAt(0); break;
+          default: result += arg;
+        }
+      } else {
+        result += fmt[i++];
+      }
+    }
+    return result;
+  }
+
   /** Resolve a variable name from assignment context, supporting arrays and assoc arrays. */
   private resolveAssignmentVar(varName: string): string {
     const arrMatch = varName.match(/^(\w+)\[(.+)\]$/);
@@ -2202,6 +2272,159 @@ export class ShellRunner extends ShellBuiltins {
       }
     }
     return matches;
+  }
+
+  /** Evaluate a [[ ... ]] conditional expression. */
+  private async evalDoubleBracket(expr: string): Promise<boolean> {
+    const tokens = await this.tokenizeCondExpr(expr);
+    return this.evalCondTokens(tokens);
+  }
+
+  /** Tokenize a [[ ]] expression, expanding variables. */
+  private async tokenizeCondExpr(expr: string): Promise<string[]> {
+    const tokens: string[] = [];
+    let i = 0;
+    while (i < expr.length) {
+      while (i < expr.length && (expr[i] === ' ' || expr[i] === '\t')) i++;
+      if (i >= expr.length) break;
+
+      // Two-char operators
+      const two = expr.slice(i, i + 2);
+      if (two === '&&' || two === '||' || two === '=~' || two === '!=' || two === '==') {
+        tokens.push(two); i += 2; continue;
+      }
+      // Single-char operators
+      if (expr[i] === '!' || expr[i] === '(' || expr[i] === ')' ||
+          expr[i] === '<' || expr[i] === '>' || expr[i] === '=') {
+        tokens.push(expr[i]); i++; continue;
+      }
+      // Quoted string
+      if (expr[i] === '"' || expr[i] === "'") {
+        const quote = expr[i]; i++;
+        let s = '';
+        while (i < expr.length && expr[i] !== quote) {
+          if (quote === '"' && expr[i] === '$') {
+            i++;
+            if (i < expr.length && expr[i] === '{') {
+              const end = expr.indexOf('}', i + 1);
+              const varName = end >= 0 ? expr.slice(i + 1, end) : expr.slice(i + 1);
+              s += this.resolveAssignmentVar(varName);
+              i = end >= 0 ? end + 1 : expr.length;
+            } else {
+              let varName = '';
+              while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) varName += expr[i++];
+              s += this.env.get(varName) ?? '';
+            }
+          } else {
+            s += expr[i++];
+          }
+        }
+        if (i < expr.length) i++; // skip closing quote
+        tokens.push(s); continue;
+      }
+      // Variable expansion
+      if (expr[i] === '$') {
+        i++;
+        if (i < expr.length && expr[i] === '{') {
+          const end = expr.indexOf('}', i + 1);
+          const varName = end >= 0 ? expr.slice(i + 1, end) : expr.slice(i + 1);
+          tokens.push(this.resolveAssignmentVar(varName));
+          i = end >= 0 ? end + 1 : expr.length;
+        } else {
+          let varName = '';
+          while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) varName += expr[i++];
+          if (varName === '?') {
+            tokens.push(String(this.lastExitCode));
+          } else {
+            tokens.push(this.env.get(varName) ?? '');
+          }
+        }
+        continue;
+      }
+      // Unquoted word
+      let word = '';
+      while (i < expr.length && !/[\s&|!=<>()$"']/.test(expr[i])) word += expr[i++];
+      if (word.length > 0) tokens.push(word);
+    }
+    return tokens;
+  }
+
+  /** Evaluate tokenized [[ ]] expression with && || ! ( ) support. */
+  private evalCondTokens(tokens: string[]): boolean {
+    let pos = 0;
+
+    const parseOr = (): boolean => {
+      let result = parseAnd();
+      while (pos < tokens.length && tokens[pos] === '||') {
+        pos++;
+        result = parseAnd() || result;
+      }
+      return result;
+    };
+
+    const parseAnd = (): boolean => {
+      let result = parsePrimary();
+      while (pos < tokens.length && tokens[pos] === '&&') {
+        pos++;
+        result = parsePrimary() && result;
+      }
+      return result;
+    };
+
+    const parsePrimary = (): boolean => {
+      if (pos >= tokens.length) return false;
+
+      // Negation
+      if (tokens[pos] === '!') {
+        pos++;
+        return !parsePrimary();
+      }
+
+      // Grouped expression
+      if (tokens[pos] === '(') {
+        pos++;
+        const result = parseOr();
+        if (pos < tokens.length && tokens[pos] === ')') pos++;
+        return result;
+      }
+
+      // Unary operators
+      if (tokens[pos].startsWith('-') && tokens[pos].length === 2 && pos + 1 < tokens.length) {
+        const op = tokens[pos];
+        const val = tokens[pos + 1];
+        if (['-z', '-n', '-f', '-d', '-e', '-s', '-r', '-w', '-x'].includes(op)) {
+          pos += 2;
+          return this.evalTest([op, val]);
+        }
+      }
+
+      // Look ahead for binary operator
+      if (pos + 2 <= tokens.length) {
+        const left = tokens[pos];
+        const op = tokens[pos + 1];
+        if (op === '==' || op === '=' || op === '!=' || op === '=~' ||
+            op === '<' || op === '>' ||
+            op === '-eq' || op === '-ne' || op === '-lt' || op === '-le' ||
+            op === '-gt' || op === '-ge') {
+          const right = tokens[pos + 2] ?? '';
+          pos += 3;
+          if (op === '=~') {
+            try { return new RegExp(right).test(left); }
+            catch { return false; }
+          }
+          if (op === '<') return left < right;
+          if (op === '>') return left > right;
+          return this.evalTest([left, op, right]);
+        }
+      }
+
+      // Single value: true if non-empty
+      const val = tokens[pos];
+      pos++;
+      return val.length > 0;
+    };
+
+    return parseOr();
   }
 
   private async execCase(caseCmd: { word: Word; items: CaseItem[] }): Promise<RunResult> {

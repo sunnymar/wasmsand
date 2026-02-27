@@ -89,6 +89,8 @@ impl Parser {
                     | Token::Case
                     | Token::LBrace
                     | Token::Until
+                    | Token::DoubleBracket(_)
+                    | Token::DoubleParen(_)
             ),
         }
     }
@@ -199,6 +201,21 @@ impl Parser {
                 self.expect(&Token::RBrace);
                 Command::BraceGroup {
                     body: Box::new(body),
+                }
+            }
+            Some(Token::DoubleBracket(_)) => {
+                if let Token::DoubleBracket(expr) = self.advance() {
+                    Command::DoubleBracket { expr }
+                } else {
+                    unreachable!()
+                }
+            }
+            Some(Token::DoubleParen(_)) => {
+                // Standalone (( expr )) — arithmetic command
+                if let Token::DoubleParen(expr) = self.advance() {
+                    Command::ArithmeticCommand { expr }
+                } else {
+                    unreachable!()
                 }
             }
             Some(Token::Break) => {

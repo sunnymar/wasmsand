@@ -335,6 +335,36 @@ export abstract class ShellBuiltins {
     return false;
   }
 
+  /** Builtin: mapfile/readarray — read lines from stdin into an array. */
+  protected builtinMapfile(args: string[], stdinData: Uint8Array | undefined): RunResult {
+    let stripNewline = false;
+    let maxLines = 0;
+    let arrayName = 'MAPFILE';
+    const positional: string[] = [];
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-t') {
+        stripNewline = true;
+      } else if (args[i] === '-n' && i + 1 < args.length) {
+        maxLines = parseInt(args[++i], 10) || 0;
+      } else if (!args[i].startsWith('-')) {
+        positional.push(args[i]);
+      }
+    }
+    if (positional.length > 0) arrayName = positional[0];
+
+    const input = stdinData ? new TextDecoder().decode(stdinData) : '';
+    let lines = input.split('\n');
+    // Remove trailing empty element from final newline
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    if (maxLines > 0) lines = lines.slice(0, maxLines);
+    if (stripNewline) {
+      lines = lines.map(l => l.replace(/\n$/, ''));
+    }
+    this.arrays.set(arrayName, lines);
+    return { ...EMPTY_RESULT };
+  }
+
   /** Builtin: echo — print arguments to stdout. */
   protected builtinEcho(args: string[]): RunResult {
     let trailingNewline = true;

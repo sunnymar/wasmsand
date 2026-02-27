@@ -7,7 +7,7 @@ import type { ErrorClass } from '../security.js';
 // ---- Constants ----
 
 export const PYTHON_COMMANDS = new Set(['python3', 'python']);
-export const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg', 'pip', 'history', 'source', '.', 'set', 'read', 'eval', 'getopts', 'return', 'local', 'trap', 'declare', 'typeset', 'shift', 'type', 'command', 'let']);
+export const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg', 'pip', 'history', 'source', '.', 'set', 'read', 'eval', 'getopts', 'return', 'local', 'trap', 'declare', 'typeset', 'shift', 'type', 'command', 'let', 'printf', 'mapfile', 'readarray']);
 export const SHELL_COMMANDS = new Set(['sh', 'bash']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */
@@ -71,7 +71,9 @@ export type Command =
   | 'Continue'
   | { Negate: { body: Command } }
   | { Function: { name: string; body: Command } }
-  | { Case: { word: Word; items: CaseItem[] } };
+  | { Case: { word: Word; items: CaseItem[] } }
+  | { DoubleBracket: { expr: string } }
+  | { ArithmeticCommand: { expr: string } };
 
 export type ListOp = 'And' | 'Or' | 'Seq';
 

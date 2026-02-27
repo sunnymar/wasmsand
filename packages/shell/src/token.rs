@@ -57,6 +57,8 @@ pub enum Token {
     RBrace,
     /// `(( ... ))` — arithmetic/C-for expression (raw content between the parens).
     DoubleParen(String),
+    /// `[[ ... ]]` — conditional expression (raw content between brackets).
+    DoubleBracket(String),
 }
 
 /// The kind of I/O redirection.

@@ -114,6 +114,10 @@ pub enum Command {
     Function { name: String, body: Box<Command> },
     /// Case statement.
     Case { word: Word, items: Vec<CaseItem> },
+    /// Conditional expression: [[ ... ]].
+    DoubleBracket { expr: String },
+    /// Standalone arithmetic: (( expr )).
+    ArithmeticCommand { expr: String },
 }
 
 /// A single arm of a case statement.

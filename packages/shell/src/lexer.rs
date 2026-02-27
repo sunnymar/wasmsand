@@ -113,6 +113,26 @@ pub fn lex(input: &str) -> Vec<Token> {
             // characters in the word (enabling brace expansion patterns).
         }
 
+        // [[ ... ]] — conditional expression (capture raw content)
+        if pos + 1 < len && chars[pos] == '[' && chars[pos + 1] == '[' {
+            // Check next non-space is not just a word starting with [[
+            let after = if pos + 2 < len { chars[pos + 2] } else { ' ' };
+            if after == ' ' || after == '\t' || after == '\n' {
+                pos += 2; // skip "[["
+                let mut content = String::new();
+                while pos < len {
+                    if pos + 1 < len && chars[pos] == ']' && chars[pos + 1] == ']' {
+                        pos += 2; // skip "]]"
+                        break;
+                    }
+                    content.push(chars[pos]);
+                    pos += 1;
+                }
+                tokens.push(Token::DoubleBracket(content.trim().to_string()));
+                continue;
+            }
+        }
+
         // Bang (pipeline negation) — standalone ! at command start position
         // Only emit Bang if it's the first token or follows a pipe/semi/newline/&&/||/(
         if chars[pos] == '!' && (pos + 1 >= len || chars[pos + 1] == ' ' || chars[pos + 1] == '\t')

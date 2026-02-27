@@ -1137,4 +1137,117 @@ describe('shell conformance', () => {
       expect(r.stdout.trim()).toBe('11');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // [[ ... ]] conditional expression
+  // ---------------------------------------------------------------------------
+  describe('[[ ]] conditional', () => {
+    it('string equality', async () => {
+      const r = await runner.run(`x=hello; [[ $x == hello ]] && echo yes || echo no`);
+      expect(r.stdout).toBe('yes\n');
+    });
+
+    it('string inequality', async () => {
+      const r = await runner.run(`x=hello; [[ $x != world ]] && echo yes || echo no`);
+      expect(r.stdout).toBe('yes\n');
+    });
+
+    it('-z and -n tests', async () => {
+      const r = await runner.run(`[[ -z "" ]] && echo empty; [[ -n "hi" ]] && echo nonempty`);
+      expect(r.stdout).toBe('empty\nnonempty\n');
+    });
+
+    it('-f file test', async () => {
+      const r = await runner.run(`echo x > /tmp/bb_test.txt; [[ -f /tmp/bb_test.txt ]] && echo yes`);
+      expect(r.stdout).toBe('yes\n');
+    });
+
+    it('&& and || logical operators', async () => {
+      const r = await runner.run(`[[ -n "a" && -n "b" ]] && echo both`);
+      expect(r.stdout).toBe('both\n');
+    });
+
+    it('! negation', async () => {
+      const r = await runner.run(`[[ ! -z "hello" ]] && echo yes`);
+      expect(r.stdout).toBe('yes\n');
+    });
+
+    it('=~ regex match', async () => {
+      const r = await runner.run(`x=hello123; [[ $x =~ [0-9]+ ]] && echo match || echo no`);
+      expect(r.stdout).toBe('match\n');
+    });
+
+    it('numeric comparison with -gt', async () => {
+      const r = await runner.run(`x=10; [[ $x -gt 5 ]] && echo yes`);
+      expect(r.stdout).toBe('yes\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (( )) standalone arithmetic command
+  // ---------------------------------------------------------------------------
+  describe('(( )) arithmetic command', () => {
+    it('returns 0 for nonzero expression', async () => {
+      const r = await runner.run(`(( 5 > 3 )) && echo yes`);
+      expect(r.stdout).toBe('yes\n');
+    });
+
+    it('returns 1 for zero expression', async () => {
+      const r = await runner.run(`(( 0 )); echo $?`);
+      expect(r.stdout).toBe('1\n');
+    });
+
+    it('modifies variables', async () => {
+      const r = await runner.run(`x=5; (( x++ )); echo $x`);
+      expect(r.stdout).toBe('6\n');
+    });
+
+    it('used in if condition', async () => {
+      const r = await runner.run(`x=10; if (( x > 5 )); then echo big; fi`);
+      expect(r.stdout).toBe('big\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // printf -v (assign to variable)
+  // ---------------------------------------------------------------------------
+  describe('printf -v', () => {
+    it('assigns formatted output to variable', async () => {
+      const r = await runner.run(`printf -v result "%d + %d = %d" 2 3 5; echo "$result"`);
+      expect(r.stdout).toBe('2 + 3 = 5\n');
+    });
+
+    it('regular printf still works', async () => {
+      const r = await runner.run(`printf "hello %s\\n" world`);
+      expect(r.stdout).toBe('hello world\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // mapfile / readarray
+  // ---------------------------------------------------------------------------
+  describe('mapfile', () => {
+    it('reads lines into array', async () => {
+      const r = await runner.run(`mapfile arr <<< "a
+b
+c"; echo "\${arr[0]}" "\${arr[1]}" "\${arr[2]}"`);
+      expect(r.stdout).toBe('a b c\n');
+    });
+
+    it('-t strips trailing newline', async () => {
+      const r = await runner.run(`printf "hello\\nworld\\n" > /tmp/mf.txt; mapfile -t lines < /tmp/mf.txt; echo "\${#lines[@]}"`);
+      expect(r.stdout).toBe('2\n');
+    });
+
+    it('-n limits lines', async () => {
+      const r = await runner.run(`printf "a\\nb\\nc\\nd\\n" > /tmp/mf2.txt; mapfile -n 2 arr < /tmp/mf2.txt; echo "\${#arr[@]}"`);
+      expect(r.stdout).toBe('2\n');
+    });
+
+    it('readarray is alias for mapfile', async () => {
+      const r = await runner.run(`readarray items <<< "x
+y"; echo "\${items[@]}"`);
+      expect(r.stdout).toBe('x y\n');
+    });
+  });
 });
