@@ -10,6 +10,7 @@ import type { PlatformAdapter } from '../platform/adapter.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
+import { createPythonImports } from '../host-imports/python-imports.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
 
@@ -114,7 +115,39 @@ export class ProcessManager {
       }
     }
 
+    // If the module imports from the `codepod` namespace, inject Python host
+    // imports using a memory proxy (memory comes from instance exports, which
+    // aren't available until after instantiation).
+    const moduleImportDescs = WebAssembly.Module.imports(module);
+    const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
+
+    let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
+
+    if (needsCodepod) {
+      let memRef: WebAssembly.Memory | null = null;
+      setMemoryRef = (mem: WebAssembly.Memory) => { memRef = mem; };
+
+      const memoryProxy = new Proxy({} as WebAssembly.Memory, {
+        get(_target, prop) {
+          if (!memRef) throw new Error('memory not initialized');
+          const val = (memRef as unknown as Record<string | symbol, unknown>)[prop];
+          return typeof val === 'function' ? (val as Function).bind(memRef) : val;
+        },
+      });
+
+      imports.codepod = createPythonImports({
+        memory: memoryProxy,
+        networkBridge: this.networkBridge ?? undefined,
+        extensionHandler: this.extensionHandler ?? undefined,
+      });
+    }
+
     const instance = await this.adapter.instantiate(module, imports);
+
+    // Wire up the real memory reference for the codepod import proxy
+    if (setMemoryRef) {
+      setMemoryRef(instance.exports.memory as WebAssembly.Memory);
+    }
 
     // Check exported memory against limit
     if (opts.memoryBytes !== undefined) {
