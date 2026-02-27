@@ -1,5 +1,5 @@
 /**
- * Python socket module replacement that routes through a host control fd.
+ * Python socket module replacement that routes HTTP through _codepod.fetch().
  *
  * This source is written to the VFS at /usr/lib/python/socket.py by
  * Sandbox.create() when networking is enabled. It shadows RustPython's
@@ -7,18 +7,14 @@
  */
 export const SOCKET_SHIM_SOURCE = `\
 """
-Wasmsand socket shim — routes HTTP through host control fd.
+Wasmsand socket shim — routes HTTP through _codepod.fetch().
 
 Replaces the standard socket module. Supports connect/send/recv/makefile
 for HTTP client use (requests, urllib, http.client).
 """
 
-import os as _os
+import _codepod
 import json as _json
-
-# Control fd for host communication — must match CONTROL_FD in wasi-host.ts
-# and fit in a signed 32-bit int (RustPython's os.write uses i32 for fd).
-CONTROL_FD = 1023
 
 # Constants expected by http.client and urllib3
 AF_INET = 2
@@ -103,14 +99,6 @@ def getnameinfo(sockaddr, flags):
     return (str(host), str(port))
 
 
-def _control(cmd):
-    """Send a JSON command to the host control fd, read JSON response."""
-    payload = _json.dumps(cmd).encode('utf-8') + b"\\n"
-    _os.write(CONTROL_FD, payload)
-    data = _os.read(CONTROL_FD, 16 * 1024 * 1024)
-    return _json.loads(data)
-
-
 class socket:
     """Minimal socket implementing the subset needed for HTTP clients."""
 
@@ -119,7 +107,6 @@ class socket:
         self._type = type
         self._host = None
         self._port = None
-        self._conn_id = None
         self._timeout = None
         self._sendbuf = b""
         self._recvbuf = b""
@@ -131,8 +118,6 @@ class socket:
             port = int(port)
         self._host = host
         self._port = port
-        resp = _control({"cmd": "connect", "host": host, "port": port})
-        self._conn_id = resp["id"]
 
     def connect_ex(self, address):
         try:
@@ -189,11 +174,7 @@ class socket:
         return -1
 
     def close(self):
-        if self._conn_id and not self._closed:
-            try:
-                _control({"cmd": "close", "id": self._conn_id})
-            except Exception:
-                pass
+        if not self._closed:
             self._closed = True
 
     def shutdown(self, how):
@@ -219,7 +200,7 @@ class socket:
         return True
 
     def _flush_request(self):
-        """Parse buffered HTTP request, send via control fd, buffer response."""
+        """Parse buffered HTTP request, send via _codepod.fetch(), buffer response."""
         raw = self._sendbuf.decode("utf-8", errors="replace")
         head, _, body = raw.partition("\\r\\n\\r\\n")
         first_line, _, header_block = head.partition("\\r\\n")
@@ -231,14 +212,9 @@ class socket:
             if ": " in line:
                 k, v = line.split(": ", 1)
                 headers[k] = v
-        resp = _control({
-            "cmd": "request",
-            "id": self._conn_id,
-            "method": method,
-            "path": path,
-            "headers": headers,
-            "body": body,
-        })
+        scheme = "https" if self._port == 443 else "http"
+        url = "{}://{}:{}{}".format(scheme, self._host, self._port, path)
+        resp = _codepod.fetch(method, url, headers, body if body else None)
         if not resp.get("ok"):
             raise OSError(resp.get("error", "request failed"))
         status = resp.get("status", 200)
