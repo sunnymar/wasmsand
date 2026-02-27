@@ -1,4 +1,5 @@
 pub mod arithmetic;
+pub mod builtins;
 pub mod control;
 pub mod executor;
 pub mod expand;

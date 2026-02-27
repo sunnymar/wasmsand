@@ -1,0 +1,2635 @@
+//! Shell builtin commands.
+//!
+//! Each builtin is checked *before* `host.spawn()` so that commands like
+//! `echo`, `cd`, `export`, etc. are handled in-process without a round-trip
+//! to the host.
+
+use std::collections::HashMap;
+
+use crate::arithmetic::eval_arithmetic;
+use crate::control::RunResult;
+use crate::host::HostInterface;
+use crate::state::{ShellFlag, ShellState};
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+/// Result of a builtin execution.
+pub enum BuiltinResult {
+    /// Normal command result (stdout, stderr, exit code).
+    Result(RunResult),
+    /// The `exit` builtin was invoked with the given code.
+    Exit(i32),
+    /// The `return` builtin was invoked with the given code.
+    Return(i32),
+}
+
+/// Callback that parses + executes a shell command string, returning a
+/// `RunResult`.  Used by `eval` and `source` builtins.
+pub type RunFn<'a> = &'a dyn Fn(&mut ShellState, &str) -> RunResult;
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
+/// Try to handle `cmd_name` as a shell builtin.
+///
+/// Returns `Some(BuiltinResult)` if it is a builtin, `None` if the executor
+/// should fall through to function lookup / `host.spawn()`.
+pub fn try_builtin(
+    state: &mut ShellState,
+    host: &dyn HostInterface,
+    cmd_name: &str,
+    args: &[String],
+    stdin_data: &str,
+    run: Option<RunFn>,
+) -> Option<BuiltinResult> {
+    match cmd_name {
+        "echo" => Some(builtin_echo(args)),
+        "printf" => builtin_printf(state, args),
+        "true" | ":" => Some(BuiltinResult::Result(RunResult::empty())),
+        "false" => Some(BuiltinResult::Result(RunResult::error(1, String::new()))),
+        "pwd" => Some(builtin_pwd(state)),
+        "cd" => Some(builtin_cd(state, host, args)),
+        "exit" => Some(builtin_exit(state, args)),
+        "export" => Some(builtin_export(state, args)),
+        "unset" => Some(builtin_unset(state, args)),
+        "set" => Some(builtin_set(state, args)),
+        "local" => Some(builtin_local(state, args)),
+        "declare" | "typeset" => Some(builtin_declare(state, args)),
+        "test" => Some(builtin_test(state, host, args)),
+        "[" => Some(builtin_bracket_test(state, host, args)),
+        "read" => Some(builtin_read(state, args, stdin_data)),
+        "shift" => Some(builtin_shift(state, args)),
+        "type" => Some(builtin_type(state, host, args)),
+        "command" => builtin_command(host, args),
+        "let" => Some(builtin_let(state, args)),
+        "which" => Some(builtin_which(host, args)),
+        "source" | "." => Some(builtin_source(state, host, args, run)),
+        "eval" => Some(builtin_eval(state, args, run)),
+        "return" => Some(builtin_return(state, args)),
+        "history" => Some(builtin_history(state, args)),
+        "trap" => Some(builtin_trap(state, args)),
+        "getopts" => Some(builtin_getopts(state, args)),
+        "mapfile" | "readarray" => Some(builtin_mapfile(state, args, stdin_data)),
+        "chmod" => Some(builtin_chmod(state, host, args)),
+        "date" => Some(builtin_date(host, args)),
+        "exec" => builtin_exec(args),
+        "readonly" => Some(builtin_readonly(state, args)),
+        // Network / package commands -- fall through to spawn
+        "curl" | "wget" | "pkg" | "pip" => None,
+        _ => None,
+    }
+}
+
+/// Returns true if `cmd_name` is the name of a builtin command.
+pub fn is_builtin(cmd_name: &str) -> bool {
+    matches!(
+        cmd_name,
+        "echo"
+            | "printf"
+            | "true"
+            | ":"
+            | "false"
+            | "pwd"
+            | "cd"
+            | "exit"
+            | "export"
+            | "unset"
+            | "set"
+            | "local"
+            | "declare"
+            | "typeset"
+            | "test"
+            | "["
+            | "read"
+            | "shift"
+            | "type"
+            | "command"
+            | "let"
+            | "which"
+            | "source"
+            | "."
+            | "eval"
+            | "return"
+            | "history"
+            | "trap"
+            | "getopts"
+            | "mapfile"
+            | "readarray"
+            | "chmod"
+            | "date"
+            | "exec"
+            | "readonly"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Path normalization
+// ---------------------------------------------------------------------------
+
+/// Normalize a path by resolving `.` and `..` segments.
+pub fn normalize_path(path: &str) -> String {
+    let is_absolute = path.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if !parts.is_empty() {
+                    parts.pop();
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+
+    if is_absolute {
+        if parts.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}", parts.join("/"))
+        }
+    } else if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Individual builtins
+// ---------------------------------------------------------------------------
+
+// -- echo -----------------------------------------------------------------
+
+fn builtin_echo(args: &[String]) -> BuiltinResult {
+    let mut newline = true;
+    let mut interpret_escapes = false;
+    let mut arg_start = 0;
+
+    // Parse flags: only consecutive leading args matching /^-[neE]+$/
+    for (i, arg) in args.iter().enumerate() {
+        if arg.starts_with('-') && arg.len() > 1 && arg[1..].chars().all(|c| "neE".contains(c)) {
+            for ch in arg[1..].chars() {
+                match ch {
+                    'n' => newline = false,
+                    'e' => interpret_escapes = true,
+                    'E' => interpret_escapes = false,
+                    _ => {}
+                }
+            }
+            arg_start = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    let body = args[arg_start..].join(" ");
+    let output = if interpret_escapes {
+        interpret_echo_escapes(&body)
+    } else {
+        (body, false)
+    };
+
+    let mut text = output.0;
+    // \c in -e mode suppresses trailing newline and stops output
+    if !output.1 && newline {
+        text.push('\n');
+    }
+
+    BuiltinResult::Result(RunResult::success(text))
+}
+
+/// Interpret echo escape sequences. Returns (output, stop) where stop=true
+/// means `\c` was encountered.
+fn interpret_echo_escapes(s: &str) -> (String, bool) {
+    let mut out = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            i += 1;
+            match chars[i] {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                '\\' => out.push('\\'),
+                'a' => out.push('\x07'),
+                'b' => out.push('\x08'),
+                'f' => out.push('\x0C'),
+                'v' => out.push('\x0B'),
+                'c' => return (out, true),
+                '0' => {
+                    // Octal: \0NNN (up to 3 octal digits)
+                    let mut val = 0u32;
+                    let mut count = 0;
+                    while count < 3
+                        && i + 1 < chars.len()
+                        && chars[i + 1] >= '0'
+                        && chars[i + 1] <= '7'
+                    {
+                        i += 1;
+                        val = val * 8 + (chars[i] as u32 - '0' as u32);
+                        count += 1;
+                    }
+                    if let Some(c) = char::from_u32(val) {
+                        out.push(c);
+                    }
+                }
+                'x' => {
+                    // Hex: \xHH (up to 2 hex digits)
+                    let mut val = 0u32;
+                    let mut count = 0;
+                    while count < 2 && i + 1 < chars.len() && chars[i + 1].is_ascii_hexdigit() {
+                        i += 1;
+                        val = val * 16 + chars[i].to_digit(16).unwrap();
+                        count += 1;
+                    }
+                    if count > 0 {
+                        if let Some(c) = char::from_u32(val) {
+                            out.push(c);
+                        }
+                    } else {
+                        out.push('\\');
+                        out.push('x');
+                    }
+                }
+                other => {
+                    out.push('\\');
+                    out.push(other);
+                }
+            }
+        } else {
+            out.push(chars[i]);
+        }
+        i += 1;
+    }
+    (out, false)
+}
+
+// -- printf ---------------------------------------------------------------
+
+fn builtin_printf(state: &mut ShellState, args: &[String]) -> Option<BuiltinResult> {
+    if args.is_empty() {
+        return Some(BuiltinResult::Result(RunResult::error(
+            1,
+            "printf: usage: printf [-v var] format [arguments]\n".into(),
+        )));
+    }
+
+    let mut arg_idx = 0;
+    let mut var_name: Option<String> = None;
+
+    // Check for -v VAR
+    if args.len() >= 2 && args[0] == "-v" {
+        var_name = Some(args[1].clone());
+        arg_idx = 2;
+    }
+
+    // Without -v, fall through to spawn
+    var_name.as_ref()?;
+
+    if arg_idx >= args.len() {
+        return Some(BuiltinResult::Result(RunResult::error(
+            1,
+            "printf: usage: printf [-v var] format [arguments]\n".into(),
+        )));
+    }
+
+    let format = &args[arg_idx];
+    arg_idx += 1;
+    let fmt_args = &args[arg_idx..];
+
+    let output = format_printf(format, fmt_args);
+
+    if let Some(name) = var_name {
+        state.env.insert(name, output);
+    }
+
+    Some(BuiltinResult::Result(RunResult::empty()))
+}
+
+fn format_printf(format: &str, args: &[String]) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = format.chars().collect();
+    let mut i = 0;
+    let mut arg_idx = 0;
+
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            i += 1;
+            match chars[i] {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                '\\' => out.push('\\'),
+                '"' => out.push('"'),
+                'r' => out.push('\r'),
+                _ => {
+                    out.push('\\');
+                    out.push(chars[i]);
+                }
+            }
+        } else if chars[i] == '%' && i + 1 < chars.len() {
+            i += 1;
+            match chars[i] {
+                '%' => out.push('%'),
+                's' => {
+                    if arg_idx < args.len() {
+                        out.push_str(&args[arg_idx]);
+                        arg_idx += 1;
+                    }
+                }
+                'd' => {
+                    let val = if arg_idx < args.len() {
+                        let s = &args[arg_idx];
+                        arg_idx += 1;
+                        s.parse::<i64>().unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    out.push_str(&val.to_string());
+                }
+                'f' => {
+                    let val = if arg_idx < args.len() {
+                        let s = &args[arg_idx];
+                        arg_idx += 1;
+                        s.parse::<f64>().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    out.push_str(&format!("{:.6}", val));
+                }
+                'x' => {
+                    let val = if arg_idx < args.len() {
+                        let s = &args[arg_idx];
+                        arg_idx += 1;
+                        s.parse::<i64>().unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    out.push_str(&format!("{:x}", val));
+                }
+                'o' => {
+                    let val = if arg_idx < args.len() {
+                        let s = &args[arg_idx];
+                        arg_idx += 1;
+                        s.parse::<i64>().unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    out.push_str(&format!("{:o}", val));
+                }
+                'c' => {
+                    if arg_idx < args.len() {
+                        let s = &args[arg_idx];
+                        arg_idx += 1;
+                        if let Some(c) = s.chars().next() {
+                            out.push(c);
+                        }
+                    }
+                }
+                other => {
+                    out.push('%');
+                    out.push(other);
+                }
+            }
+        } else {
+            out.push(chars[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+// -- pwd ------------------------------------------------------------------
+
+fn builtin_pwd(state: &ShellState) -> BuiltinResult {
+    BuiltinResult::Result(RunResult::success(format!("{}\n", state.cwd)))
+}
+
+// -- cd -------------------------------------------------------------------
+
+fn builtin_cd(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
+    let target = if args.is_empty() {
+        state
+            .env
+            .get("HOME")
+            .cloned()
+            .unwrap_or_else(|| "/home/user".to_string())
+    } else if args[0] == "-" {
+        match state.env.get("OLDPWD").cloned() {
+            Some(old) => old,
+            None => {
+                return BuiltinResult::Result(RunResult::error(1, "cd: OLDPWD not set\n".into()));
+            }
+        }
+    } else {
+        args[0].clone()
+    };
+
+    // Resolve relative path
+    let resolved = if target.starts_with('/') {
+        target.clone()
+    } else {
+        format!("{}/{}", state.cwd, target)
+    };
+    let normalized = normalize_path(&resolved);
+
+    // Check that the target is a directory
+    match host.stat(&normalized) {
+        Ok(info) => {
+            if !info.exists || !info.is_dir {
+                return BuiltinResult::Result(RunResult::error(
+                    1,
+                    format!("cd: {}: Not a directory\n", args.first().unwrap_or(&target)),
+                ));
+            }
+        }
+        Err(_) => {
+            return BuiltinResult::Result(RunResult::error(
+                1,
+                format!(
+                    "cd: {}: No such file or directory\n",
+                    args.first().unwrap_or(&target)
+                ),
+            ));
+        }
+    }
+
+    // Update OLDPWD, PWD, and state.cwd
+    let old_cwd = state.cwd.clone();
+    state.env.insert("OLDPWD".to_string(), old_cwd);
+    state.cwd = normalized.clone();
+    state.env.insert("PWD".to_string(), normalized);
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- exit -----------------------------------------------------------------
+
+fn builtin_exit(state: &ShellState, args: &[String]) -> BuiltinResult {
+    let code = if args.is_empty() {
+        state.last_exit_code
+    } else {
+        args[0].parse::<i32>().unwrap_or(2)
+    };
+    BuiltinResult::Exit(code)
+}
+
+// -- export ---------------------------------------------------------------
+
+fn builtin_export(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    if args.is_empty() || (args.len() == 1 && args[0] == "-p") {
+        // Print all env vars sorted
+        let mut vars: Vec<(&String, &String)> = state.env.iter().collect();
+        vars.sort_by_key(|(k, _)| (*k).clone());
+        let mut output = String::new();
+        for (k, v) in vars {
+            output.push_str(&format!("declare -x {}=\"{}\"\n", k, v));
+        }
+        return BuiltinResult::Result(RunResult::success(output));
+    }
+
+    for arg in args {
+        if arg == "-p" {
+            continue;
+        }
+        if let Some(eq_pos) = arg.find('=') {
+            let name = &arg[..eq_pos];
+            let value = &arg[eq_pos + 1..];
+            state.env.insert(name.to_string(), value.to_string());
+        } else {
+            // export NAME without value: mark it (already in env if set)
+            state.env.entry(arg.clone()).or_default();
+        }
+    }
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- unset ----------------------------------------------------------------
+
+fn builtin_unset(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    for arg in args {
+        // Check for array element: arr[idx]
+        if let Some(bracket_pos) = arg.find('[') {
+            if arg.ends_with(']') {
+                let name = &arg[..bracket_pos];
+                let idx_str = &arg[bracket_pos + 1..arg.len() - 1];
+
+                // Try indexed array
+                if let Ok(idx) = idx_str.parse::<usize>() {
+                    if let Some(arr) = state.arrays.get_mut(name) {
+                        if idx < arr.len() {
+                            arr[idx] = String::new();
+                        }
+                        continue;
+                    }
+                }
+
+                // Try associative array
+                if let Some(map) = state.assoc_arrays.get_mut(name) {
+                    map.remove(idx_str);
+                    continue;
+                }
+            }
+        }
+
+        state.env.remove(arg);
+        state.arrays.remove(arg);
+        state.assoc_arrays.remove(arg);
+    }
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- set ------------------------------------------------------------------
+
+fn builtin_set(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    if args.is_empty() {
+        return BuiltinResult::Result(RunResult::empty());
+    }
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        if arg == "--" {
+            // Set positional parameters
+            state.positional_args = args[i + 1..].to_vec();
+            return BuiltinResult::Result(RunResult::empty());
+        } else if arg.starts_with('-') || arg.starts_with('+') {
+            let add = arg.starts_with('-');
+            let flag_chars = &arg[1..];
+
+            if flag_chars == "o" {
+                // -o / +o option
+                i += 1;
+                if i < args.len() {
+                    let opt = &args[i];
+                    match opt.as_str() {
+                        "pipefail" => {
+                            if add {
+                                state.flags.insert(ShellFlag::Pipefail);
+                            } else {
+                                state.flags.remove(&ShellFlag::Pipefail);
+                            }
+                        }
+                        "errexit" => {
+                            if add {
+                                state.flags.insert(ShellFlag::Errexit);
+                            } else {
+                                state.flags.remove(&ShellFlag::Errexit);
+                            }
+                        }
+                        "nounset" => {
+                            if add {
+                                state.flags.insert(ShellFlag::Nounset);
+                            } else {
+                                state.flags.remove(&ShellFlag::Nounset);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                for ch in flag_chars.chars() {
+                    match ch {
+                        'e' => {
+                            if add {
+                                state.flags.insert(ShellFlag::Errexit);
+                            } else {
+                                state.flags.remove(&ShellFlag::Errexit);
+                            }
+                        }
+                        'u' => {
+                            if add {
+                                state.flags.insert(ShellFlag::Nounset);
+                            } else {
+                                state.flags.remove(&ShellFlag::Nounset);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- local ----------------------------------------------------------------
+
+fn builtin_local(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    if state.local_var_stack.is_empty() {
+        return BuiltinResult::Result(RunResult::error(
+            1,
+            "local: can only be used in a function\n".into(),
+        ));
+    }
+
+    for arg in args {
+        if let Some(eq_pos) = arg.find('=') {
+            let name = &arg[..eq_pos];
+            let value = &arg[eq_pos + 1..];
+
+            // Save previous value in the current local frame
+            let prev = state.env.get(name).cloned();
+            if let Some(frame) = state.local_var_stack.last_mut() {
+                frame.entry(name.to_string()).or_insert(prev);
+            }
+
+            state.env.insert(name.to_string(), value.to_string());
+        } else {
+            // local VAR (no value): save previous and set to empty
+            let prev = state.env.get(arg).cloned();
+            if let Some(frame) = state.local_var_stack.last_mut() {
+                frame.entry(arg.clone()).or_insert(prev);
+            }
+            state.env.entry(arg.clone()).or_default();
+        }
+    }
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- declare / typeset ----------------------------------------------------
+
+fn builtin_declare(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    let mut is_assoc = false;
+    let mut is_array = false;
+    let mut is_export = false;
+    let mut is_print = false;
+    let mut assignments: Vec<&String> = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "-A" => is_assoc = true,
+            "-a" => is_array = true,
+            "-x" => is_export = true,
+            "-p" => is_print = true,
+            _ => assignments.push(arg),
+        }
+    }
+
+    if is_print {
+        let mut output = String::new();
+        for arg in &assignments {
+            if let Some(val) = state.env.get(*arg) {
+                output.push_str(&format!("declare -- {}=\"{}\"\n", arg, val));
+            } else if let Some(arr) = state.arrays.get(*arg) {
+                let items: Vec<String> = arr
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| format!("[{}]=\"{}\"", idx, v))
+                    .collect();
+                output.push_str(&format!("declare -a {}=({})\n", arg, items.join(" ")));
+            } else if let Some(map) = state.assoc_arrays.get(*arg) {
+                let mut items: Vec<String> = map
+                    .iter()
+                    .map(|(k, v)| format!("[{}]=\"{}\"", k, v))
+                    .collect();
+                items.sort();
+                output.push_str(&format!("declare -A {}=({})\n", arg, items.join(" ")));
+            }
+        }
+        if assignments.is_empty() {
+            // Print all variables
+            let mut vars: Vec<(&String, &String)> = state.env.iter().collect();
+            vars.sort_by_key(|(k, _)| (*k).clone());
+            for (k, v) in vars {
+                output.push_str(&format!("declare -- {}=\"{}\"\n", k, v));
+            }
+        }
+        return BuiltinResult::Result(RunResult::success(output));
+    }
+
+    for arg in assignments {
+        if let Some(eq_pos) = arg.find('=') {
+            let name = &arg[..eq_pos];
+            let value = &arg[eq_pos + 1..];
+
+            if is_assoc {
+                // declare -A map=([key1]=val1 [key2]=val2)
+                let map = parse_assoc_array_literal(value);
+                state.assoc_arrays.insert(name.to_string(), map);
+            } else if is_array {
+                // declare -a arr=(elem1 elem2)
+                let arr = parse_array_literal(value);
+                state.arrays.insert(name.to_string(), arr);
+            } else {
+                state.env.insert(name.to_string(), value.to_string());
+                if is_export {
+                    // already in env, which is our "exported" set
+                }
+            }
+
+            // Save to local frame if in function
+            if let Some(frame) = state.local_var_stack.last_mut() {
+                let prev = if is_assoc || is_array {
+                    None
+                } else {
+                    state.env.get(name).cloned()
+                };
+                frame.entry(name.to_string()).or_insert(prev);
+            }
+        } else {
+            // declare VAR without value
+            if is_assoc {
+                state.assoc_arrays.entry(arg.clone()).or_default();
+            } else if is_array {
+                state.arrays.entry(arg.clone()).or_default();
+            } else {
+                state.env.entry(arg.clone()).or_default();
+            }
+        }
+    }
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+/// Parse `([key1]=val1 [key2]=val2)` into a HashMap.
+fn parse_assoc_array_literal(value: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let inner = value.trim();
+    let inner = if inner.starts_with('(') && inner.ends_with(')') {
+        &inner[1..inner.len() - 1]
+    } else {
+        inner
+    };
+
+    // Parse [key]=value pairs
+    let mut i = 0;
+    let chars: Vec<char> = inner.chars().collect();
+    while i < chars.len() {
+        // Skip whitespace
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if i >= chars.len() {
+            break;
+        }
+        if chars[i] == '[' {
+            i += 1;
+            let key_start = i;
+            while i < chars.len() && chars[i] != ']' {
+                i += 1;
+            }
+            let key: String = chars[key_start..i].iter().collect();
+            i += 1; // skip ]
+            if i < chars.len() && chars[i] == '=' {
+                i += 1;
+                let val = read_value(&chars, &mut i);
+                map.insert(key, val);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    map
+}
+
+/// Parse `(elem1 elem2 ...)` into a Vec.
+fn parse_array_literal(value: &str) -> Vec<String> {
+    let inner = value.trim();
+    let inner = if inner.starts_with('(') && inner.ends_with(')') {
+        &inner[1..inner.len() - 1]
+    } else {
+        inner
+    };
+    inner.split_whitespace().map(|s| s.to_string()).collect()
+}
+
+/// Read a value from characters, handling quotes.
+fn read_value(chars: &[char], i: &mut usize) -> String {
+    if *i < chars.len() && chars[*i] == '"' {
+        *i += 1;
+        let start = *i;
+        while *i < chars.len() && chars[*i] != '"' {
+            *i += 1;
+        }
+        let val: String = chars[start..*i].iter().collect();
+        if *i < chars.len() {
+            *i += 1; // skip closing quote
+        }
+        val
+    } else {
+        let start = *i;
+        while *i < chars.len() && !chars[*i].is_whitespace() && chars[*i] != ')' {
+            *i += 1;
+        }
+        chars[start..*i].iter().collect()
+    }
+}
+
+// -- test / [ -------------------------------------------------------------
+
+fn builtin_test(state: &ShellState, host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
+    let result = eval_test_expr(state, host, args);
+    let code = if result { 0 } else { 1 };
+    BuiltinResult::Result(RunResult {
+        exit_code: code,
+        stdout: String::new(),
+        stderr: String::new(),
+        execution_time_ms: 0,
+    })
+}
+
+fn builtin_bracket_test(
+    state: &ShellState,
+    host: &dyn HostInterface,
+    args: &[String],
+) -> BuiltinResult {
+    // Remove trailing ]
+    let test_args = if !args.is_empty() && args.last().map(|s| s.as_str()) == Some("]") {
+        &args[..args.len() - 1]
+    } else {
+        args
+    };
+    builtin_test(state, host, test_args)
+}
+
+fn eval_test_expr(state: &ShellState, host: &dyn HostInterface, args: &[String]) -> bool {
+    if args.is_empty() {
+        return false;
+    }
+
+    // Handle negation
+    if args[0] == "!" {
+        return !eval_test_expr(state, host, &args[1..]);
+    }
+
+    // Look for -o (OR) at the top level
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "-o" && i > 0 && i < args.len() - 1 {
+            let left = eval_test_expr(state, host, &args[..i]);
+            let right = eval_test_expr(state, host, &args[i + 1..]);
+            return left || right;
+        }
+    }
+    // Look for -a (AND) at the top level
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "-a" && i > 0 && i < args.len() - 1 {
+            let left = eval_test_expr(state, host, &args[..i]);
+            let right = eval_test_expr(state, host, &args[i + 1..]);
+            return left && right;
+        }
+    }
+
+    // Single argument: true if non-empty
+    if args.len() == 1 {
+        return !args[0].is_empty();
+    }
+
+    // Two arguments: unary test
+    if args.len() == 2 {
+        let op = &args[0];
+        let val = &args[1];
+        return match op.as_str() {
+            "-z" => val.is_empty(),
+            "-n" => !val.is_empty(),
+            "-f" => {
+                let path = state.resolve_path(val);
+                host.stat(&path)
+                    .map(|s| s.exists && s.is_file)
+                    .unwrap_or(false)
+            }
+            "-d" => {
+                let path = state.resolve_path(val);
+                host.stat(&path)
+                    .map(|s| s.exists && s.is_dir)
+                    .unwrap_or(false)
+            }
+            "-e" => {
+                let path = state.resolve_path(val);
+                host.stat(&path).map(|s| s.exists).unwrap_or(false)
+            }
+            "-s" => {
+                let path = state.resolve_path(val);
+                host.stat(&path)
+                    .map(|s| s.exists && s.size > 0)
+                    .unwrap_or(false)
+            }
+            "-r" | "-w" | "-x" => {
+                // In our sandbox, just check existence
+                let path = state.resolve_path(val);
+                host.stat(&path).map(|s| s.exists).unwrap_or(false)
+            }
+            _ => !val.is_empty(), // single arg: true if non-empty
+        };
+    }
+
+    // Three arguments: binary test
+    if args.len() == 3 {
+        let left = &args[0];
+        let op = &args[1];
+        let right = &args[2];
+
+        return match op.as_str() {
+            "=" | "==" => left == right,
+            "!=" => left != right,
+            "-eq" => left.parse::<i64>().unwrap_or(0) == right.parse::<i64>().unwrap_or(0),
+            "-ne" => left.parse::<i64>().unwrap_or(0) != right.parse::<i64>().unwrap_or(0),
+            "-lt" => left.parse::<i64>().unwrap_or(0) < right.parse::<i64>().unwrap_or(0),
+            "-le" => left.parse::<i64>().unwrap_or(0) <= right.parse::<i64>().unwrap_or(0),
+            "-gt" => left.parse::<i64>().unwrap_or(0) > right.parse::<i64>().unwrap_or(0),
+            "-ge" => left.parse::<i64>().unwrap_or(0) >= right.parse::<i64>().unwrap_or(0),
+            _ => false,
+        };
+    }
+
+    false
+}
+
+// -- read -----------------------------------------------------------------
+
+fn builtin_read(state: &mut ShellState, args: &[String], stdin_data: &str) -> BuiltinResult {
+    let mut raw = false;
+    let mut delimiter = '\n';
+    let mut nchars: Option<usize> = None;
+    let mut array_mode = false;
+    let mut array_name = String::new();
+    let mut var_names: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-r" => raw = true,
+            "-d" => {
+                i += 1;
+                if i < args.len() && !args[i].is_empty() {
+                    delimiter = args[i].chars().next().unwrap_or('\n');
+                }
+            }
+            "-n" => {
+                i += 1;
+                if i < args.len() {
+                    nchars = args[i].parse().ok();
+                }
+            }
+            "-a" => {
+                i += 1;
+                if i < args.len() {
+                    array_mode = true;
+                    array_name = args[i].clone();
+                }
+            }
+            other => {
+                var_names.push(other.to_string());
+            }
+        }
+        i += 1;
+    }
+
+    // Read input
+    let input = if let Some(n) = nchars {
+        &stdin_data[..stdin_data.len().min(n)]
+    } else {
+        // Read up to delimiter
+        match stdin_data.find(delimiter) {
+            Some(pos) => &stdin_data[..pos],
+            None => stdin_data,
+        }
+    };
+
+    let input = if !raw {
+        // Process backslash continuations (simplistic)
+        input.replace("\\\n", "")
+    } else {
+        input.to_string()
+    };
+
+    if array_mode {
+        let parts: Vec<String> = input.split_whitespace().map(|s| s.to_string()).collect();
+        state.arrays.insert(array_name, parts);
+    } else if var_names.is_empty() {
+        state.env.insert("REPLY".to_string(), input.to_string());
+    } else if var_names.len() == 1 {
+        state
+            .env
+            .insert(var_names[0].clone(), input.trim().to_string());
+    } else {
+        let parts: Vec<&str> = input.splitn(var_names.len(), char::is_whitespace).collect();
+        for (j, name) in var_names.iter().enumerate() {
+            let val = parts.get(j).unwrap_or(&"").to_string();
+            state.env.insert(name.clone(), val);
+        }
+    }
+
+    // Exit code: 0 unless input was empty (EOF)
+    let code = if stdin_data.is_empty() { 1 } else { 0 };
+    BuiltinResult::Result(RunResult {
+        exit_code: code,
+        stdout: String::new(),
+        stderr: String::new(),
+        execution_time_ms: 0,
+    })
+}
+
+// -- shift ----------------------------------------------------------------
+
+fn builtin_shift(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    let n = if args.is_empty() {
+        1usize
+    } else {
+        args[0].parse::<usize>().unwrap_or(1)
+    };
+
+    if n > state.positional_args.len() {
+        return BuiltinResult::Result(RunResult::error(
+            1,
+            "shift: shift count out of range\n".into(),
+        ));
+    }
+
+    state.positional_args = state.positional_args[n..].to_vec();
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- type -----------------------------------------------------------------
+
+fn builtin_type(state: &ShellState, host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
+    let mut output = String::new();
+    let mut code = 0;
+
+    for arg in args {
+        if is_builtin(arg) {
+            output.push_str(&format!("{} is a shell builtin\n", arg));
+        } else if state.functions.contains_key(arg) {
+            output.push_str(&format!("{} is a function\n", arg));
+        } else if host.has_tool(arg) {
+            output.push_str(&format!("{} is /bin/{}\n", arg, arg));
+        } else {
+            output.push_str(&format!("{}: not found\n", arg));
+            code = 1;
+        }
+    }
+
+    BuiltinResult::Result(RunResult {
+        exit_code: code,
+        stdout: output,
+        stderr: String::new(),
+        execution_time_ms: 0,
+    })
+}
+
+// -- command ---------------------------------------------------------------
+
+fn builtin_command(host: &dyn HostInterface, args: &[String]) -> Option<BuiltinResult> {
+    if args.is_empty() {
+        return Some(BuiltinResult::Result(RunResult::empty()));
+    }
+
+    if args[0] == "-v" {
+        // Check if command exists
+        if args.len() < 2 {
+            return Some(BuiltinResult::Result(RunResult::error(1, String::new())));
+        }
+        let name = &args[1];
+        if is_builtin(name) || host.has_tool(name) {
+            return Some(BuiltinResult::Result(RunResult::success(format!(
+                "{}\n",
+                name
+            ))));
+        }
+        return Some(BuiltinResult::Result(RunResult::error(1, String::new())));
+    }
+
+    // Without -v, return None to fall through to spawn (bypassing functions)
+    None
+}
+
+// -- let ------------------------------------------------------------------
+
+fn builtin_let(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    let mut last_val = 0i64;
+    for arg in args {
+        last_val = eval_arithmetic(state, arg);
+    }
+    // Exit code: 0 if last result is non-zero, 1 if zero
+    let code = if last_val != 0 { 0 } else { 1 };
+    BuiltinResult::Result(RunResult {
+        exit_code: code,
+        stdout: String::new(),
+        stderr: String::new(),
+        execution_time_ms: 0,
+    })
+}
+
+// -- which ----------------------------------------------------------------
+
+fn builtin_which(host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
+    if args.is_empty() {
+        return BuiltinResult::Result(RunResult::empty());
+    }
+
+    let mut output = String::new();
+    let mut code = 0;
+
+    for arg in args {
+        if host.has_tool(arg) {
+            output.push_str(&format!("/bin/{}\n", arg));
+        } else {
+            code = 1;
+        }
+    }
+
+    BuiltinResult::Result(RunResult {
+        exit_code: code,
+        stdout: output,
+        stderr: String::new(),
+        execution_time_ms: 0,
+    })
+}
+
+// -- source / . -----------------------------------------------------------
+
+fn builtin_source(
+    state: &mut ShellState,
+    host: &dyn HostInterface,
+    args: &[String],
+    run: Option<RunFn>,
+) -> BuiltinResult {
+    if args.is_empty() {
+        return BuiltinResult::Result(RunResult::error(
+            1,
+            "source: filename argument required\n".into(),
+        ));
+    }
+
+    let path = state.resolve_path(&args[0]);
+    let content = match host.read_file(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            return BuiltinResult::Result(RunResult::error(
+                1,
+                format!("source: {}: {}\n", args[0], e),
+            ));
+        }
+    };
+
+    // Strip shebang line
+    let script = if content.starts_with("#!") {
+        match content.find('\n') {
+            Some(pos) => &content[pos + 1..],
+            None => "",
+        }
+    } else {
+        &content
+    };
+
+    if let Some(run_fn) = run {
+        // Set BASH_SOURCE
+        let prev_bash_source = state.env.get("BASH_SOURCE").cloned();
+        state.env.insert("BASH_SOURCE".to_string(), args[0].clone());
+
+        let result = run_fn(state, script);
+
+        // Restore BASH_SOURCE
+        if let Some(prev) = prev_bash_source {
+            state.env.insert("BASH_SOURCE".to_string(), prev);
+        } else {
+            state.env.remove("BASH_SOURCE");
+        }
+
+        BuiltinResult::Result(result)
+    } else {
+        BuiltinResult::Result(RunResult::error(1, "source: no runner available\n".into()))
+    }
+}
+
+// -- eval -----------------------------------------------------------------
+
+fn builtin_eval(state: &mut ShellState, args: &[String], run: Option<RunFn>) -> BuiltinResult {
+    if args.is_empty() {
+        return BuiltinResult::Result(RunResult::empty());
+    }
+
+    let cmd_str = args.join(" ");
+
+    if let Some(run_fn) = run {
+        let result = run_fn(state, &cmd_str);
+        BuiltinResult::Result(result)
+    } else {
+        BuiltinResult::Result(RunResult::error(1, "eval: no runner available\n".into()))
+    }
+}
+
+// -- return ---------------------------------------------------------------
+
+fn builtin_return(state: &ShellState, args: &[String]) -> BuiltinResult {
+    let code = if args.is_empty() {
+        state.last_exit_code
+    } else {
+        args[0].parse::<i32>().unwrap_or(0)
+    };
+    BuiltinResult::Return(code)
+}
+
+// -- history --------------------------------------------------------------
+
+fn builtin_history(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    if args.first().map(|s| s.as_str()) == Some("clear") {
+        state.history.clear();
+        return BuiltinResult::Result(RunResult::empty());
+    }
+
+    // Show history entries
+    let mut output = String::new();
+    for (i, entry) in state.history.iter().enumerate() {
+        output.push_str(&format!("  {}  {}\n", i + 1, entry));
+    }
+
+    BuiltinResult::Result(RunResult::success(output))
+}
+
+// -- trap -----------------------------------------------------------------
+
+fn builtin_trap(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    if args.is_empty() {
+        // Print all traps
+        let mut output = String::new();
+        let mut traps: Vec<(&String, &String)> = state.traps.iter().collect();
+        traps.sort_by_key(|(k, _)| (*k).clone());
+        for (signal, action) in traps {
+            output.push_str(&format!("trap -- '{}' {}\n", action, signal));
+        }
+        return BuiltinResult::Result(RunResult::success(output));
+    }
+
+    if args.len() < 2 {
+        return BuiltinResult::Result(RunResult::error(
+            1,
+            "trap: usage: trap action signal...\n".into(),
+        ));
+    }
+
+    let action = &args[0];
+    for signal in &args[1..] {
+        if action.is_empty() {
+            state.traps.remove(signal);
+        } else {
+            state.traps.insert(signal.clone(), action.clone());
+        }
+    }
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- getopts --------------------------------------------------------------
+
+fn builtin_getopts(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    if args.len() < 2 {
+        return BuiltinResult::Result(RunResult::error(
+            1,
+            "getopts: usage: getopts optstring name [args]\n".into(),
+        ));
+    }
+
+    let optstring = &args[0];
+    let var_name = &args[1];
+    let opt_args: Vec<&str> = if args.len() > 2 {
+        args[2..].iter().map(|s| s.as_str()).collect()
+    } else {
+        state.positional_args.iter().map(|s| s.as_str()).collect()
+    };
+
+    let optind: usize = state
+        .env
+        .get("OPTIND")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    let idx = optind - 1; // Convert 1-based to 0-based
+
+    if idx >= opt_args.len() {
+        state.env.insert(var_name.clone(), "?".to_string());
+        return BuiltinResult::Result(RunResult::error(1, String::new()));
+    }
+
+    let current = opt_args[idx];
+    if !current.starts_with('-') || current == "-" || current == "--" {
+        state.env.insert(var_name.clone(), "?".to_string());
+        return BuiltinResult::Result(RunResult::error(1, String::new()));
+    }
+
+    // Get the option character (skip the leading -)
+    let opt_char = current.chars().nth(1).unwrap_or('?');
+
+    if let Some(pos) = optstring.find(opt_char) {
+        state.env.insert(var_name.clone(), opt_char.to_string());
+
+        // Check if this option takes an argument
+        let needs_arg = optstring
+            .chars()
+            .nth(pos + 1)
+            .map(|c| c == ':')
+            .unwrap_or(false);
+
+        if needs_arg {
+            // Argument is either rest of current word or next word
+            if current.len() > 2 {
+                state
+                    .env
+                    .insert("OPTARG".to_string(), current[2..].to_string());
+                state
+                    .env
+                    .insert("OPTIND".to_string(), (optind + 1).to_string());
+            } else if idx + 1 < opt_args.len() {
+                state
+                    .env
+                    .insert("OPTARG".to_string(), opt_args[idx + 1].to_string());
+                state
+                    .env
+                    .insert("OPTIND".to_string(), (optind + 2).to_string());
+            } else {
+                state.env.insert(var_name.clone(), "?".to_string());
+                state
+                    .env
+                    .insert("OPTIND".to_string(), (optind + 1).to_string());
+                return BuiltinResult::Result(RunResult::error(
+                    1,
+                    format!("getopts: option requires an argument -- {}\n", opt_char),
+                ));
+            }
+        } else {
+            state
+                .env
+                .insert("OPTIND".to_string(), (optind + 1).to_string());
+        }
+
+        BuiltinResult::Result(RunResult::empty())
+    } else {
+        // Unknown option
+        state.env.insert(var_name.clone(), "?".to_string());
+        state
+            .env
+            .insert("OPTIND".to_string(), (optind + 1).to_string());
+        BuiltinResult::Result(RunResult::empty())
+    }
+}
+
+// -- mapfile / readarray --------------------------------------------------
+
+fn builtin_mapfile(state: &mut ShellState, args: &[String], stdin_data: &str) -> BuiltinResult {
+    let mut strip_newline = false;
+    let mut max_lines: Option<usize> = None;
+    let mut array_name = "MAPFILE".to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-t" => strip_newline = true,
+            "-n" => {
+                i += 1;
+                if i < args.len() {
+                    max_lines = args[i].parse().ok();
+                }
+            }
+            other => {
+                if !other.starts_with('-') {
+                    array_name = other.to_string();
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let lines: Vec<String> = stdin_data
+        .split('\n')
+        .filter(|l| !l.is_empty() || !strip_newline)
+        .enumerate()
+        .take_while(|(idx, _)| max_lines.is_none_or(|max| *idx < max))
+        .map(|(_, line)| {
+            if strip_newline {
+                line.to_string()
+            } else {
+                format!("{}\n", line)
+            }
+        })
+        .collect();
+
+    // Remove trailing empty entry that comes from final newline
+    let lines = if strip_newline {
+        let mut l = lines;
+        if l.last().map(|s| s.is_empty()).unwrap_or(false) {
+            l.pop();
+        }
+        l
+    } else {
+        lines
+    };
+
+    state.arrays.insert(array_name, lines);
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// -- chmod ----------------------------------------------------------------
+
+fn builtin_chmod(state: &ShellState, host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
+    if args.len() < 2 {
+        return BuiltinResult::Result(RunResult::error(
+            1,
+            "chmod: usage: chmod MODE FILE...\n".into(),
+        ));
+    }
+
+    let mode_str = &args[0];
+    let mode = u32::from_str_radix(mode_str, 8).unwrap_or(0o644);
+
+    let mut stderr = String::new();
+    let mut code = 0;
+
+    for file in &args[1..] {
+        let path = state.resolve_path(file);
+        if let Err(e) = host.chmod(&path, mode) {
+            stderr.push_str(&format!("chmod: {}: {}\n", file, e));
+            code = 1;
+        }
+    }
+
+    BuiltinResult::Result(RunResult {
+        exit_code: code,
+        stdout: String::new(),
+        stderr,
+        execution_time_ms: 0,
+    })
+}
+
+// -- date -----------------------------------------------------------------
+
+fn builtin_date(host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
+    let ts_ms = host.time_ms();
+    let ts_secs = ts_ms / 1000;
+
+    if args.is_empty() {
+        // Default: print a UTC timestamp
+        let output = format_timestamp(ts_secs);
+        return BuiltinResult::Result(RunResult::success(format!("{}\n", output)));
+    }
+
+    if args[0].starts_with('+') {
+        let format = &args[0][1..];
+        let output = apply_date_format(format, ts_secs);
+        return BuiltinResult::Result(RunResult::success(format!("{}\n", output)));
+    }
+
+    let output = format_timestamp(ts_secs);
+    BuiltinResult::Result(RunResult::success(format!("{}\n", output)))
+}
+
+fn format_timestamp(ts: u64) -> String {
+    let (year, month, day, hour, min, sec) = unix_to_utc(ts);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, min, sec
+    )
+}
+
+fn apply_date_format(format: &str, ts: u64) -> String {
+    let (year, month, day, hour, min, sec) = unix_to_utc(ts);
+
+    let mut out = String::new();
+    let chars: Vec<char> = format.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '%' && i + 1 < chars.len() {
+            i += 1;
+            match chars[i] {
+                'Y' => out.push_str(&format!("{:04}", year)),
+                'm' => out.push_str(&format!("{:02}", month)),
+                'd' => out.push_str(&format!("{:02}", day)),
+                'H' => out.push_str(&format!("{:02}", hour)),
+                'M' => out.push_str(&format!("{:02}", min)),
+                'S' => out.push_str(&format!("{:02}", sec)),
+                's' => out.push_str(&ts.to_string()),
+                'F' => out.push_str(&format!("{:04}-{:02}-{:02}", year, month, day)),
+                'T' => out.push_str(&format!("{:02}:{:02}:{:02}", hour, min, sec)),
+                '%' => out.push('%'),
+                other => {
+                    out.push('%');
+                    out.push(other);
+                }
+            }
+        } else {
+            out.push(chars[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Convert Unix timestamp (seconds) to UTC (year, month, day, hour, min, sec).
+fn unix_to_utc(ts: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let secs_per_day = 86400u64;
+    let mut days = ts / secs_per_day;
+    let day_secs = ts % secs_per_day;
+    let hour = day_secs / 3600;
+    let min = (day_secs % 3600) / 60;
+    let sec = day_secs % 60;
+
+    // Days since epoch (1970-01-01)
+    let mut year = 1970u64;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let month_days = if is_leap(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1u64;
+    for md in &month_days {
+        if days < *md as u64 {
+            break;
+        }
+        days -= *md as u64;
+        month += 1;
+    }
+    let day = days + 1;
+
+    (year, month, day, hour, min, sec)
+}
+
+fn is_leap(y: u64) -> bool {
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
+}
+
+// -- exec -----------------------------------------------------------------
+
+fn builtin_exec(args: &[String]) -> Option<BuiltinResult> {
+    if args.is_empty() {
+        // No args: no-op
+        return Some(BuiltinResult::Result(RunResult::empty()));
+    }
+    // With args: fall through to spawn to re-dispatch
+    None
+}
+
+// -- readonly --------------------------------------------------------------
+
+fn builtin_readonly(state: &mut ShellState, args: &[String]) -> BuiltinResult {
+    if args.is_empty() || (args.len() == 1 && args[0] == "-p") {
+        // Print readonly vars (we do not track them yet, so empty)
+        return BuiltinResult::Result(RunResult::empty());
+    }
+
+    for arg in args {
+        if arg == "-p" {
+            continue;
+        }
+        if let Some(eq_pos) = arg.find('=') {
+            let name = &arg[..eq_pos];
+            let value = &arg[eq_pos + 1..];
+            state.env.insert(name.to_string(), value.to_string());
+        }
+        // We do not enforce readonly since ShellState lacks the field.
+    }
+
+    BuiltinResult::Result(RunResult::empty())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::mock::MockHost;
+
+    fn make_args(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn run_builtin(
+        state: &mut ShellState,
+        host: &dyn HostInterface,
+        cmd: &str,
+        args: &[&str],
+    ) -> BuiltinResult {
+        let a = make_args(args);
+        try_builtin(state, host, cmd, &a, "", None).expect("expected builtin")
+    }
+
+    fn run_builtin_stdin(
+        state: &mut ShellState,
+        host: &dyn HostInterface,
+        cmd: &str,
+        args: &[&str],
+        stdin: &str,
+    ) -> BuiltinResult {
+        let a = make_args(args);
+        try_builtin(state, host, cmd, &a, stdin, None).expect("expected builtin")
+    }
+
+    fn expect_result(br: BuiltinResult) -> RunResult {
+        match br {
+            BuiltinResult::Result(r) => r,
+            BuiltinResult::Exit(c) => panic!("expected Result, got Exit({})", c),
+            BuiltinResult::Return(c) => panic!("expected Result, got Return({})", c),
+        }
+    }
+
+    // -- echo tests -------------------------------------------------------
+
+    #[test]
+    fn echo_basic() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["hello", "world"]));
+        assert_eq!(r.stdout, "hello world\n");
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn echo_no_newline() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["-n", "hi"]));
+        assert_eq!(r.stdout, "hi");
+    }
+
+    #[test]
+    fn echo_escape_n() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["-e", "a\\nb"]));
+        assert_eq!(r.stdout, "a\nb\n");
+    }
+
+    #[test]
+    fn echo_escape_t() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["-e", "a\\tb"]));
+        assert_eq!(r.stdout, "a\tb\n");
+    }
+
+    #[test]
+    fn echo_combined_flags_ne() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["-ne", "a\\nb"]));
+        assert_eq!(r.stdout, "a\nb");
+    }
+
+    #[test]
+    fn echo_escape_backslash_c() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["-e", "abc\\cdef"]));
+        assert_eq!(r.stdout, "abc");
+    }
+
+    #[test]
+    fn echo_escape_octal() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["-e", "\\0101"]));
+        assert_eq!(r.stdout, "A\n"); // 0101 octal = 65 = 'A'
+    }
+
+    #[test]
+    fn echo_escape_hex() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &["-e", "\\x41"]));
+        assert_eq!(r.stdout, "A\n"); // 0x41 = 65 = 'A'
+    }
+
+    #[test]
+    fn echo_no_args() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "echo", &[]));
+        assert_eq!(r.stdout, "\n");
+    }
+
+    // -- true / false tests -----------------------------------------------
+
+    #[test]
+    fn true_builtin() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "true", &[]));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn false_builtin() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "false", &[]));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    // -- pwd tests --------------------------------------------------------
+
+    #[test]
+    fn pwd_prints_cwd() {
+        let mut state = ShellState::new_default();
+        state.cwd = "/tmp/mydir".to_string();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "pwd", &[]));
+        assert_eq!(r.stdout, "/tmp/mydir\n");
+    }
+
+    // -- cd tests ---------------------------------------------------------
+
+    #[test]
+    fn cd_basic() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_dir("/tmp");
+        let r = expect_result(run_builtin(&mut state, &host, "cd", &["/tmp"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.cwd, "/tmp");
+    }
+
+    #[test]
+    fn cd_no_args_goes_home() {
+        let mut state = ShellState::new_default();
+        state.cwd = "/tmp".to_string();
+        let host = MockHost::new().with_dir("/home/user");
+        let r = expect_result(run_builtin(&mut state, &host, "cd", &[]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.cwd, "/home/user");
+    }
+
+    #[test]
+    fn cd_dash_returns_to_oldpwd() {
+        let mut state = ShellState::new_default();
+        state.cwd = "/tmp".to_string();
+        state
+            .env
+            .insert("OLDPWD".to_string(), "/home/user".to_string());
+        let host = MockHost::new().with_dir("/home/user");
+        let r = expect_result(run_builtin(&mut state, &host, "cd", &["-"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.cwd, "/home/user");
+        assert_eq!(state.env.get("OLDPWD").unwrap(), "/tmp");
+    }
+
+    #[test]
+    fn cd_normalize_dotdot() {
+        let mut state = ShellState::new_default();
+        state.cwd = "/home/user/projects".to_string();
+        let host = MockHost::new().with_dir("/home/user");
+        let r = expect_result(run_builtin(&mut state, &host, "cd", &[".."]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.cwd, "/home/user");
+    }
+
+    #[test]
+    fn cd_nonexistent() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "cd", &["/nonexistent"]));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    // -- exit tests -------------------------------------------------------
+
+    #[test]
+    fn exit_with_code() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["42"]);
+        let result = try_builtin(&mut state, &host, "exit", &a, "", None).unwrap();
+        match result {
+            BuiltinResult::Exit(code) => assert_eq!(code, 42),
+            _ => panic!("expected Exit"),
+        }
+    }
+
+    #[test]
+    fn exit_uses_last_exit_code() {
+        let mut state = ShellState::new_default();
+        state.last_exit_code = 7;
+        let host = MockHost::new();
+        let a: Vec<String> = vec![];
+        let result = try_builtin(&mut state, &host, "exit", &a, "", None).unwrap();
+        match result {
+            BuiltinResult::Exit(code) => assert_eq!(code, 7),
+            _ => panic!("expected Exit"),
+        }
+    }
+
+    // -- export tests -----------------------------------------------------
+
+    #[test]
+    fn export_set_var() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "export", &["FOO=bar"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.env.get("FOO").unwrap(), "bar");
+    }
+
+    #[test]
+    fn export_print_vars() {
+        let mut state = ShellState::new_default();
+        state.env.clear();
+        state.env.insert("A".to_string(), "1".to_string());
+        state.env.insert("B".to_string(), "2".to_string());
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "export", &["-p"]));
+        assert!(r.stdout.contains("declare -x A=\"1\""));
+        assert!(r.stdout.contains("declare -x B=\"2\""));
+    }
+
+    // -- unset tests ------------------------------------------------------
+
+    #[test]
+    fn unset_removes_var() {
+        let mut state = ShellState::new_default();
+        state.env.insert("FOO".to_string(), "bar".to_string());
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "unset", &["FOO"]));
+        assert_eq!(r.exit_code, 0);
+        assert!(!state.env.contains_key("FOO"));
+    }
+
+    #[test]
+    fn unset_array_element() {
+        let mut state = ShellState::new_default();
+        state
+            .arrays
+            .insert("arr".to_string(), vec!["a".into(), "b".into(), "c".into()]);
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "unset", &["arr[1]"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.arrays["arr"][1], "");
+    }
+
+    // -- set tests --------------------------------------------------------
+
+    #[test]
+    fn set_errexit_flag() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin(&mut state, &host, "set", &["-e"]);
+        assert!(state.flags.contains(&ShellFlag::Errexit));
+        run_builtin(&mut state, &host, "set", &["+e"]);
+        assert!(!state.flags.contains(&ShellFlag::Errexit));
+    }
+
+    #[test]
+    fn set_nounset_flag() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin(&mut state, &host, "set", &["-u"]);
+        assert!(state.flags.contains(&ShellFlag::Nounset));
+    }
+
+    #[test]
+    fn set_pipefail() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin(&mut state, &host, "set", &["-o", "pipefail"]);
+        assert!(state.flags.contains(&ShellFlag::Pipefail));
+        run_builtin(&mut state, &host, "set", &["+o", "pipefail"]);
+        assert!(!state.flags.contains(&ShellFlag::Pipefail));
+    }
+
+    #[test]
+    fn set_positional_params() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin(&mut state, &host, "set", &["--", "a", "b", "c"]);
+        assert_eq!(state.positional_args, vec!["a", "b", "c"]);
+    }
+
+    // -- local tests ------------------------------------------------------
+
+    #[test]
+    fn local_in_function_scope() {
+        let mut state = ShellState::new_default();
+        state.env.insert("X".to_string(), "global".to_string());
+        // Simulate being inside a function
+        state.local_var_stack.push(HashMap::new());
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "local", &["X=local_val"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.env.get("X").unwrap(), "local_val");
+        // The local frame should have saved the old value
+        let frame = state.local_var_stack.last().unwrap();
+        assert_eq!(frame.get("X"), Some(&Some("global".to_string())));
+    }
+
+    #[test]
+    fn local_outside_function_fails() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "local", &["X=val"]));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    // -- declare tests ----------------------------------------------------
+
+    #[test]
+    fn declare_array() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "declare",
+            &["-a", "arr=(one two three)"],
+        ));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(
+            state.arrays.get("arr").unwrap(),
+            &vec!["one".to_string(), "two".to_string(), "three".to_string()]
+        );
+    }
+
+    #[test]
+    fn declare_assoc_array() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "declare",
+            &["-A", "map=([foo]=bar [baz]=qux)"],
+        ));
+        assert_eq!(r.exit_code, 0);
+        let m = state.assoc_arrays.get("map").unwrap();
+        assert_eq!(m.get("foo").unwrap(), "bar");
+        assert_eq!(m.get("baz").unwrap(), "qux");
+    }
+
+    #[test]
+    fn declare_print() {
+        let mut state = ShellState::new_default();
+        state.env.clear();
+        state.env.insert("X".to_string(), "42".to_string());
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "declare", &["-p", "X"]));
+        assert!(r.stdout.contains("declare -- X=\"42\""));
+    }
+
+    // -- test / [ tests ---------------------------------------------------
+
+    #[test]
+    fn test_z_empty() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["-z", ""]));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn test_z_nonempty() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["-z", "hello"]));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    #[test]
+    fn test_n_nonempty() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["-n", "hello"]));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn test_f_file_exists() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_file("/tmp/file.txt", b"data");
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "test",
+            &["-f", "/tmp/file.txt"],
+        ));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn test_f_file_not_exists() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["-f", "/tmp/nope"]));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    #[test]
+    fn test_d_directory() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_dir("/tmp/dir");
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["-d", "/tmp/dir"]));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn test_e_exists() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_file("/tmp/x", b"");
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["-e", "/tmp/x"]));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn test_string_equality() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["abc", "=", "abc"]));
+        assert_eq!(r.exit_code, 0);
+
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "test",
+            &["abc", "!=", "def"],
+        ));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn test_numeric_comparisons() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["5", "-eq", "5"]));
+        assert_eq!(r.exit_code, 0);
+
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["3", "-lt", "5"]));
+        assert_eq!(r.exit_code, 0);
+
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["5", "-gt", "3"]));
+        assert_eq!(r.exit_code, 0);
+
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["5", "-ge", "5"]));
+        assert_eq!(r.exit_code, 0);
+
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["5", "-le", "5"]));
+        assert_eq!(r.exit_code, 0);
+
+        let r = expect_result(run_builtin(&mut state, &host, "test", &["5", "-ne", "3"]));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn test_negation() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "test",
+            &["!", "-z", "hello"],
+        ));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn bracket_test_with_closing() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "[",
+            &["abc", "=", "abc", "]"],
+        ));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    // -- read tests -------------------------------------------------------
+
+    #[test]
+    fn read_basic() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin_stdin(
+            &mut state,
+            &host,
+            "read",
+            &["VAR"],
+            "hello world\n",
+        ));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.env.get("VAR").unwrap(), "hello world");
+    }
+
+    #[test]
+    fn read_default_reply() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin_stdin(&mut state, &host, "read", &[], "test data\n");
+        assert_eq!(state.env.get("REPLY").unwrap(), "test data");
+    }
+
+    #[test]
+    fn read_raw_mode() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin_stdin(&mut state, &host, "read", &["-r", "VAR"], "hello\\nworld\n");
+        assert_eq!(state.env.get("VAR").unwrap(), "hello\\nworld");
+    }
+
+    #[test]
+    fn read_array_mode() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin_stdin(&mut state, &host, "read", &["-a", "arr"], "one two three\n");
+        assert_eq!(
+            state.arrays.get("arr").unwrap(),
+            &vec!["one".to_string(), "two".to_string(), "three".to_string()]
+        );
+    }
+
+    #[test]
+    fn read_custom_delimiter() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin_stdin(
+            &mut state,
+            &host,
+            "read",
+            &["-d", ",", "VAR"],
+            "hello,world",
+        );
+        assert_eq!(state.env.get("VAR").unwrap(), "hello");
+    }
+
+    // -- shift tests ------------------------------------------------------
+
+    #[test]
+    fn shift_positional_params() {
+        let mut state = ShellState::new_default();
+        state.positional_args = vec!["a".into(), "b".into(), "c".into()];
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "shift", &[]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.positional_args, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn shift_by_n() {
+        let mut state = ShellState::new_default();
+        state.positional_args = vec!["a".into(), "b".into(), "c".into()];
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "shift", &["2"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.positional_args, vec!["c"]);
+    }
+
+    #[test]
+    fn shift_out_of_range() {
+        let mut state = ShellState::new_default();
+        state.positional_args = vec!["a".into()];
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "shift", &["5"]));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    // -- type tests -------------------------------------------------------
+
+    #[test]
+    fn type_builtin_found() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "type", &["echo"]));
+        assert_eq!(r.exit_code, 0);
+        assert!(r.stdout.contains("shell builtin"));
+    }
+
+    #[test]
+    fn type_function_found() {
+        let mut state = ShellState::new_default();
+        state.functions.insert(
+            "myfunc".to_string(),
+            codepod_shell::ast::Command::Simple {
+                words: vec![],
+                redirects: vec![],
+                assignments: vec![],
+            },
+        );
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "type", &["myfunc"]));
+        assert_eq!(r.exit_code, 0);
+        assert!(r.stdout.contains("function"));
+    }
+
+    #[test]
+    fn type_tool_found() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_tool("git");
+        let r = expect_result(run_builtin(&mut state, &host, "type", &["git"]));
+        assert_eq!(r.exit_code, 0);
+        assert!(r.stdout.contains("/bin/git"));
+    }
+
+    #[test]
+    fn type_not_found() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "type", &["nonexistent"]));
+        assert_eq!(r.exit_code, 1);
+        assert!(r.stdout.contains("not found"));
+    }
+
+    // -- let tests --------------------------------------------------------
+
+    #[test]
+    fn let_arithmetic() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "let", &["x=5+3"]));
+        assert_eq!(r.exit_code, 0); // 8 != 0 -> exit code 0
+        assert_eq!(state.env.get("x").unwrap(), "8");
+    }
+
+    #[test]
+    fn let_zero_result() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "let", &["x=0"]));
+        assert_eq!(r.exit_code, 1); // 0 -> exit code 1
+    }
+
+    // -- eval tests -------------------------------------------------------
+
+    #[test]
+    fn eval_executes_string() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let run_fn = |_state: &mut ShellState, cmd: &str| -> RunResult {
+            if cmd.contains("echo") {
+                RunResult::success("hello\n".into())
+            } else {
+                RunResult::empty()
+            }
+        };
+        let a = make_args(&["echo", "hello"]);
+        let result = try_builtin(&mut state, &host, "eval", &a, "", Some(&run_fn)).unwrap();
+        let r = expect_result(result);
+        assert_eq!(r.stdout, "hello\n");
+    }
+
+    // -- source tests -----------------------------------------------------
+
+    #[test]
+    fn source_executes_file() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_file("/tmp/script.sh", b"echo sourced");
+        let run_fn = |_state: &mut ShellState, cmd: &str| -> RunResult {
+            if cmd.contains("echo") {
+                RunResult::success("sourced\n".into())
+            } else {
+                RunResult::empty()
+            }
+        };
+        let a = make_args(&["/tmp/script.sh"]);
+        let result = try_builtin(&mut state, &host, "source", &a, "", Some(&run_fn)).unwrap();
+        let r = expect_result(result);
+        assert_eq!(r.stdout, "sourced\n");
+    }
+
+    #[test]
+    fn source_strips_shebang() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_file("/tmp/script.sh", b"#!/bin/bash\necho sourced");
+        let run_fn = |_state: &mut ShellState, cmd: &str| -> RunResult {
+            // Should NOT contain shebang
+            assert!(!cmd.contains("#!"));
+            RunResult::success("ok\n".into())
+        };
+        let a = make_args(&["/tmp/script.sh"]);
+        let result = try_builtin(&mut state, &host, "source", &a, "", Some(&run_fn)).unwrap();
+        expect_result(result);
+    }
+
+    #[test]
+    fn source_sets_bash_source() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_file("/tmp/s.sh", b"echo ok");
+        let run_fn = |state: &mut ShellState, _cmd: &str| -> RunResult {
+            assert_eq!(state.env.get("BASH_SOURCE").unwrap(), "/tmp/s.sh");
+            RunResult::empty()
+        };
+        let a = make_args(&["/tmp/s.sh"]);
+        try_builtin(&mut state, &host, "source", &a, "", Some(&run_fn));
+        // After source completes, BASH_SOURCE should be restored
+        assert!(!state.env.contains_key("BASH_SOURCE"));
+    }
+
+    // -- history tests ----------------------------------------------------
+
+    #[test]
+    fn history_list() {
+        let mut state = ShellState::new_default();
+        state.history.push("ls".into());
+        state.history.push("pwd".into());
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "history", &[]));
+        assert!(r.stdout.contains("ls"));
+        assert!(r.stdout.contains("pwd"));
+    }
+
+    #[test]
+    fn history_clear() {
+        let mut state = ShellState::new_default();
+        state.history.push("ls".into());
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "history", &["clear"]));
+        assert_eq!(r.exit_code, 0);
+        assert!(state.history.is_empty());
+    }
+
+    // -- trap tests -------------------------------------------------------
+
+    #[test]
+    fn trap_set_and_clear() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+
+        // Set trap
+        run_builtin(&mut state, &host, "trap", &["echo bye", "EXIT"]);
+        assert_eq!(state.traps.get("EXIT").unwrap(), "echo bye");
+
+        // Clear trap
+        run_builtin(&mut state, &host, "trap", &["", "EXIT"]);
+        assert!(!state.traps.contains_key("EXIT"));
+    }
+
+    // -- getopts tests ----------------------------------------------------
+
+    #[test]
+    fn getopts_basic() {
+        let mut state = ShellState::new_default();
+        state.env.insert("OPTIND".to_string(), "1".to_string());
+        let host = MockHost::new();
+
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "getopts",
+            &["ab:c", "opt", "-a"],
+        ));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.env.get("opt").unwrap(), "a");
+    }
+
+    #[test]
+    fn getopts_with_arg() {
+        let mut state = ShellState::new_default();
+        state.env.insert("OPTIND".to_string(), "1".to_string());
+        let host = MockHost::new();
+
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "getopts",
+            &["ab:c", "opt", "-b", "val"],
+        ));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.env.get("opt").unwrap(), "b");
+        assert_eq!(state.env.get("OPTARG").unwrap(), "val");
+    }
+
+    // -- mapfile tests ----------------------------------------------------
+
+    #[test]
+    fn mapfile_basic() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin_stdin(
+            &mut state,
+            &host,
+            "mapfile",
+            &["-t", "lines"],
+            "line1\nline2\nline3\n",
+        ));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(
+            state.arrays.get("lines").unwrap(),
+            &vec![
+                "line1".to_string(),
+                "line2".to_string(),
+                "line3".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn mapfile_max_lines() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        run_builtin_stdin(
+            &mut state,
+            &host,
+            "mapfile",
+            &["-t", "-n", "2", "lines"],
+            "a\nb\nc\nd\n",
+        );
+        assert_eq!(state.arrays.get("lines").unwrap().len(), 2);
+    }
+
+    // -- which tests ------------------------------------------------------
+
+    #[test]
+    fn which_found() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_tool("git");
+        let r = expect_result(run_builtin(&mut state, &host, "which", &["git"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(r.stdout, "/bin/git\n");
+    }
+
+    #[test]
+    fn which_not_found() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "which", &["nonexistent"]));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    // -- return tests -----------------------------------------------------
+
+    #[test]
+    fn return_with_code() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["42"]);
+        match try_builtin(&mut state, &host, "return", &a, "", None).unwrap() {
+            BuiltinResult::Return(code) => assert_eq!(code, 42),
+            _ => panic!("expected Return"),
+        }
+    }
+
+    // -- normalize_path tests ---------------------------------------------
+
+    #[test]
+    fn normalize_path_basic() {
+        assert_eq!(normalize_path("/home/user/.."), "/home");
+        assert_eq!(normalize_path("/home/./user"), "/home/user");
+        assert_eq!(normalize_path("/a/b/c/../../d"), "/a/d");
+        assert_eq!(normalize_path("/"), "/");
+        assert_eq!(normalize_path("/home/user/"), "/home/user");
+    }
+
+    // -- command tests ----------------------------------------------------
+
+    #[test]
+    fn command_v_builtin() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["-v", "echo"]);
+        let result = try_builtin(&mut state, &host, "command", &a, "", None).unwrap();
+        let r = expect_result(result);
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(r.stdout, "echo\n");
+    }
+
+    #[test]
+    fn command_v_tool() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new().with_tool("git");
+        let a = make_args(&["-v", "git"]);
+        let result = try_builtin(&mut state, &host, "command", &a, "", None).unwrap();
+        let r = expect_result(result);
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn command_without_v_falls_through() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["ls"]);
+        let result = try_builtin(&mut state, &host, "command", &a, "", None);
+        assert!(result.is_none());
+    }
+
+    // -- printf tests -----------------------------------------------------
+
+    #[test]
+    fn printf_v_assigns_var() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["-v", "result", "hello %s", "world"]);
+        let result = try_builtin(&mut state, &host, "printf", &a, "", None).unwrap();
+        let r = expect_result(result);
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.env.get("result").unwrap(), "hello world");
+    }
+
+    #[test]
+    fn printf_without_v_falls_through() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["hello %s", "world"]);
+        let result = try_builtin(&mut state, &host, "printf", &a, "", None);
+        assert!(result.is_none());
+    }
+
+    // -- date tests -------------------------------------------------------
+
+    #[test]
+    fn date_unix_timestamp() {
+        let mut state = ShellState::new_default();
+        // MockHost time_ms returns 0 -> epoch
+        let host = MockHost::new();
+        let a = make_args(&["+%s"]);
+        let result = try_builtin(&mut state, &host, "date", &a, "", None).unwrap();
+        let r = expect_result(result);
+        assert_eq!(r.stdout, "0\n");
+    }
+
+    // -- chmod tests ------------------------------------------------------
+
+    #[test]
+    fn chmod_basic() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(
+            &mut state,
+            &host,
+            "chmod",
+            &["755", "/tmp/script.sh"],
+        ));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    // -- exec tests -------------------------------------------------------
+
+    #[test]
+    fn exec_no_args_noop() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a: Vec<String> = vec![];
+        let result = try_builtin(&mut state, &host, "exec", &a, "", None).unwrap();
+        let r = expect_result(result);
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[test]
+    fn exec_with_args_falls_through() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["ls"]);
+        let result = try_builtin(&mut state, &host, "exec", &a, "", None);
+        assert!(result.is_none());
+    }
+
+    // -- non-builtin falls through ----------------------------------------
+
+    #[test]
+    fn non_builtin_returns_none() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a: Vec<String> = vec![];
+        let result = try_builtin(&mut state, &host, "somecmd", &a, "", None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn curl_falls_through() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let a = make_args(&["http://example.com"]);
+        let result = try_builtin(&mut state, &host, "curl", &a, "", None);
+        assert!(result.is_none());
+    }
+
+    // -- colon builtin ----------------------------------------------------
+
+    #[test]
+    fn colon_is_noop() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, ":", &[]));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    // -- readonly tests ---------------------------------------------------
+
+    #[test]
+    fn readonly_sets_var() {
+        let mut state = ShellState::new_default();
+        let host = MockHost::new();
+        let r = expect_result(run_builtin(&mut state, &host, "readonly", &["X=42"]));
+        assert_eq!(r.exit_code, 0);
+        assert_eq!(state.env.get("X").unwrap(), "42");
+    }
+}

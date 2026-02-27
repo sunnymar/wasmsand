@@ -112,6 +112,103 @@ pub fn exec_command(
                 }
             }
 
+            // ── Check for builtin commands ────────────────────────────
+            let func_args: Vec<String> = globbed[1..].iter().map(|s| s.to_string()).collect();
+            let run_fn = |state: &mut ShellState, cmd_str: &str| -> RunResult {
+                let inner_cmd = codepod_shell::parser::parse(cmd_str);
+                match exec_command(state, host, &inner_cmd) {
+                    Ok(ControlFlow::Normal(r)) => r,
+                    Ok(ControlFlow::Exit(code, stdout, stderr)) => RunResult {
+                        exit_code: code,
+                        stdout,
+                        stderr,
+                        execution_time_ms: 0,
+                    },
+                    _ => RunResult::empty(),
+                }
+            };
+            if let Some(builtin_result) = crate::builtins::try_builtin(
+                state,
+                host,
+                cmd_name,
+                &func_args,
+                &stdin_data,
+                Some(&run_fn),
+            ) {
+                let (mut stdout, mut stderr, exit_code) = match builtin_result {
+                    crate::builtins::BuiltinResult::Result(r) => {
+                        state.last_exit_code = r.exit_code;
+                        (r.stdout, r.stderr, r.exit_code)
+                    }
+                    crate::builtins::BuiltinResult::Exit(code) => {
+                        return Ok(ControlFlow::Exit(code, String::new(), String::new()));
+                    }
+                    crate::builtins::BuiltinResult::Return(code) => {
+                        return Ok(ControlFlow::Return(code));
+                    }
+                };
+
+                // Process output redirects for builtins too
+                let mut last_stdout_redirect_path: Option<String> = None;
+                for redir in redirects {
+                    match &redir.redirect_type {
+                        RedirectType::StdoutOverwrite(path) => {
+                            let resolved = state.resolve_path(path);
+                            host.write_file(&resolved, &stdout, WriteMode::Truncate)
+                                .map_err(|e| ShellError::HostError(e.to_string()))?;
+                            stdout = String::new();
+                            last_stdout_redirect_path = Some(resolved);
+                        }
+                        RedirectType::StdoutAppend(path) => {
+                            let resolved = state.resolve_path(path);
+                            host.write_file(&resolved, &stdout, WriteMode::Append)
+                                .map_err(|e| ShellError::HostError(e.to_string()))?;
+                            stdout = String::new();
+                            last_stdout_redirect_path = Some(resolved);
+                        }
+                        RedirectType::StderrOverwrite(path) => {
+                            let resolved = state.resolve_path(path);
+                            host.write_file(&resolved, &stderr, WriteMode::Truncate)
+                                .map_err(|e| ShellError::HostError(e.to_string()))?;
+                            stderr = String::new();
+                        }
+                        RedirectType::StderrAppend(path) => {
+                            let resolved = state.resolve_path(path);
+                            host.write_file(&resolved, &stderr, WriteMode::Append)
+                                .map_err(|e| ShellError::HostError(e.to_string()))?;
+                            stderr = String::new();
+                        }
+                        RedirectType::StderrToStdout => {
+                            if let Some(ref file_path) = last_stdout_redirect_path {
+                                if !stderr.is_empty() {
+                                    host.write_file(file_path, &stderr, WriteMode::Append)
+                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
+                                }
+                            } else {
+                                stdout.push_str(&stderr);
+                            }
+                            stderr = String::new();
+                        }
+                        RedirectType::BothOverwrite(path) => {
+                            let resolved = state.resolve_path(path);
+                            let combined = format!("{stdout}{stderr}");
+                            host.write_file(&resolved, &combined, WriteMode::Truncate)
+                                .map_err(|e| ShellError::HostError(e.to_string()))?;
+                            stdout = String::new();
+                            stderr = String::new();
+                        }
+                        _ => {}
+                    }
+                }
+
+                return Ok(ControlFlow::Normal(RunResult {
+                    exit_code,
+                    stdout,
+                    stderr,
+                    execution_time_ms: 0,
+                }));
+            }
+
             // Convert env HashMap to the slice format expected by spawn.
             let env_pairs: Vec<(&str, &str)> = state
                 .env
@@ -269,6 +366,151 @@ pub fn exec_command(
                                 }
                                 _ => {}
                             }
+                        }
+
+                        // Check for builtin in pipeline
+                        let pipe_func_args: Vec<String> =
+                            globbed[1..].iter().map(|s| s.to_string()).collect();
+                        let pipe_run_fn = |state: &mut ShellState, cmd_str: &str| -> RunResult {
+                            let inner_cmd = codepod_shell::parser::parse(cmd_str);
+                            match exec_command(state, host, &inner_cmd) {
+                                Ok(ControlFlow::Normal(r)) => r,
+                                Ok(ControlFlow::Exit(code, stdout, stderr)) => RunResult {
+                                    exit_code: code,
+                                    stdout,
+                                    stderr,
+                                    execution_time_ms: 0,
+                                },
+                                _ => RunResult::empty(),
+                            }
+                        };
+                        if let Some(builtin_result) = crate::builtins::try_builtin(
+                            state,
+                            host,
+                            cmd_name,
+                            &pipe_func_args,
+                            &effective_stdin,
+                            Some(&pipe_run_fn),
+                        ) {
+                            match builtin_result {
+                                crate::builtins::BuiltinResult::Result(r) => {
+                                    let mut bstdout = r.stdout;
+                                    let mut bstderr = r.stderr;
+
+                                    // Handle output redirects
+                                    let mut blsrp: Option<String> = None;
+                                    for redir in redirects {
+                                        match &redir.redirect_type {
+                                            RedirectType::StdoutOverwrite(path) => {
+                                                let resolved = state.resolve_path(path);
+                                                host.write_file(
+                                                    &resolved,
+                                                    &bstdout,
+                                                    WriteMode::Truncate,
+                                                )
+                                                .map_err(|e| {
+                                                    ShellError::HostError(e.to_string())
+                                                })?;
+                                                bstdout = String::new();
+                                                blsrp = Some(resolved);
+                                            }
+                                            RedirectType::StdoutAppend(path) => {
+                                                let resolved = state.resolve_path(path);
+                                                host.write_file(
+                                                    &resolved,
+                                                    &bstdout,
+                                                    WriteMode::Append,
+                                                )
+                                                .map_err(|e| {
+                                                    ShellError::HostError(e.to_string())
+                                                })?;
+                                                bstdout = String::new();
+                                                blsrp = Some(resolved);
+                                            }
+                                            RedirectType::StderrOverwrite(path) => {
+                                                let resolved = state.resolve_path(path);
+                                                host.write_file(
+                                                    &resolved,
+                                                    &bstderr,
+                                                    WriteMode::Truncate,
+                                                )
+                                                .map_err(|e| {
+                                                    ShellError::HostError(e.to_string())
+                                                })?;
+                                                bstderr = String::new();
+                                            }
+                                            RedirectType::StderrAppend(path) => {
+                                                let resolved = state.resolve_path(path);
+                                                host.write_file(
+                                                    &resolved,
+                                                    &bstderr,
+                                                    WriteMode::Append,
+                                                )
+                                                .map_err(|e| {
+                                                    ShellError::HostError(e.to_string())
+                                                })?;
+                                                bstderr = String::new();
+                                            }
+                                            RedirectType::StderrToStdout => {
+                                                if let Some(ref file_path) = blsrp {
+                                                    if !bstderr.is_empty() {
+                                                        host.write_file(
+                                                            file_path,
+                                                            &bstderr,
+                                                            WriteMode::Append,
+                                                        )
+                                                        .map_err(|e| {
+                                                            ShellError::HostError(e.to_string())
+                                                        })?;
+                                                    }
+                                                } else {
+                                                    bstdout.push_str(&bstderr);
+                                                }
+                                                bstderr = String::new();
+                                            }
+                                            RedirectType::BothOverwrite(path) => {
+                                                let resolved = state.resolve_path(path);
+                                                let combined = format!("{bstdout}{bstderr}");
+                                                host.write_file(
+                                                    &resolved,
+                                                    &combined,
+                                                    WriteMode::Truncate,
+                                                )
+                                                .map_err(|e| {
+                                                    ShellError::HostError(e.to_string())
+                                                })?;
+                                                bstdout = String::new();
+                                                bstderr = String::new();
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
+                                    state.last_exit_code = r.exit_code;
+                                    last_result = RunResult {
+                                        exit_code: r.exit_code,
+                                        stdout: bstdout,
+                                        stderr: bstderr,
+                                        execution_time_ms: 0,
+                                    };
+                                }
+                                crate::builtins::BuiltinResult::Exit(code) => {
+                                    return Ok(ControlFlow::Exit(
+                                        code,
+                                        String::new(),
+                                        String::new(),
+                                    ));
+                                }
+                                crate::builtins::BuiltinResult::Return(code) => {
+                                    return Ok(ControlFlow::Return(code));
+                                }
+                            }
+                            // Track pipefail
+                            if pipefail && last_result.exit_code != 0 {
+                                pipefail_code = last_result.exit_code;
+                            }
+                            stdin_data = last_result.stdout.clone();
+                            continue;
                         }
 
                         let env_pairs: Vec<(&str, &str)> = state
@@ -1982,13 +2224,8 @@ mod tests {
     #[test]
     fn pipeline_two_stage_stdin_threading() {
         // `echo hello | cat` — cat receives "hello\n" as stdin
-        // Use spawn_handler to make "cat" echo back its stdin.
+        // Note: `echo` is now a builtin, so only `cat` generates a spawn call.
         let host = MockHost::new().with_spawn_handler(|program, _args, stdin| match program {
-            "echo" => SpawnResult {
-                exit_code: 0,
-                stdout: "hello\n".into(),
-                stderr: String::new(),
-            },
             "cat" => SpawnResult {
                 exit_code: 0,
                 stdout: stdin.to_string(),
@@ -2009,24 +2246,18 @@ mod tests {
         assert_eq!(run.exit_code, 0);
         assert_eq!(run.stdout, "hello\n");
 
-        // Verify spawn calls: cat should have received "hello\n" as stdin
+        // echo is a builtin; only cat is spawned, receiving echo's stdout as stdin
         let calls = host.get_spawn_calls();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].program, "echo");
-        assert_eq!(calls[0].stdin, ""); // echo gets empty stdin
-        assert_eq!(calls[1].program, "cat");
-        assert_eq!(calls[1].stdin, "hello\n"); // cat gets echo's stdout
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].program, "cat");
+        assert_eq!(calls[0].stdin, "hello\n"); // cat gets echo's stdout
     }
 
     #[test]
     fn pipeline_three_stage() {
         // `echo hello | cat | cat` — chaining works through 3 stages
+        // Note: `echo` is a builtin, so only two `cat` spawns.
         let host = MockHost::new().with_spawn_handler(|program, _args, stdin| match program {
-            "echo" => SpawnResult {
-                exit_code: 0,
-                stdout: "hello\n".into(),
-                stderr: String::new(),
-            },
             "cat" => SpawnResult {
                 exit_code: 0,
                 stdout: stdin.to_string(),
@@ -2047,13 +2278,13 @@ mod tests {
         assert_eq!(run.exit_code, 0);
         assert_eq!(run.stdout, "hello\n");
 
+        // echo is a builtin; two cat spawns
         let calls = host.get_spawn_calls();
-        assert_eq!(calls.len(), 3);
-        assert_eq!(calls[0].program, "echo");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].program, "cat");
+        assert_eq!(calls[0].stdin, "hello\n");
         assert_eq!(calls[1].program, "cat");
         assert_eq!(calls[1].stdin, "hello\n");
-        assert_eq!(calls[2].program, "cat");
-        assert_eq!(calls[2].stdin, "hello\n");
     }
 
     #[test]
@@ -2369,6 +2600,7 @@ mod tests {
     #[test]
     fn list_and_short_circuits_on_failure() {
         // `false && echo-a` — echo-a should NOT execute
+        // Note: `false` is a builtin, so no spawn calls for it
         let host = MockHost::new().with_spawn_handler(make_handler());
         let mut state = ShellState::new_default();
         let cmd = Command::List {
@@ -2382,10 +2614,9 @@ mod tests {
         };
         assert_eq!(run.exit_code, 1);
         assert_eq!(run.stdout, "");
-        // Only false was spawned
+        // `false` is a builtin so no spawn calls
         let calls = host.get_spawn_calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].program, "false");
+        assert_eq!(calls.len(), 0);
     }
 
     #[test]
@@ -2409,6 +2640,7 @@ mod tests {
     #[test]
     fn list_or_short_circuits_on_success() {
         // `true || echo-a` — echo-a should NOT execute
+        // Note: `true` is a builtin, so no spawn calls for it
         let host = MockHost::new().with_spawn_handler(make_handler());
         let mut state = ShellState::new_default();
         let cmd = Command::List {
@@ -2421,8 +2653,9 @@ mod tests {
             panic!("expected Normal")
         };
         assert_eq!(run.exit_code, 0);
+        // `true` is a builtin so no spawn calls
         let calls = host.get_spawn_calls();
-        assert_eq!(calls.len(), 1);
+        assert_eq!(calls.len(), 0);
     }
 
     #[test]
