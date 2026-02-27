@@ -1,7 +1,9 @@
 use codepod_shell::ast::Command;
 
 use crate::control::{ControlFlow, RunResult, ShellError};
-use crate::expand::expand_words_with_splitting;
+use crate::expand::{
+    expand_braces, expand_globs, expand_words_with_splitting, restore_brace_sentinels,
+};
 use crate::host::HostInterface;
 use crate::state::ShellState;
 
@@ -29,8 +31,17 @@ pub fn exec_command(
             if expanded.is_empty() {
                 return Ok(ControlFlow::Normal(RunResult::empty()));
             }
-            let cmd_name = &expanded[0];
-            let args: Vec<&str> = expanded[1..].iter().map(|s| s.as_str()).collect();
+
+            // Brace expansion → sentinel restoration → glob expansion
+            let braced = expand_braces(&expanded);
+            let restored = restore_brace_sentinels(&braced);
+            let globbed = expand_globs(host, &restored);
+
+            if globbed.is_empty() {
+                return Ok(ControlFlow::Normal(RunResult::empty()));
+            }
+            let cmd_name = &globbed[0];
+            let args: Vec<&str> = globbed[1..].iter().map(|s| s.as_str()).collect();
 
             // Convert env HashMap to the slice format expected by spawn.
             let env_pairs: Vec<(&str, &str)> = state

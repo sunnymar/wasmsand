@@ -1,5 +1,6 @@
 use codepod_shell::ast::{Word, WordPart};
 
+use crate::host::HostInterface;
 use crate::state::{ShellFlag, ShellState};
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,214 @@ pub fn expand_words_with_splitting(state: &mut ShellState, words: &[Word]) -> Ve
     }
     result
 }
+
+// ---------------------------------------------------------------------------
+// Brace expansion
+// ---------------------------------------------------------------------------
+
+/// Expand braces in a list of already-expanded words.
+///
+/// Supports comma lists (`{a,b,c}`), numeric ranges (`{1..5}`), alpha
+/// ranges (`{a..e}`), and nested braces (`{a,{b,c}}`).  Expansion is
+/// recursive so nested and suffixed patterns work correctly.
+pub fn expand_braces(words: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    for word in words {
+        result.extend(expand_brace(word));
+    }
+    result
+}
+
+/// Expand a single word's brace expressions.
+fn expand_brace(word: &str) -> Vec<String> {
+    let mut depth: i32 = 0;
+    let mut start: Option<usize> = None;
+
+    for (i, ch) in word.char_indices() {
+        if ch == '{' {
+            if depth == 0 {
+                start = Some(i);
+            }
+            depth += 1;
+        } else if ch == '}' {
+            depth -= 1;
+            if depth == 0 {
+                if let Some(s) = start {
+                    let prefix = &word[..s];
+                    let inner = &word[s + 1..i];
+                    let suffix = &word[i + 1..];
+
+                    // Check for range pattern: {a..z} or {1..10}
+                    if let Some((range_start, range_end)) = parse_range_pattern(inner) {
+                        let items = expand_range(range_start, range_end);
+                        if !items.is_empty() {
+                            return items
+                                .into_iter()
+                                .flat_map(|item| expand_brace(&format!("{prefix}{item}{suffix}")))
+                                .collect();
+                        }
+                    }
+
+                    // Comma-separated list
+                    if inner.contains(',') {
+                        let items = split_brace_items(inner);
+                        if items.len() > 1 {
+                            return items
+                                .into_iter()
+                                .flat_map(|item| expand_brace(&format!("{prefix}{item}{suffix}")))
+                                .collect();
+                        }
+                    }
+
+                    // Not a valid brace expansion
+                    return vec![word.to_string()];
+                }
+            }
+        }
+    }
+    vec![word.to_string()]
+}
+
+/// Parse a range pattern like `1..5` or `a..e` from the inner part of braces.
+/// Returns `Some((start, end))` if the pattern matches.
+fn parse_range_pattern(inner: &str) -> Option<(&str, &str)> {
+    let dot_pos = inner.find("..")?;
+    let start = &inner[..dot_pos];
+    let end = &inner[dot_pos + 2..];
+
+    // Validate: both parts must be non-empty and consist of word chars
+    // (alphanumeric or minus sign for negative numbers)
+    if start.is_empty() || end.is_empty() {
+        return None;
+    }
+
+    // Ensure the pattern is exactly start..end (no extra dots)
+    if end.starts_with('.') {
+        return None;
+    }
+
+    // Both sides must match -?\w+
+    let valid_range_part = |s: &str| -> bool {
+        let s = s.strip_prefix('-').unwrap_or(s);
+        !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+    };
+
+    if valid_range_part(start) && valid_range_part(end) {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+/// Expand a range (numeric or alpha) into a list of items.
+fn expand_range(start: &str, end: &str) -> Vec<String> {
+    // Try numeric range
+    if let (Ok(start_num), Ok(end_num)) = (start.parse::<i64>(), end.parse::<i64>()) {
+        let step: i64 = if start_num <= end_num { 1 } else { -1 };
+        let mut items = Vec::new();
+        let mut i = start_num;
+        loop {
+            items.push(i.to_string());
+            if i == end_num {
+                break;
+            }
+            i += step;
+        }
+        return items;
+    }
+
+    // Try alpha range (single characters)
+    if start.len() == 1 && end.len() == 1 {
+        let s = start.as_bytes()[0];
+        let e = end.as_bytes()[0];
+        let step: i16 = if s <= e { 1 } else { -1 };
+        let mut items = Vec::new();
+        let mut i = s as i16;
+        loop {
+            items.push(String::from(i as u8 as char));
+            if i == e as i16 {
+                break;
+            }
+            i += step;
+        }
+        return items;
+    }
+
+    vec![]
+}
+
+/// Split the inner content of a brace expression on commas, respecting
+/// nested brace depth.
+fn split_brace_items(inner: &str) -> Vec<String> {
+    let mut depth: i32 = 0;
+    let mut current = String::new();
+    let mut items = Vec::new();
+
+    for ch in inner.chars() {
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth -= 1;
+        }
+
+        if ch == ',' && depth == 0 {
+            items.push(current);
+            current = String::new();
+        } else {
+            current.push(ch);
+        }
+    }
+    items.push(current);
+    items
+}
+
+// ---------------------------------------------------------------------------
+// Sentinel restoration
+// ---------------------------------------------------------------------------
+
+/// Restore brace sentinels that were inserted by QuotedLiteral expansion.
+///
+/// During word expansion, `QuotedLiteral` replaces `{` with `\u{E000}` and
+/// `}` with `\u{E001}` to prevent brace expansion.  After brace expansion
+/// is complete, these sentinels must be restored to the original characters.
+pub fn restore_brace_sentinels(words: &[String]) -> Vec<String> {
+    words
+        .iter()
+        .map(|w| w.replace('\u{E000}', "{").replace('\u{E001}', "}"))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Glob expansion (filesystem)
+// ---------------------------------------------------------------------------
+
+/// Expand glob patterns (`*`, `?`) in a word list using the host's glob
+/// implementation.
+///
+/// For each word containing `*` or `?`, calls `host.glob(pattern)`.  If the
+/// host returns matches they are used (sorted); otherwise the literal pattern
+/// is preserved (POSIX behavior).
+pub fn expand_globs(host: &dyn HostInterface, words: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    for word in words {
+        if word.contains('*') || word.contains('?') {
+            match host.glob(word) {
+                Ok(mut matches) if !matches.is_empty() => {
+                    matches.sort();
+                    result.extend(matches);
+                }
+                _ => result.push(word.clone()),
+            }
+        } else {
+            result.push(word.clone());
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Word expansion internals
+// ---------------------------------------------------------------------------
 
 /// Expand a single `WordPart` into a string.
 ///
@@ -1504,5 +1713,178 @@ mod tests {
             ],
         };
         assert!(!word_needs_splitting(&word));
+    }
+
+    // ---- Brace expansion: comma lists ----
+
+    #[test]
+    fn brace_comma_simple() {
+        let input = vec!["{a,b,c}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn brace_comma_with_prefix_suffix() {
+        let input = vec!["pre{a,b}suf".to_string()];
+        assert_eq!(expand_braces(&input), vec!["preasuf", "prebsuf"]);
+    }
+
+    #[test]
+    fn brace_comma_nested() {
+        let input = vec!["{a,{b,c}}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn brace_comma_nested_complex() {
+        let input = vec!["x{a,b{c,d}}y".to_string()];
+        assert_eq!(expand_braces(&input), vec!["xay", "xbcy", "xbdy"]);
+    }
+
+    #[test]
+    fn brace_single_item_no_expansion() {
+        // {foo} with no comma and no range should not expand
+        let input = vec!["{foo}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["{foo}"]);
+    }
+
+    // ---- Brace expansion: numeric ranges ----
+
+    #[test]
+    fn brace_range_numeric_ascending() {
+        let input = vec!["{1..5}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["1", "2", "3", "4", "5"]);
+    }
+
+    #[test]
+    fn brace_range_numeric_descending() {
+        let input = vec!["{5..1}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["5", "4", "3", "2", "1"]);
+    }
+
+    #[test]
+    fn brace_range_numeric_negative() {
+        let input = vec!["{-2..3}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["-2", "-1", "0", "1", "2", "3"]);
+    }
+
+    // ---- Brace expansion: alpha ranges ----
+
+    #[test]
+    fn brace_range_alpha_ascending() {
+        let input = vec!["{a..e}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn brace_range_alpha_descending() {
+        let input = vec!["{e..a}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["e", "d", "c", "b", "a"]);
+    }
+
+    // ---- Brace expansion: range with prefix/suffix ----
+
+    #[test]
+    fn brace_range_with_prefix_suffix() {
+        let input = vec!["file{1..3}.txt".to_string()];
+        assert_eq!(
+            expand_braces(&input),
+            vec!["file1.txt", "file2.txt", "file3.txt"]
+        );
+    }
+
+    // ---- Brace expansion: multiple words ----
+
+    #[test]
+    fn brace_expansion_multiple_words() {
+        let input = vec!["hello".to_string(), "{a,b}".to_string()];
+        assert_eq!(expand_braces(&input), vec!["hello", "a", "b"]);
+    }
+
+    // ---- Sentinel restoration ----
+
+    #[test]
+    fn sentinel_restoration_replaces_pua_chars() {
+        let input = vec!["a\u{E000}b\u{E001}c".to_string(), "normal".to_string()];
+        assert_eq!(restore_brace_sentinels(&input), vec!["a{b}c", "normal"]);
+    }
+
+    #[test]
+    fn sentinel_preservation_quoted_braces_not_expanded() {
+        // Simulate: echo "{a,b}" where braces are quoted
+        // After word expansion, QuotedLiteral produces sentinels
+        let mut state = test_state();
+        let word = Word {
+            parts: vec![WordPart::QuotedLiteral("{a,b}".into())],
+        };
+        let expanded = expand_word(&mut state, &word);
+        // Should contain sentinel chars, not literal braces
+        assert_eq!(expanded, "\u{E000}a,b\u{E001}");
+
+        // Brace expansion should NOT expand sentinel-protected braces
+        let braced = expand_braces(&[expanded]);
+        assert_eq!(braced, vec!["\u{E000}a,b\u{E001}"]);
+
+        // After sentinel restoration, original braces return
+        let restored = restore_brace_sentinels(&braced);
+        assert_eq!(restored, vec!["{a,b}"]);
+    }
+
+    // ---- Glob expansion ----
+
+    #[test]
+    fn glob_expansion_with_matches() {
+        use crate::test_support::mock::MockHost;
+
+        let host = MockHost::new()
+            .with_glob_result("*.txt", vec!["b.txt".to_string(), "a.txt".to_string()]);
+        let input = vec!["*.txt".to_string()];
+        let result = expand_globs(&host, &input);
+        // Should be sorted
+        assert_eq!(result, vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn glob_expansion_no_matches_keeps_literal() {
+        use crate::test_support::mock::MockHost;
+
+        let host = MockHost::new();
+        let input = vec!["*.xyz".to_string()];
+        let result = expand_globs(&host, &input);
+        assert_eq!(result, vec!["*.xyz"]);
+    }
+
+    #[test]
+    fn glob_expansion_question_mark() {
+        use crate::test_support::mock::MockHost;
+
+        let host = MockHost::new().with_glob_result(
+            "file?.txt",
+            vec!["file1.txt".to_string(), "file2.txt".to_string()],
+        );
+        let input = vec!["file?.txt".to_string()];
+        let result = expand_globs(&host, &input);
+        assert_eq!(result, vec!["file1.txt", "file2.txt"]);
+    }
+
+    #[test]
+    fn glob_expansion_no_glob_chars_passthrough() {
+        use crate::test_support::mock::MockHost;
+
+        let host = MockHost::new();
+        let input = vec!["plain.txt".to_string()];
+        let result = expand_globs(&host, &input);
+        assert_eq!(result, vec!["plain.txt"]);
+    }
+
+    #[test]
+    fn glob_expansion_mixed_words() {
+        use crate::test_support::mock::MockHost;
+
+        let host = MockHost::new()
+            .with_glob_result("*.rs", vec!["main.rs".to_string(), "lib.rs".to_string()]);
+        let input = vec!["echo".to_string(), "*.rs".to_string(), "done".to_string()];
+        let result = expand_globs(&host, &input);
+        assert_eq!(result, vec!["echo", "lib.rs", "main.rs", "done"]);
     }
 }

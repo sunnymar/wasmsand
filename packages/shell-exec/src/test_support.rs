@@ -10,6 +10,7 @@ pub mod mock {
         dirs: HashSet<String>,
         tools: HashSet<String>,
         spawn_results: HashMap<String, SpawnResult>,
+        glob_results: HashMap<String, Vec<String>>,
     }
 
     impl Default for MockHost {
@@ -25,6 +26,7 @@ pub mod mock {
                 dirs: HashSet::new(),
                 tools: HashSet::new(),
                 spawn_results: HashMap::new(),
+                glob_results: HashMap::new(),
             }
         }
 
@@ -49,6 +51,12 @@ pub mod mock {
         /// Add a directory.
         pub fn with_dir(mut self, path: &str) -> Self {
             self.dirs.insert(path.to_string());
+            self
+        }
+
+        /// Register pre-configured glob results for a pattern.
+        pub fn with_glob_result(mut self, pattern: &str, matches: Vec<String>) -> Self {
+            self.glob_results.insert(pattern.to_string(), matches);
             self
         }
     }
@@ -177,8 +185,8 @@ pub mod mock {
             Ok(())
         }
 
-        fn glob(&self, _pattern: &str) -> Result<Vec<String>, HostError> {
-            Ok(vec![])
+        fn glob(&self, pattern: &str) -> Result<Vec<String>, HostError> {
+            Ok(self.glob_results.get(pattern).cloned().unwrap_or_default())
         }
 
         fn rename(&self, _from: &str, _to: &str) -> Result<(), HostError> {
