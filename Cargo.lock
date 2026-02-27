@@ -328,6 +328,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codepod-shell-exec"
+version = "0.1.0"
+dependencies = [
+ "codepod-shell",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "collection_literals"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

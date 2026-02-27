@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "packages/shell",
+  "packages/shell-exec",
   "packages/coreutils",
   "packages/test-fixtures/hello",
   "packages/test-fixtures/echo-args",
