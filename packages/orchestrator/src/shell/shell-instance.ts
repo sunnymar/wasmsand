@@ -58,7 +58,7 @@ export class ShellInstance {
     const memoryProxy = new Proxy({} as WebAssembly.Memory, {
       get(_target, prop, receiver) {
         const mem = getMemory();
-        const val = (mem as Record<string | symbol, unknown>)[prop];
+        const val = (mem as unknown as Record<string | symbol, unknown>)[prop];
         if (typeof val === 'function') {
           return val.bind(mem);
         }
