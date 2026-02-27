@@ -740,6 +740,9 @@ export abstract class ShellBuiltins {
     }
 
     const extraArgs = args.slice(1);
+    // Set BASH_SOURCE for the duration of the sourced script
+    const prevBashSource = this.env.get('BASH_SOURCE');
+    this.env.set('BASH_SOURCE', filePath);
 
     if (extraArgs.length > 0) {
       // Save and set positional parameters
@@ -766,11 +769,19 @@ export abstract class ShellBuiltins {
           if (val !== undefined) this.env.set(key, val);
           else this.env.delete(key);
         }
+        // Restore BASH_SOURCE
+        if (prevBashSource !== undefined) this.env.set('BASH_SOURCE', prevBashSource);
+        else this.env.delete('BASH_SOURCE');
       }
     }
 
     // No extra args — just run in current shell
-    return this.run(script);
+    try {
+      return await this.run(script);
+    } finally {
+      if (prevBashSource !== undefined) this.env.set('BASH_SOURCE', prevBashSource);
+      else this.env.delete('BASH_SOURCE');
+    }
   }
 
   /** Builtin: pip — package install/uninstall/list/show. */

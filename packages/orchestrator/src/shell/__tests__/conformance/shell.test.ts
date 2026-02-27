@@ -1403,4 +1403,48 @@ y"; echo "\${items[@]}"`);
       expect(r.stdout).toBe('bar baz\n');
     });
   });
+
+  // ---------- $BASH_REMATCH ----------
+  describe('$BASH_REMATCH', () => {
+    it('populates on regex match', async () => {
+      const r = await runner.run(`[[ "hello123world" =~ ([0-9]+) ]] && echo "\${BASH_REMATCH[0]}" "\${BASH_REMATCH[1]}"`);
+      expect(r.stdout).toBe('123 123\n');
+    });
+
+    it('captures multiple groups', async () => {
+      const r = await runner.run(`[[ "2024-01-15" =~ ([0-9]{4})-([0-9]{2})-([0-9]{2}) ]] && echo "\${BASH_REMATCH[1]}" "\${BASH_REMATCH[2]}" "\${BASH_REMATCH[3]}"`);
+      expect(r.stdout).toBe('2024 01 15\n');
+    });
+
+    it('clears on non-match', async () => {
+      const r = await runner.run(`[[ "abc" =~ ([0-9]+) ]]; echo "\${#BASH_REMATCH[@]}"`);
+      expect(r.stdout).toBe('0\n');
+    });
+  });
+
+  // ---------- $SECONDS ----------
+  describe('$SECONDS', () => {
+    it('returns elapsed seconds (at least 0)', async () => {
+      const r = await runner.run(`echo $SECONDS`);
+      const val = parseInt(r.stdout.trim(), 10);
+      expect(val).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  // ---------- $LINENO ----------
+  describe('$LINENO', () => {
+    it('returns a line number', async () => {
+      const r = await runner.run(`echo $LINENO`);
+      const val = parseInt(r.stdout.trim(), 10);
+      expect(val).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // ---------- $BASH_SOURCE ----------
+  describe('$BASH_SOURCE', () => {
+    it('is set when sourcing a file', async () => {
+      const r = await runner.run(`echo 'echo $BASH_SOURCE' > /tmp/bs.sh; source /tmp/bs.sh`);
+      expect(r.stdout.trim()).toBe('/tmp/bs.sh');
+    });
+  });
 });

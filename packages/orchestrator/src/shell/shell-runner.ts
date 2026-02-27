@@ -99,6 +99,10 @@ export class ShellRunner extends ShellBuiltins {
   protected trapHandlers: Map<string, string> = new Map();
   /** Variables marked as readonly. */
   private readonlyVars = new Set<string>();
+  /** Time when the shell was started (for $SECONDS). */
+  private startTime = performance.now();
+  /** Current line number for $LINENO. */
+  private currentLineNo = 1;
   /** Array storage for bash-style arrays. */
   protected arrays: Map<string, string[]> = new Map();
   /** Associative array storage (declare -A). */
@@ -1393,6 +1397,12 @@ export class ShellRunner extends ShellBuiltins {
       if (part.Variable === 'RANDOM') {
         return String(Math.floor(Math.random() * 32768));
       }
+      if (part.Variable === 'SECONDS') {
+        return String(Math.floor((performance.now() - this.startTime) / 1000));
+      }
+      if (part.Variable === 'LINENO') {
+        return String(this.currentLineNo);
+      }
       // Array access: arr[n], arr[@], arr[*], and slicing arr[@]:offset:length
       const arrSliceMatch = part.Variable.match(/^(\w+)\[(.+?)\]:(.+)$/);
       if (arrSliceMatch) {
@@ -2321,8 +2331,23 @@ export class ShellRunner extends ShellBuiltins {
 
       // Two-char operators
       const two = expr.slice(i, i + 2);
-      if (two === '&&' || two === '||' || two === '=~' || two === '!=' || two === '==') {
+      if (two === '&&' || two === '||' || two === '!=' || two === '==') {
         tokens.push(two); i += 2; continue;
+      }
+      if (two === '=~') {
+        tokens.push(two); i += 2;
+        // After =~, collect the entire RHS as a single regex token (until && or ||)
+        while (i < expr.length && (expr[i] === ' ' || expr[i] === '\t')) i++;
+        let regex = '';
+        let depth = 0;
+        while (i < expr.length) {
+          if (depth === 0 && (expr.slice(i, i + 2) === '&&' || expr.slice(i, i + 2) === '||')) break;
+          if (expr[i] === '(') depth++;
+          else if (expr[i] === ')') depth--;
+          regex += expr[i++];
+        }
+        tokens.push(regex.trim());
+        continue;
       }
       // Single-char operators
       if (expr[i] === '!' || expr[i] === '(' || expr[i] === ')' ||
@@ -2440,8 +2465,18 @@ export class ShellRunner extends ShellBuiltins {
           const right = tokens[pos + 2] ?? '';
           pos += 3;
           if (op === '=~') {
-            try { return new RegExp(right).test(left); }
-            catch { return false; }
+            try {
+              const re = new RegExp(right);
+              const m = re.exec(left);
+              if (m) {
+                this.arrays.set('BASH_REMATCH', m.map(s => s ?? ''));
+                return true;
+              }
+              this.arrays.set('BASH_REMATCH', []);
+              return false;
+            } catch {
+              return false;
+            }
           }
           if (op === '<') return left < right;
           if (op === '>') return left > right;
