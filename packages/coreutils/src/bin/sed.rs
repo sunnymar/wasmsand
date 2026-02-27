@@ -995,6 +995,20 @@ fn main() {
                 }
                 scripts.push(args[i].clone());
             }
+            "-f" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("sed: option requires an argument -- 'f'");
+                    process::exit(1);
+                }
+                match std::fs::read_to_string(&args[i]) {
+                    Ok(content) => scripts.push(content),
+                    Err(e) => {
+                        eprintln!("sed: {}: {}", args[i], e);
+                        process::exit(1);
+                    }
+                }
+            }
             arg => {
                 // Handle combined flags like -ni, -in, -nE, etc.
                 if arg.starts_with('-') && arg.len() > 1 && !arg.contains('=') {

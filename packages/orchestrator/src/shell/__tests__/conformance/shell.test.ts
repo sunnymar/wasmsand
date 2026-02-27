@@ -1336,4 +1336,71 @@ y"; echo "\${items[@]}"`);
       expect(r.stdout).toBe('hello\n');
     });
   });
+
+  // ---------- grep -h/-H (filename control) ----------
+  describe('grep -h/-H', () => {
+    it('-h suppresses filename prefix', async () => {
+      const r = await runner.run(`echo "hello" > /tmp/gh1.txt; echo "hello" > /tmp/gh2.txt; grep -h hello /tmp/gh1.txt /tmp/gh2.txt`);
+      expect(r.stdout).toBe('hello\nhello\n');
+    });
+
+    it('-H forces filename prefix for single file', async () => {
+      const r = await runner.run(`echo "hello" > /tmp/gH.txt; grep -H hello /tmp/gH.txt`);
+      expect(r.stdout).toBe('/tmp/gH.txt:hello\n');
+    });
+  });
+
+  // ---------- grep --include/--exclude ----------
+  describe('grep --include/--exclude', () => {
+    it('--include filters by glob', async () => {
+      const r = await runner.run(`mkdir -p /tmp/gi; echo "match" > /tmp/gi/a.txt; echo "match" > /tmp/gi/b.log; grep -r --include="*.txt" match /tmp/gi`);
+      expect(r.stdout).toContain('a.txt');
+      expect(r.stdout).not.toContain('b.log');
+    });
+
+    it('--exclude skips matching files', async () => {
+      const r = await runner.run(`mkdir -p /tmp/ge; echo "match" > /tmp/ge/a.txt; echo "match" > /tmp/ge/b.log; grep -r --exclude="*.log" match /tmp/ge`);
+      expect(r.stdout).toContain('a.txt');
+      expect(r.stdout).not.toContain('b.log');
+    });
+  });
+
+  // ---------- cut -s and --output-delimiter ----------
+  describe('cut -s and --output-delimiter', () => {
+    it('-s suppresses lines without delimiter', async () => {
+      const r = await runner.run(`printf "a:b\\nno-delim\\nc:d\\n" | cut -d: -f1 -s`);
+      expect(r.stdout).toBe('a\nc\n');
+    });
+
+    it('--output-delimiter changes output separator', async () => {
+      const r = await runner.run(`echo "a:b:c" | cut -d: -f1,3 --output-delimiter=,`);
+      expect(r.stdout).toBe('a,c\n');
+    });
+  });
+
+  // ---------- uniq -i/-f/-s ----------
+  describe('uniq -i/-f/-s', () => {
+    it('-i ignores case', async () => {
+      const r = await runner.run(`printf "Hello\\nhello\\nHELLO\\nworld\\n" | uniq -i`);
+      expect(r.stdout).toBe('Hello\nworld\n');
+    });
+
+    it('-f skips fields', async () => {
+      const r = await runner.run(`printf "1 aaa\\n2 aaa\\n3 bbb\\n" | uniq -f 1`);
+      expect(r.stdout).toBe('1 aaa\n3 bbb\n');
+    });
+
+    it('-s skips chars', async () => {
+      const r = await runner.run(`printf "XXhello\\nYYhello\\nZZworld\\n" | uniq -s 2`);
+      expect(r.stdout).toBe('XXhello\nZZworld\n');
+    });
+  });
+
+  // ---------- sed -f (read script from file) ----------
+  describe('sed -f', () => {
+    it('reads script from file', async () => {
+      const r = await runner.run(`echo 's/foo/bar/' > /tmp/sed_script.txt; echo "foo baz" | sed -f /tmp/sed_script.txt`);
+      expect(r.stdout).toBe('bar baz\n');
+    });
+  });
 });

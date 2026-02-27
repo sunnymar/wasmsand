@@ -9,11 +9,48 @@ struct Options {
     count: bool,
     only_duplicates: bool,
     only_unique: bool,
+    ignore_case: bool,
+    skip_fields: usize,
+    skip_chars: usize,
 }
 
 fn read_lines<R: io::Read>(reader: R) -> io::Result<Vec<String>> {
     let buf = BufReader::new(reader);
     buf.lines().collect()
+}
+
+/// Extract the comparison key from a line, skipping fields and chars as specified.
+fn compare_key<'a>(line: &'a str, opts: &Options) -> &'a str {
+    let mut s = line;
+    // Skip fields: a field is separated by whitespace
+    for _ in 0..opts.skip_fields {
+        // Skip leading whitespace then non-whitespace
+        s = s.trim_start();
+        match s.find(char::is_whitespace) {
+            Some(pos) => s = &s[pos..],
+            None => return "",
+        }
+    }
+    // Skip chars
+    if opts.skip_chars > 0 {
+        let char_count = s.chars().count();
+        if opts.skip_chars >= char_count {
+            return "";
+        }
+        let byte_offset: usize = s.chars().take(opts.skip_chars).map(|c| c.len_utf8()).sum();
+        s = &s[byte_offset..];
+    }
+    s
+}
+
+fn lines_equal(a: &str, b: &str, opts: &Options) -> bool {
+    let ka = compare_key(a, opts);
+    let kb = compare_key(b, opts);
+    if opts.ignore_case {
+        ka.eq_ignore_ascii_case(kb)
+    } else {
+        ka == kb
+    }
 }
 
 fn process_lines(lines: &[String], opts: &Options) {
@@ -27,7 +64,7 @@ fn process_lines(lines: &[String], opts: &Options) {
     let mut count: usize = 1;
 
     for line in &lines[1..] {
-        if line == current {
+        if lines_equal(line, current, opts) {
             count += 1;
         } else {
             groups.push((count, current));
@@ -63,11 +100,34 @@ fn main() {
         count: false,
         only_duplicates: false,
         only_unique: false,
+        ignore_case: false,
+        skip_fields: 0,
+        skip_chars: 0,
     };
     let mut files: Vec<String> = Vec::new();
 
-    for arg in &args[1..] {
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
         if arg == "--" {
+            i += 1;
+            continue;
+        }
+        // -f N (skip fields) and -s N (skip chars) take a value
+        if arg == "-f" {
+            i += 1;
+            if i < args.len() {
+                opts.skip_fields = args[i].parse().unwrap_or(0);
+            }
+            i += 1;
+            continue;
+        }
+        if arg == "-s" {
+            i += 1;
+            if i < args.len() {
+                opts.skip_chars = args[i].parse().unwrap_or(0);
+            }
+            i += 1;
             continue;
         }
         if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
@@ -76,6 +136,7 @@ fn main() {
                     'c' => opts.count = true,
                     'd' => opts.only_duplicates = true,
                     'u' => opts.only_unique = true,
+                    'i' => opts.ignore_case = true,
                     _ => {
                         eprintln!("uniq: invalid option -- '{}'", ch);
                         process::exit(1);
@@ -85,6 +146,7 @@ fn main() {
         } else {
             files.push(arg.clone());
         }
+        i += 1;
     }
 
     let lines = if files.is_empty() || files[0] == "-" {

@@ -23,6 +23,10 @@ struct Options {
     after_context: usize,
     before_context: usize,
     max_count: usize,
+    no_filename: bool,
+    with_filename: bool,
+    include_globs: Vec<String>,
+    exclude_globs: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +247,30 @@ fn grep_reader<R: io::Read>(
     Ok(found)
 }
 
+/// Simple glob match supporting * and ? wildcards.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    let (plen, nlen) = (p.len(), n.len());
+    let mut dp = vec![vec![false; nlen + 1]; plen + 1];
+    dp[0][0] = true;
+    for i in 1..=plen {
+        if p[i - 1] == '*' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+    for i in 1..=plen {
+        for j in 1..=nlen {
+            if p[i - 1] == '*' {
+                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+            } else if p[i - 1] == '?' || p[i - 1] == n[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1];
+            }
+        }
+    }
+    dp[plen][nlen]
+}
+
 fn grep_path(
     path: &Path,
     re: &regex::Regex,
@@ -272,6 +300,17 @@ fn grep_path(
         }
         Ok(found)
     } else {
+        // Apply --include/--exclude filters on filename
+        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+            if !opts.include_globs.is_empty()
+                && !opts.include_globs.iter().any(|g| glob_matches(g, fname))
+            {
+                return Ok(false);
+            }
+            if opts.exclude_globs.iter().any(|g| glob_matches(g, fname)) {
+                return Ok(false);
+            }
+        }
         let f = match File::open(path) {
             Ok(f) => f,
             Err(e) => {
@@ -304,6 +343,10 @@ fn main() {
         after_context: 0,
         before_context: 0,
         max_count: 0,
+        no_filename: false,
+        with_filename: false,
+        include_globs: Vec::new(),
+        exclude_globs: Vec::new(),
     };
     let mut positional: Vec<String> = Vec::new();
     let mut past_flags = false;
@@ -322,6 +365,32 @@ fn main() {
             continue;
         }
         // Long options and options with values
+        if let Some(val) = arg.strip_prefix("--include=") {
+            opts.include_globs.push(val.to_string());
+            i += 1;
+            continue;
+        }
+        if arg == "--include" {
+            i += 1;
+            if i < args.len() {
+                opts.include_globs.push(args[i].clone());
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(val) = arg.strip_prefix("--exclude=") {
+            opts.exclude_globs.push(val.to_string());
+            i += 1;
+            continue;
+        }
+        if arg == "--exclude" {
+            i += 1;
+            if i < args.len() {
+                opts.exclude_globs.push(args[i].clone());
+            }
+            i += 1;
+            continue;
+        }
         if arg == "-A" || arg == "--after-context" {
             i += 1;
             if i < args.len() {
@@ -373,6 +442,8 @@ fn main() {
                     'q' => opts.quiet = true,
                     'F' => opts.fixed_string = true,
                     's' => opts.suppress_errors = true,
+                    'h' => opts.no_filename = true,
+                    'H' => opts.with_filename = true,
                     'A' | 'B' | 'C' | 'm' => {
                         // Value may be remainder of this arg or the next arg
                         let val_str = if ci + 1 < chars.len() {
@@ -454,7 +525,13 @@ fn main() {
             }
         }
     } else {
-        let show_filename = files.len() > 1 || opts.recursive;
+        let show_filename = if opts.no_filename {
+            false
+        } else if opts.with_filename {
+            true
+        } else {
+            files.len() > 1 || opts.recursive
+        };
         for file in files {
             let path = Path::new(file);
             match grep_path(path, &re, &opts, show_filename) {

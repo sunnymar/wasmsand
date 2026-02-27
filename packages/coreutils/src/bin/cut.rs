@@ -76,10 +76,14 @@ enum Mode {
     Characters(Vec<usize>),
 }
 
-fn process_line(line: &str, mode: &Mode, delimiter: char, output_delim: &str) {
+fn process_line(line: &str, mode: &Mode, delimiter: char, output_delim: &str, suppress: bool) {
     match mode {
         Mode::Fields(ref indices) => {
             let fields: Vec<&str> = line.split(delimiter).collect();
+            // -s: suppress lines that don't contain the delimiter
+            if suppress && fields.len() <= 1 {
+                return;
+            }
             let mut first = true;
             for &idx in indices {
                 if idx <= fields.len() {
@@ -104,10 +108,16 @@ fn process_line(line: &str, mode: &Mode, delimiter: char, output_delim: &str) {
     }
 }
 
-fn process_reader<R: BufRead>(reader: R, mode: &Mode, delimiter: char, output_delim: &str) {
+fn process_reader<R: BufRead>(
+    reader: R,
+    mode: &Mode,
+    delimiter: char,
+    output_delim: &str,
+    suppress: bool,
+) {
     for line_result in reader.lines() {
         match line_result {
-            Ok(line) => process_line(&line, mode, delimiter, output_delim),
+            Ok(line) => process_line(&line, mode, delimiter, output_delim, suppress),
             Err(e) => {
                 eprintln!("cut: read error: {}", e);
                 process::exit(1);
@@ -122,9 +132,29 @@ fn main() {
     let mut delimiter = '\t';
     let mut mode: Option<Mode> = None;
     let mut files: Vec<String> = Vec::new();
+    let mut suppress = false;
+    let mut custom_output_delim: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
+        if args[i] == "-s" || args[i] == "--only-delimited" {
+            suppress = true;
+            i += 1;
+            continue;
+        }
+        if args[i].starts_with("--output-delimiter=") {
+            custom_output_delim = Some(args[i]["--output-delimiter=".len()..].to_string());
+            i += 1;
+            continue;
+        }
+        if args[i] == "--output-delimiter" {
+            i += 1;
+            if i < args.len() {
+                custom_output_delim = Some(args[i].clone());
+            }
+            i += 1;
+            continue;
+        }
         if args[i] == "-d" {
             i += 1;
             if i >= args.len() {
@@ -182,19 +212,21 @@ fn main() {
         }
     };
 
-    let output_delim = delimiter.to_string();
+    let output_delim = custom_output_delim.unwrap_or_else(|| delimiter.to_string());
 
     if files.is_empty() || (files.len() == 1 && files[0] == "-") {
         let stdin = io::stdin();
-        process_reader(stdin.lock(), &mode, delimiter, &output_delim);
+        process_reader(stdin.lock(), &mode, delimiter, &output_delim, suppress);
     } else {
         for path in &files {
             if path == "-" {
                 let stdin = io::stdin();
-                process_reader(stdin.lock(), &mode, delimiter, &output_delim);
+                process_reader(stdin.lock(), &mode, delimiter, &output_delim, suppress);
             } else {
                 match File::open(path) {
-                    Ok(f) => process_reader(BufReader::new(f), &mode, delimiter, &output_delim),
+                    Ok(f) => {
+                        process_reader(BufReader::new(f), &mode, delimiter, &output_delim, suppress)
+                    }
                     Err(e) => {
                         eprintln!("cut: {}: {}", path, e);
                         process::exit(1);
