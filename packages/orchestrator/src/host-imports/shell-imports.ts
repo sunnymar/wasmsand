@@ -18,6 +18,119 @@ const ERR_NOT_FOUND = -1;
 const _ERR_PERMISSION_DENIED = -2;
 const ERR_IO = -3;
 
+// ── Glob helpers ──
+
+/**
+ * Convert a glob pattern to a RegExp.
+ * Supports: * (any non-/ chars), ? (single non-/ char), [abc], [!abc]/[^abc],
+ * and ** (matches any path segments including /).
+ */
+function globToRegExp(pattern: string): RegExp {
+  let re = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === '*') {
+      if (pattern[i + 1] === '*') {
+        // ** matches everything including /
+        re += '.*';
+        i += 2;
+        // Skip a trailing / after ** (e.g. **/ matches zero or more dirs)
+        if (pattern[i] === '/') i++;
+      } else {
+        // * matches anything except /
+        re += '[^/]*';
+        i++;
+      }
+    } else if (ch === '?') {
+      re += '[^/]';
+      i++;
+    } else if (ch === '[') {
+      // Character class — find the closing ]
+      let j = i + 1;
+      // Handle negation
+      if (j < pattern.length && (pattern[j] === '!' || pattern[j] === '^')) j++;
+      // Handle ] as first char in class
+      if (j < pattern.length && pattern[j] === ']') j++;
+      while (j < pattern.length && pattern[j] !== ']') j++;
+      if (j >= pattern.length) {
+        // No closing ] — treat [ as literal
+        re += '\\[';
+        i++;
+      } else {
+        let cls = pattern.slice(i + 1, j);
+        // Convert [!...] to [^...]
+        if (cls.startsWith('!')) cls = '^' + cls.slice(1);
+        re += '[' + cls + ']';
+        i = j + 1;
+      }
+    } else if ('.+^${}()|\\'.includes(ch)) {
+      re += '\\' + ch;
+      i++;
+    } else {
+      re += ch;
+      i++;
+    }
+  }
+  return new RegExp('^' + re + '$');
+}
+
+/**
+ * Extract the base directory from a glob pattern.
+ * This is everything up to (but not including) the path component
+ * that contains the first glob metacharacter (*, ?, [).
+ */
+function globBaseDir(pattern: string): string {
+  const parts = pattern.split('/');
+  const base: string[] = [];
+  for (const part of parts) {
+    if (/[*?[\]]/.test(part)) break;
+    base.push(part);
+  }
+  const dir = base.join('/');
+  if (dir === '') return pattern.startsWith('/') ? '/' : '.';
+  return dir;
+}
+
+/**
+ * Recursively collect all file and directory paths under a given directory.
+ */
+function walkVfs(vfs: VfsLike, dir: string): string[] {
+  const results: string[] = [];
+  let entries;
+  try {
+    entries = vfs.readdir(dir);
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    const fullPath = dir === '/' ? '/' + entry.name : dir + '/' + entry.name;
+    results.push(fullPath);
+    if (entry.type === 'dir') {
+      results.push(...walkVfs(vfs, fullPath));
+    }
+  }
+  return results;
+}
+
+/**
+ * Perform glob matching against the VFS.
+ * Returns an array of matching absolute paths, sorted.
+ */
+function globMatch(vfs: VfsLike, pattern: string): string[] {
+  // Normalize: ensure pattern is absolute
+  const absPattern = pattern.startsWith('/') ? pattern : '/' + pattern;
+
+  const baseDir = globBaseDir(absPattern);
+  const regex = globToRegExp(absPattern);
+
+  // Walk from the base directory
+  const allPaths = walkVfs(vfs, baseDir);
+  const matches = allPaths.filter(p => regex.test(p));
+  matches.sort();
+  return matches;
+}
+
 export interface ShellImportsOptions {
   vfs: VfsLike;
   mgr: ProcessManager;
@@ -194,11 +307,16 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
     },
 
     host_glob(
-      _patternPtr: number, _patternLen: number,
+      patternPtr: number, patternLen: number,
       outPtr: number, outCap: number,
     ): number {
-      // Glob is complex -- stub for now, will implement in Phase 2
-      return writeJson(memory, outPtr, outCap, []);
+      const pattern = readString(memory, patternPtr, patternLen);
+      try {
+        const matches = globMatch(vfs, pattern);
+        return writeJson(memory, outPtr, outCap, matches);
+      } catch {
+        return writeJson(memory, outPtr, outCap, []);
+      }
     },
 
     host_rename(fromPtr: number, fromLen: number, toPtr: number, toLen: number): number {
