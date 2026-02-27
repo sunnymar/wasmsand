@@ -1,30 +1,9 @@
-use codepod_shell::ast::{Command, WordPart};
+use codepod_shell::ast::Command;
 
 use crate::control::{ControlFlow, RunResult, ShellError};
+use crate::expand::expand_words_with_splitting;
 use crate::host::HostInterface;
 use crate::state::ShellState;
-
-/// Extract the literal text from a single `WordPart`.
-///
-/// For Task 3 we only handle `Literal` and `QuotedLiteral`; all other
-/// variants are placeholders that return an empty string.
-fn expand_word_part(part: &WordPart) -> String {
-    match part {
-        WordPart::Literal(s) | WordPart::QuotedLiteral(s) => s.clone(),
-        // Placeholders for future expansion phases:
-        WordPart::Variable(_)
-        | WordPart::CommandSub(_)
-        | WordPart::ParamExpansion { .. }
-        | WordPart::ArithmeticExpansion(_)
-        | WordPart::ProcessSub(_) => String::new(),
-    }
-}
-
-/// Expand all parts of a `Word` into a single string by concatenating
-/// the expansions of its parts.
-fn expand_word(word: &codepod_shell::ast::Word) -> String {
-    word.parts.iter().map(expand_word_part).collect()
-}
 
 /// Execute a parsed `Command` AST node.
 ///
@@ -46,7 +25,10 @@ pub fn exec_command(
                 return Ok(ControlFlow::Normal(RunResult::empty()));
             }
 
-            let expanded: Vec<String> = words.iter().map(expand_word).collect();
+            let expanded = expand_words_with_splitting(state, words);
+            if expanded.is_empty() {
+                return Ok(ControlFlow::Normal(RunResult::empty()));
+            }
             let cmd_name = &expanded[0];
             let args: Vec<&str> = expanded[1..].iter().map(|s| s.as_str()).collect();
 
