@@ -94,8 +94,6 @@ export class ProcessManager {
       env: opts.env,
       preopens: { '/': '/' },
       stdin: stdinData,
-      networkBridge: this.networkBridge ?? undefined,
-      extensionHandler: this.extensionHandler ?? undefined,
       stdoutLimit: opts.stdoutLimit,
       stderrLimit: opts.stderrLimit,
       deadlineMs: opts.deadlineMs,

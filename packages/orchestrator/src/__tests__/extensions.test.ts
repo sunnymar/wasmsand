@@ -276,7 +276,7 @@ describe('Extension Python packages', () => {
       }],
     });
     const content = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/codepod_ext.py'));
-    expect(content).toContain('_EXTENSION_FD = 1022');
+    expect(content).toContain('import _codepod');
     expect(content).toContain('def call(');
   });
 

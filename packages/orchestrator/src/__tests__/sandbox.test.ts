@@ -280,7 +280,7 @@ describe('Sandbox', () => {
       });
       const data = sandbox.readFile('/usr/lib/python/socket.py');
       const content = new TextDecoder().decode(data);
-      expect(content).toContain('CONTROL_FD');
+      expect(content).toContain('import _codepod');
       expect(content).toContain('class socket:');
 
       const siteData = sandbox.readFile('/usr/lib/python/sitecustomize.py');
@@ -317,7 +317,7 @@ describe('Sandbox', () => {
       const child = await sandbox.fork();
       try {
         const data = child.readFile('/usr/lib/python/socket.py');
-        expect(new TextDecoder().decode(data)).toContain('CONTROL_FD');
+        expect(new TextDecoder().decode(data)).toContain('import _codepod');
       } finally {
         child.destroy();
       }

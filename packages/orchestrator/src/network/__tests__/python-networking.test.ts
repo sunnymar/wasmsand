@@ -191,11 +191,11 @@ except Exception as e:
     try {
       // Without network config, our socket shim is not bootstrapped.
       // The frozen socket module will fail to import (missing _socket C extension),
-      // so importing socket should either fail or not have CONTROL_FD.
+      // so importing socket should either fail or not have create_connection.
       const result = await sandbox.run(`python3 -c "
 try:
     import socket
-    print(hasattr(socket, 'CONTROL_FD'))
+    print(hasattr(socket, 'create_connection'))
 except ImportError:
     print('no_socket')
 "`);
@@ -203,7 +203,7 @@ except ImportError:
       if (result.exitCode !== 0) {
         console.error('STDERR:', result.stderr);
       }
-      // Either 'False' (frozen socket loaded but lacks CONTROL_FD) or
+      // Either 'False' (frozen socket loaded but lacks create_connection) or
       // 'no_socket' (frozen socket failed to import due to missing _socket)
       expect(['False', 'no_socket']).toContain(result.stdout.trim());
       expect(result.exitCode).toBe(0);
