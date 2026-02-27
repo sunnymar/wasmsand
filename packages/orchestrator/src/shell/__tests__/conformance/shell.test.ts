@@ -1674,4 +1674,22 @@ y"; echo "\${items[@]}"`);
       expect(r.stdout.trim()).toBe('3');
     });
   });
+
+  // ---------- touch flags ----------
+  describe('touch flags', () => {
+    it('touch -c does not create file if missing', async () => {
+      const r = await runner.run(`touch -c /tmp/nonexistent_touch_test; test -f /tmp/nonexistent_touch_test && echo exists || echo missing`);
+      expect(r.stdout.trim()).toBe('missing');
+    });
+
+    it('touch -d accepts date argument without error', async () => {
+      const r = await runner.run(`touch -d "2024-01-01" /tmp/touch_date_test; test -f /tmp/touch_date_test && echo ok`);
+      expect(r.stdout.trim()).toBe('ok');
+    });
+
+    it('touch -t accepts timestamp argument without error', async () => {
+      const r = await runner.run(`touch -t 202401010000 /tmp/touch_ts_test; test -f /tmp/touch_ts_test && echo ok`);
+      expect(r.stdout.trim()).toBe('ok');
+    });
+  });
 });
