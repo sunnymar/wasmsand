@@ -364,15 +364,20 @@ fn expand_bare_vars(state: &ShellState, expr: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'_' || bytes[i].is_ascii_alphabetic() {
-            // Check if this identifier is immediately preceded by a digit
-            // (e.g. `0x` in hex literals) — if so, don't expand it.
-            let preceded_by_digit =
-                !result.is_empty() && result.as_bytes()[result.len() - 1].is_ascii_digit();
+            // Check if this identifier is part of a numeric literal.
+            // Covers: digit immediately before (e.g. `0x` in hex) or
+            // hex prefix `0x`/`0X` before (e.g. `FF` in `0xFF`).
+            let rb = result.as_bytes();
+            let preceded_by_digit = !rb.is_empty() && rb[rb.len() - 1].is_ascii_digit();
+            let preceded_by_hex_prefix = rb.len() >= 2
+                && (rb[rb.len() - 1] == b'x' || rb[rb.len() - 1] == b'X')
+                && rb[rb.len() - 2] == b'0';
+            let in_numeric_literal = preceded_by_digit || preceded_by_hex_prefix;
             let start = i;
             while i < bytes.len() && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
                 i += 1;
             }
-            if preceded_by_digit {
+            if in_numeric_literal {
                 // Part of a numeric literal — pass through unchanged
                 result.push_str(&expr[start..i]);
             } else {
@@ -458,10 +463,14 @@ fn tokenize(expr: &str) -> Vec<Token> {
                 let hex_str = &expr[start + 2..i];
                 let val = i64::from_str_radix(hex_str, 16).unwrap_or(0);
                 tokens.push(Token::Num(val));
-            } else if ch == b'0' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
-                // Octal
+            } else if ch == b'0'
+                && i + 1 < bytes.len()
+                && bytes[i + 1] >= b'0'
+                && bytes[i + 1] <= b'7'
+            {
+                // Octal — only consume valid octal digits (0-7)
                 i += 1;
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                while i < bytes.len() && bytes[i] >= b'0' && bytes[i] <= b'7' {
                     i += 1;
                 }
                 let oct_str = &expr[start + 1..i];
@@ -756,16 +765,7 @@ impl Parser {
         loop {
             match self.peek_op() {
                 Some("*") => {
-                    // Make sure it's not `**`
-                    if self.pos + 1 < self.tokens.len() {
-                        if let Token::Op(ref s) = self.tokens[self.pos] {
-                            if s == "*" {
-                                // Check next token — if it's also `*` that would be `**`
-                                // But actually tokenizer already handles `**` as one token.
-                                // So a single `*` here is just multiplication.
-                            }
-                        }
-                    }
+                    // Tokenizer already handles `**` as one token, so `*` here is multiplication.
                     self.next_token();
                     let right = self.parse_exponent();
                     left = left.wrapping_mul(right);
