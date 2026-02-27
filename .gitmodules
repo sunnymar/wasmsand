@@ -4,3 +4,6 @@
 [submodule "packages/pillow-rust"]
 	path = packages/pillow-rust
 	url = https://github.com/codepod-sandbox/pillow-rust.git
+[submodule "packages/matplotlib-py"]
+	path = packages/matplotlib-py
+	url = https://github.com/codepod-sandbox/matplotlib-py.git
