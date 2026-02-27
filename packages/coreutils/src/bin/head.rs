@@ -37,10 +37,28 @@ fn print_usage() {
     eprintln!("NUM defaults to 10.");
 }
 
+fn head_lines_except_last<R: BufRead>(
+    reader: R,
+    skip_last: usize,
+    stdout: &mut impl Write,
+) -> io::Result<()> {
+    let lines: Vec<String> = reader.lines().collect::<io::Result<Vec<_>>>()?;
+    let end = if lines.len() > skip_last {
+        lines.len() - skip_last
+    } else {
+        0
+    };
+    for line in &lines[..end] {
+        writeln!(stdout, "{}", line)?;
+    }
+    Ok(())
+}
+
 fn run() -> i32 {
     let args: Vec<String> = env::args().collect();
     let mut count: usize = 10;
     let mut byte_mode = false;
+    let mut negative = false; // head -n -N: all but last N lines
     let mut files: Vec<String> = Vec::new();
 
     let mut i = 1;
@@ -69,11 +87,25 @@ fn run() -> i32 {
                     eprintln!("head: option requires an argument -- 'n'");
                     return 1;
                 }
-                match args[i].parse::<usize>() {
-                    Ok(n) => count = n,
-                    Err(_) => {
-                        eprintln!("head: invalid number of lines: '{}'", args[i]);
-                        return 1;
+                let val = &args[i];
+                if let Some(stripped) = val.strip_prefix('-') {
+                    match stripped.parse::<usize>() {
+                        Ok(n) => {
+                            count = n;
+                            negative = true;
+                        }
+                        Err(_) => {
+                            eprintln!("head: invalid number of lines: '{}'", args[i]);
+                            return 1;
+                        }
+                    }
+                } else {
+                    match val.parse::<usize>() {
+                        Ok(n) => count = n,
+                        Err(_) => {
+                            eprintln!("head: invalid number of lines: '{}'", args[i]);
+                            return 1;
+                        }
                     }
                 }
             }
@@ -161,6 +193,8 @@ fn run() -> i32 {
             let stdin = io::stdin();
             let result = if byte_mode {
                 head_bytes(stdin.lock(), count, &mut stdout)
+            } else if negative {
+                head_lines_except_last(BufReader::new(stdin.lock()), count, &mut stdout)
             } else {
                 head_lines(BufReader::new(stdin.lock()), count, &mut stdout)
             };
@@ -173,6 +207,8 @@ fn run() -> i32 {
                 Ok(f) => {
                     let result = if byte_mode {
                         head_bytes(f, count, &mut stdout)
+                    } else if negative {
+                        head_lines_except_last(BufReader::new(f), count, &mut stdout)
                     } else {
                         head_lines(BufReader::new(f), count, &mut stdout)
                     };

@@ -1692,4 +1692,73 @@ y"; echo "\${items[@]}"`);
       expect(r.stdout.trim()).toBe('ok');
     });
   });
+
+  // ---------- cp -a/-p ----------
+  describe('cp flags', () => {
+    it('cp -a copies recursively', async () => {
+      const r = await runner.run(`mkdir -p /tmp/cpa/sub; echo hi > /tmp/cpa/sub/f; cp -a /tmp/cpa /tmp/cpb; cat /tmp/cpb/sub/f`);
+      expect(r.stdout.trim()).toBe('hi');
+    });
+
+    it('cp -p accepts preserve flag', async () => {
+      const r = await runner.run(`echo x > /tmp/cpp1; cp -p /tmp/cpp1 /tmp/cpp2; cat /tmp/cpp2`);
+      expect(r.stdout.trim()).toBe('x');
+    });
+  });
+
+  // ---------- mkdir -m ----------
+  describe('mkdir -m', () => {
+    it('mkdir -m 755 accepts mode flag', async () => {
+      const r = await runner.run(`mkdir -m 755 /tmp/mdm; test -d /tmp/mdm && echo ok`);
+      expect(r.stdout.trim()).toBe('ok');
+    });
+
+    it('mkdir -p -m creates parents with mode', async () => {
+      const r = await runner.run(`mkdir -p -m 700 /tmp/mdpm/sub; test -d /tmp/mdpm/sub && echo ok`);
+      expect(r.stdout.trim()).toBe('ok');
+    });
+  });
+
+  // ---------- cat -b/-s/-E ----------
+  describe('cat -b/-s/-E', () => {
+    it('cat -b numbers non-blank lines', async () => {
+      const r = await runner.run(`printf "a\\n\\nb\\n" | cat -b`);
+      expect(r.stdout).toContain('1\ta');
+      expect(r.stdout).toContain('2\tb');
+      // blank line should not be numbered
+      expect(r.stdout).not.toContain('2\t\n');
+    });
+
+    it('cat -s squeezes blank lines', async () => {
+      const r = await runner.run(`printf "a\\n\\n\\n\\nb\\n" | cat -s`);
+      const lines = r.stdout.split('\n').filter(l => l !== '');
+      expect(lines.length).toBeLessThanOrEqual(3); // a, (one blank), b
+    });
+
+    it('cat -E shows line ends', async () => {
+      const r = await runner.run(`printf "hello\\n" | cat -E`);
+      expect(r.stdout).toContain('hello$');
+    });
+  });
+
+  // ---------- head -n -N ----------
+  describe('head -n -N', () => {
+    it('head -n -2 prints all but last 2 lines', async () => {
+      const r = await runner.run(`printf "a\\nb\\nc\\nd\\ne\\n" | head -n -2`);
+      expect(r.stdout.trim()).toBe('a\nb\nc');
+    });
+  });
+
+  // ---------- tail -n +N and -f ----------
+  describe('tail -n +N and -f', () => {
+    it('tail -n +3 prints from line 3 onwards', async () => {
+      const r = await runner.run(`printf "a\\nb\\nc\\nd\\ne\\n" | tail -n +3`);
+      expect(r.stdout.trim()).toBe('c\nd\ne');
+    });
+
+    it('tail -f accepts follow flag without error', async () => {
+      const r = await runner.run(`printf "line1\\nline2\\n" | tail -f -n 1`);
+      expect(r.stdout.trim()).toBe('line2');
+    });
+  });
 });

@@ -7,16 +7,32 @@ fn main() {
     let mut create_parents = false;
     let mut dirs: Vec<String> = Vec::new();
 
+    let mut skip_next = false;
     for arg in env::args().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
         if arg == "--" {
             break;
         }
-        if arg.starts_with('-') && arg.len() > 1 {
+        if arg == "-m" || arg == "--mode" {
+            skip_next = true; // skip the mode argument (WASM can't set perms)
+            continue;
+        }
+        if let Some(_mode) = arg.strip_prefix("-m") {
+            continue; // -mMODE form
+        }
+        if let Some(_mode) = arg.strip_prefix("--mode=") {
+            continue; // --mode=MODE form
+        }
+        if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
             for ch in arg[1..].chars() {
                 match ch {
                     'p' => create_parents = true,
+                    'v' => {} // verbose: accept silently
                     _ => {
-                        eprintln!("mkdir: invalid option -- '{}'", ch);
+                        eprintln!("mkdir: invalid option -- '{ch}'");
                         process::exit(1);
                     }
                 }

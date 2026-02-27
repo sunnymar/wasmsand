@@ -59,10 +59,22 @@ fn print_usage() {
     eprintln!("NUM defaults to 10.");
 }
 
+/// Print lines starting from line N (1-based)
+fn tail_from_line<R: BufRead>(reader: R, start: usize, stdout: &mut impl Write) -> io::Result<()> {
+    for (i, line) in reader.lines().enumerate() {
+        let line = line?;
+        if i + 1 >= start {
+            writeln!(stdout, "{}", line)?;
+        }
+    }
+    Ok(())
+}
+
 fn run() -> i32 {
     let args: Vec<String> = env::args().collect();
     let mut count: usize = 10;
     let mut byte_mode = false;
+    let mut from_start = false; // +N mode: start from line N
     let mut files: Vec<String> = Vec::new();
 
     let mut i = 1;
@@ -92,17 +104,24 @@ fn run() -> i32 {
                     return 1;
                 }
                 let val = &args[i];
-                // Support +NUM syntax (lines from beginning) - simplified: treat as count
-                let parse_val = if let Some(stripped) = val.strip_prefix('+') {
-                    stripped
+                if let Some(stripped) = val.strip_prefix('+') {
+                    match stripped.parse::<usize>() {
+                        Ok(n) => {
+                            count = n;
+                            from_start = true;
+                        }
+                        Err(_) => {
+                            eprintln!("tail: invalid number of lines: '{}'", args[i]);
+                            return 1;
+                        }
+                    }
                 } else {
-                    val.as_str()
-                };
-                match parse_val.parse::<usize>() {
-                    Ok(n) => count = n,
-                    Err(_) => {
-                        eprintln!("tail: invalid number of lines: '{}'", args[i]);
-                        return 1;
+                    match val.parse::<usize>() {
+                        Ok(n) => count = n,
+                        Err(_) => {
+                            eprintln!("tail: invalid number of lines: '{}'", args[i]);
+                            return 1;
+                        }
                     }
                 }
             }
@@ -155,8 +174,28 @@ fn run() -> i32 {
                 }
                 break;
             }
-            arg if arg.starts_with('-') && arg.len() > 1 => {
-                eprintln!("tail: invalid option -- '{}'", &arg[1..]);
+            "-f" | "--follow" => {} // accept silently (no polling in WASM)
+            arg if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") => {
+                // Handle combined short flags
+                let mut valid = true;
+                for ch in arg[1..].chars() {
+                    match ch {
+                        'f' => {}                      // follow: accept silently
+                        'q' | 'v' => {}                // quiet/verbose: accept silently
+                        _ if ch.is_ascii_digit() => {} // handled above as -NUM
+                        _ => {
+                            eprintln!("tail: invalid option -- '{ch}'");
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+                if !valid {
+                    return 1;
+                }
+            }
+            arg if arg.starts_with("--") => {
+                eprintln!("tail: unrecognized option '{arg}'");
                 return 1;
             }
             _ => files.push(args[i].clone()),
@@ -190,6 +229,8 @@ fn run() -> i32 {
             let stdin = io::stdin();
             let result = if byte_mode {
                 tail_bytes(stdin.lock(), count, &mut stdout)
+            } else if from_start {
+                tail_from_line(BufReader::new(stdin.lock()), count, &mut stdout)
             } else {
                 tail_reader(BufReader::new(stdin.lock()), count, &mut stdout)
             };
@@ -202,6 +243,8 @@ fn run() -> i32 {
                 Ok(f) => {
                     let result = if byte_mode {
                         tail_bytes(f, count, &mut stdout)
+                    } else if from_start {
+                        tail_from_line(BufReader::new(f), count, &mut stdout)
                     } else {
                         tail_reader(BufReader::new(f), count, &mut stdout)
                     };

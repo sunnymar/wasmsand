@@ -76,6 +76,12 @@ fn main() {
             for ch in arg[1..].chars() {
                 match ch {
                     'r' | 'R' => opts.recursive = true,
+                    // Accept common flags silently (WASM can't set perms/ownership)
+                    'p' | 'a' | 'n' | 'v' | 'f' | 'l' | 'u' | 'd' => {
+                        if ch == 'a' {
+                            opts.recursive = true;
+                        }
+                    }
                     _ => {
                         eprintln!("cp: invalid option -- '{}'", ch);
                         process::exit(1);
