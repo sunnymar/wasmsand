@@ -37,6 +37,8 @@ fn main() {
     let mut reverse = false;
     let mut numeric = false;
     let mut unique = false;
+    let mut fold_case = false;
+    let mut ignore_blanks = false;
     let mut separator: Option<char> = None;
     let mut key_field: Option<usize> = None;
     let mut files: Vec<String> = Vec::new();
@@ -88,6 +90,8 @@ fn main() {
                     'r' => reverse = true,
                     'n' => numeric = true,
                     'u' => unique = true,
+                    'f' => fold_case = true,
+                    'b' => ignore_blanks = true,
                     _ => {
                         eprintln!("sort: invalid option -- '{}'", ch);
                         process::exit(2);
@@ -148,12 +152,23 @@ fn main() {
 
     // Sort the lines
     all_lines.sort_by(|a, b| {
-        let ka = extract_key(a, separator, key_field);
-        let kb = extract_key(b, separator, key_field);
+        let mut ka = extract_key(a, separator, key_field);
+        let mut kb = extract_key(b, separator, key_field);
+        // Owned strings for transformations
+        let ka_owned: String;
+        let kb_owned: String;
+        if ignore_blanks {
+            ka_owned = ka.trim_start().to_string();
+            kb_owned = kb.trim_start().to_string();
+            ka = &ka_owned;
+            kb = &kb_owned;
+        }
         let cmp = if numeric {
             let na = parse_numeric_key(ka);
             let nb = parse_numeric_key(kb);
             na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+        } else if fold_case {
+            ka.to_lowercase().cmp(&kb.to_lowercase())
         } else {
             ka.cmp(kb)
         };

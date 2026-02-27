@@ -2,8 +2,23 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process;
+
+fn tail_bytes<R: Read>(mut reader: R, count: usize, stdout: &mut impl Write) -> io::Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    let mut all = Vec::new();
+    reader.read_to_end(&mut all)?;
+    let start = if all.len() > count {
+        all.len() - count
+    } else {
+        0
+    };
+    stdout.write_all(&all[start..])?;
+    Ok(())
+}
 
 fn tail_reader<R: BufRead>(reader: R, count: usize, stdout: &mut impl Write) -> io::Result<()> {
     if count == 0 {
@@ -47,11 +62,29 @@ fn print_usage() {
 fn run() -> i32 {
     let args: Vec<String> = env::args().collect();
     let mut count: usize = 10;
+    let mut byte_mode = false;
     let mut files: Vec<String> = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "-c" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("tail: option requires an argument -- 'c'");
+                    return 1;
+                }
+                match args[i].parse::<usize>() {
+                    Ok(n) => {
+                        count = n;
+                        byte_mode = true;
+                    }
+                    Err(_) => {
+                        eprintln!("tail: invalid number of bytes: '{}'", args[i]);
+                        return 1;
+                    }
+                }
+            }
             "-n" => {
                 i += 1;
                 if i >= args.len() {
@@ -155,16 +188,24 @@ fn run() -> i32 {
 
         if file == "-" {
             let stdin = io::stdin();
-            let reader = BufReader::new(stdin.lock());
-            if let Err(e) = tail_reader(reader, count, &mut stdout) {
+            let result = if byte_mode {
+                tail_bytes(stdin.lock(), count, &mut stdout)
+            } else {
+                tail_reader(BufReader::new(stdin.lock()), count, &mut stdout)
+            };
+            if let Err(e) = result {
                 eprintln!("tail: standard input: {}", e);
                 exit_code = 1;
             }
         } else {
             match File::open(file) {
                 Ok(f) => {
-                    let reader = BufReader::new(f);
-                    if let Err(e) = tail_reader(reader, count, &mut stdout) {
+                    let result = if byte_mode {
+                        tail_bytes(f, count, &mut stdout)
+                    } else {
+                        tail_reader(BufReader::new(f), count, &mut stdout)
+                    };
+                    if let Err(e) = result {
                         eprintln!("tail: {}: {}", file, e);
                         exit_code = 1;
                     }

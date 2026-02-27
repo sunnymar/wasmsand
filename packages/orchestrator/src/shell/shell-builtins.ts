@@ -51,6 +51,7 @@ export abstract class ShellBuiltins {
   protected abstract packageManager: PackageManager | null;
   protected abstract auditHandler: ((type: string, data?: Record<string, unknown>) => void) | null;
   protected abstract arrays: Map<string, string[]>;
+  protected abstract assocArrays: Map<string, Map<string, string>>;
 
   // Methods that builtins call back into on the runner
   protected abstract resolvePath(path: string): string;
@@ -124,6 +125,8 @@ export abstract class ShellBuiltins {
   protected builtinUnset(args: string[]): RunResult {
     for (const name of args) {
       this.env.delete(name);
+      this.arrays.delete(name);
+      this.assocArrays.delete(name);
     }
     return { ...EMPTY_RESULT };
   }
@@ -142,6 +145,71 @@ export abstract class ShellBuiltins {
         this.trapHandlers.set(signal, action);
       }
     }
+    return { ...EMPTY_RESULT };
+  }
+
+  /** Builtin: declare/typeset — declare variables with attributes. */
+  protected builtinDeclare(args: string[]): RunResult {
+    let assoc = false;
+    let indexed = false;
+    let doExport = false;
+    const assignments: string[] = [];
+
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg.startsWith('-') && arg.length > 1) {
+        for (const ch of arg.slice(1)) {
+          switch (ch) {
+            case 'A': assoc = true; break;
+            case 'a': indexed = true; break;
+            case 'i': break; // integer attribute — ignored
+            case 'x': doExport = true; break;
+            case 'r': break; // readonly — ignored
+            default: break;
+          }
+        }
+      } else {
+        assignments.push(arg);
+      }
+    }
+
+    for (const assign of assignments) {
+      const eqIdx = assign.indexOf('=');
+      const name = eqIdx !== -1 ? assign.slice(0, eqIdx) : assign;
+      const value = eqIdx !== -1 ? assign.slice(eqIdx + 1) : '';
+
+      if (assoc) {
+        if (!this.assocArrays.has(name)) {
+          this.assocArrays.set(name, new Map());
+        }
+        if (eqIdx !== -1 && value.startsWith('(') && value.endsWith(')')) {
+          // declare -A map=([key1]=val1 [key2]=val2)
+          const inner = value.slice(1, -1).trim();
+          const map = this.assocArrays.get(name)!;
+          const pairRe = /\[([^\]]+)\]=(\S+)/g;
+          let m;
+          while ((m = pairRe.exec(inner)) !== null) {
+            map.set(m[1], m[2]);
+          }
+        }
+      } else if (indexed) {
+        if (!this.arrays.has(name)) {
+          this.arrays.set(name, []);
+        }
+        if (eqIdx !== -1 && value.startsWith('(') && value.endsWith(')')) {
+          const inner = value.slice(1, -1).trim();
+          this.arrays.set(name, inner.length > 0 ? inner.split(/\s+/) : []);
+        }
+      } else {
+        if (eqIdx !== -1) {
+          this.env.set(name, value);
+        }
+        if (doExport) {
+          this.env.set(name, this.env.get(name) ?? '');
+        }
+      }
+    }
+
     return { ...EMPTY_RESULT };
   }
 

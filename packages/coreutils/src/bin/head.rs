@@ -2,10 +2,10 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process;
 
-fn head_reader<R: BufRead>(reader: R, count: usize, stdout: &mut impl Write) -> io::Result<()> {
+fn head_lines<R: BufRead>(reader: R, count: usize, stdout: &mut impl Write) -> io::Result<()> {
     for (i, line) in reader.lines().enumerate() {
         if i >= count {
             break;
@@ -13,6 +13,20 @@ fn head_reader<R: BufRead>(reader: R, count: usize, stdout: &mut impl Write) -> 
         let line = line?;
         writeln!(stdout, "{}", line)?;
     }
+    Ok(())
+}
+
+fn head_bytes<R: Read>(mut reader: R, count: usize, stdout: &mut impl Write) -> io::Result<()> {
+    let mut buf = vec![0u8; count];
+    let mut total = 0;
+    while total < count {
+        let n = reader.read(&mut buf[total..])?;
+        if n == 0 {
+            break;
+        }
+        total += n;
+    }
+    stdout.write_all(&buf[..total])?;
     Ok(())
 }
 
@@ -26,11 +40,29 @@ fn print_usage() {
 fn run() -> i32 {
     let args: Vec<String> = env::args().collect();
     let mut count: usize = 10;
+    let mut byte_mode = false;
     let mut files: Vec<String> = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "-c" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("head: option requires an argument -- 'c'");
+                    return 1;
+                }
+                match args[i].parse::<usize>() {
+                    Ok(n) => {
+                        count = n;
+                        byte_mode = true;
+                    }
+                    Err(_) => {
+                        eprintln!("head: invalid number of bytes: '{}'", args[i]);
+                        return 1;
+                    }
+                }
+            }
             "-n" => {
                 i += 1;
                 if i >= args.len() {
@@ -127,16 +159,24 @@ fn run() -> i32 {
 
         if file == "-" {
             let stdin = io::stdin();
-            let reader = BufReader::new(stdin.lock());
-            if let Err(e) = head_reader(reader, count, &mut stdout) {
+            let result = if byte_mode {
+                head_bytes(stdin.lock(), count, &mut stdout)
+            } else {
+                head_lines(BufReader::new(stdin.lock()), count, &mut stdout)
+            };
+            if let Err(e) = result {
                 eprintln!("head: standard input: {}", e);
                 exit_code = 1;
             }
         } else {
             match File::open(file) {
                 Ok(f) => {
-                    let reader = BufReader::new(f);
-                    if let Err(e) = head_reader(reader, count, &mut stdout) {
+                    let result = if byte_mode {
+                        head_bytes(f, count, &mut stdout)
+                    } else {
+                        head_lines(BufReader::new(f), count, &mut stdout)
+                    };
+                    if let Err(e) = result {
                         eprintln!("head: {}: {}", file, e);
                         exit_code = 1;
                     }

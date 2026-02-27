@@ -99,6 +99,8 @@ export class ShellRunner extends ShellBuiltins {
   protected trapHandlers: Map<string, string> = new Map();
   /** Array storage for bash-style arrays. */
   protected arrays: Map<string, string[]> = new Map();
+  /** Associative array storage (declare -A). */
+  protected assocArrays: Map<string, Map<string, string>> = new Map();
   /** Whether we're in a conditional context (if condition, || / && chains). */
   private inConditionalContext = false;
   /** Pipe stdin data threaded through compound commands (while, for, if, subshell). */
@@ -529,8 +531,25 @@ export class ShellRunner extends ShellBuiltins {
     // Process assignments (expand variables and command substitutions in values)
     for (const assignment of simple.assignments) {
       const value = await this.expandAssignmentValue(assignment.value);
-      // Detect array assignment: value is "(elem1 elem2 ...)"
-      if (value.startsWith('(') && value.endsWith(')')) {
+      // Array element assignment: arr[idx]=value or assoc[key]=value
+      const arrAssignMatch = assignment.name.match(/^(\w+)\[(.+)\]$/);
+      if (arrAssignMatch) {
+        const arrName = arrAssignMatch[1];
+        const subscript = arrAssignMatch[2];
+        const assoc = this.assocArrays.get(arrName);
+        if (assoc) {
+          assoc.set(subscript, value);
+        } else {
+          const idx = parseInt(subscript, 10);
+          if (!isNaN(idx)) {
+            if (!this.arrays.has(arrName)) this.arrays.set(arrName, []);
+            const arr = this.arrays.get(arrName)!;
+            while (arr.length <= idx) arr.push('');
+            arr[idx] = value;
+          }
+        }
+      } else if (value.startsWith('(') && value.endsWith(')')) {
+        // Detect array assignment: value is "(elem1 elem2 ...)"
         const inner = value.slice(1, -1).trim();
         const elements = inner.length > 0 ? inner.split(/\s+/) : [];
         this.arrays.set(assignment.name, elements);
@@ -696,6 +715,8 @@ export class ShellRunner extends ShellBuiltins {
       result = { ...EMPTY_RESULT };
     } else if (cmdName === 'trap') {
       result = this.builtinTrap(args);
+    } else if (cmdName === 'declare' || cmdName === 'typeset') {
+      result = this.builtinDeclare(args);
     }
 
     if (!result) {
@@ -1253,19 +1274,50 @@ export class ShellRunner extends ShellBuiltins {
       if (part.Variable === 'RANDOM') {
         return String(Math.floor(Math.random() * 32768));
       }
-      // Array access: arr[n], arr[@], arr[*]
+      // Array access: arr[n], arr[@], arr[*], and slicing arr[@]:offset:length
+      const arrSliceMatch = part.Variable.match(/^(\w+)\[(.+?)\]:(.+)$/);
+      if (arrSliceMatch) {
+        const arrName = arrSliceMatch[1];
+        const subscript = arrSliceMatch[2];
+        const sliceSpec = arrSliceMatch[3];
+        if (subscript === '@' || subscript === '*') {
+          const arr = this.arrays.get(arrName);
+          if (arr) {
+            const parts = sliceSpec.split(':');
+            let offset = parseInt(parts[0], 10) || 0;
+            if (offset < 0) offset = Math.max(0, arr.length + offset);
+            if (parts.length > 1) {
+              const length = parseInt(parts[1], 10);
+              return arr.slice(offset, offset + length).join(' ');
+            }
+            return arr.slice(offset).join(' ');
+          }
+        }
+        return '';
+      }
       const arrMatch = part.Variable.match(/^(\w+)\[(.+)\]$/);
       if (arrMatch) {
         const arrName = arrMatch[1];
         const index = arrMatch[2];
+        // Check associative arrays first
+        const assoc = this.assocArrays.get(arrName);
+        if (assoc) {
+          if (index === '@' || index === '*') {
+            return Array.from(assoc.values()).join(' ');
+          }
+          return assoc.get(index) ?? '';
+        }
         const arr = this.arrays.get(arrName);
         if (arr) {
           if (index === '@' || index === '*') {
             return arr.join(' ');
           }
-          const idx = parseInt(index, 10);
-          if (!isNaN(idx) && idx >= 0 && idx < arr.length) {
-            return arr[idx];
+          let idx = parseInt(index, 10);
+          if (!isNaN(idx)) {
+            if (idx < 0) idx = arr.length + idx;
+            if (idx >= 0 && idx < arr.length) {
+              return arr[idx];
+            }
           }
           return '';
         }
@@ -1323,6 +1375,8 @@ export class ShellRunner extends ShellBuiltins {
             // Check for array length: ${#arr[@]} or ${#arr[*]}
             const arrLenMatch = operand.match(/^(\w+)\[[@*]\]$/);
             if (arrLenMatch) {
+              const assoc = this.assocArrays.get(arrLenMatch[1]);
+              if (assoc) return String(assoc.size);
               const arr = this.arrays.get(arrLenMatch[1]);
               return String(arr ? arr.length : 0);
             }
@@ -1363,6 +1417,22 @@ export class ShellRunner extends ShellBuiltins {
           return s.charAt(0).toLowerCase() + s.slice(1);
         }
         case ':': {
+          // Array slicing: ${arr[@]:offset:length}
+          const arrSlice = name.match(/^(\w+)\[[@*]\]$/);
+          if (arrSlice) {
+            const arr = this.arrays.get(arrSlice[1]);
+            if (arr) {
+              const parts = operand.split(':');
+              let offset = parseInt(parts[0], 10) || 0;
+              if (offset < 0) offset = Math.max(0, arr.length + offset);
+              if (parts.length > 1) {
+                const length = parseInt(parts[1], 10);
+                return arr.slice(offset, offset + length).join(' ');
+              }
+              return arr.slice(offset).join(' ');
+            }
+            return '';
+          }
           const s = val ?? '';
           const parts = operand.split(':');
           let offset = parseInt(parts[0], 10) || 0;
@@ -1757,7 +1827,7 @@ export class ShellRunner extends ShellBuiltins {
         if (i < value.length && value[i] === '{') {
           const end = value.indexOf('}', i + 1);
           const varName = end >= 0 ? value.slice(i + 1, end) : value.slice(i + 1);
-          result += this.env.get(varName) ?? '';
+          result += this.resolveAssignmentVar(varName);
           i = end >= 0 ? end + 1 : value.length;
         } else {
           let varName = '';
@@ -1771,6 +1841,29 @@ export class ShellRunner extends ShellBuiltins {
       }
     }
     return result;
+  }
+
+  /** Resolve a variable name from assignment context, supporting arrays and assoc arrays. */
+  private resolveAssignmentVar(varName: string): string {
+    const arrMatch = varName.match(/^(\w+)\[(.+)\]$/);
+    if (arrMatch) {
+      const name = arrMatch[1];
+      const idx = arrMatch[2];
+      const assoc = this.assocArrays.get(name);
+      if (assoc) {
+        if (idx === '@' || idx === '*') return Array.from(assoc.values()).join(' ');
+        return assoc.get(idx) ?? '';
+      }
+      const arr = this.arrays.get(name);
+      if (arr) {
+        if (idx === '@' || idx === '*') return arr.join(' ');
+        const n = parseInt(idx, 10);
+        if (!isNaN(n) && n >= 0 && n < arr.length) return arr[n];
+        return '';
+      }
+      return '';
+    }
+    return this.env.get(varName) ?? '';
   }
 
   /** Extract balanced content between open/close chars. */

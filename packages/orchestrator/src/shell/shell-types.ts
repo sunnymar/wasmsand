@@ -7,7 +7,7 @@ import type { ErrorClass } from '../security.js';
 // ---- Constants ----
 
 export const PYTHON_COMMANDS = new Set(['python3', 'python']);
-export const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg', 'pip', 'history', 'source', '.', 'set', 'read', 'eval', 'getopts', 'return', 'local', 'trap']);
+export const SHELL_BUILTINS = new Set(['echo', 'which', 'chmod', 'test', '[', 'pwd', 'cd', 'export', 'unset', 'date', 'curl', 'wget', 'exit', 'true', 'false', 'pkg', 'pip', 'history', 'source', '.', 'set', 'read', 'eval', 'getopts', 'return', 'local', 'trap', 'declare', 'typeset']);
 export const SHELL_COMMANDS = new Set(['sh', 'bash']);
 
 /** Interpreter names that should be dispatched to PythonRunner. */

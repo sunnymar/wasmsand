@@ -7,12 +7,17 @@ fn main() {
     // Parse flags
     let mut max_args: Option<usize> = None;
     let mut replace_token: Option<String> = None;
+    let mut null_delim = false;
     let mut cmd_start = 0;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "-n" && i + 1 < args.len() {
             max_args = args[i + 1].parse().ok();
             i += 2;
+            cmd_start = i;
+        } else if args[i] == "-0" {
+            null_delim = true;
+            i += 1;
             cmd_start = i;
         } else if args[i] == "-I" && i + 1 < args.len() {
             // Separate form: -I {}
@@ -58,11 +63,15 @@ fn main() {
             let _ = writeln!(out, "{}", replaced.join(" "));
         }
     } else {
-        // Original behavior: read all stdin, split on whitespace
+        // Read all stdin, split on whitespace or null bytes (-0)
         let mut input = String::new();
         io::stdin().read_to_string(&mut input).unwrap_or(0);
 
-        let items: Vec<&str> = input.split_whitespace().collect();
+        let items: Vec<&str> = if null_delim {
+            input.split('\0').filter(|s| !s.is_empty()).collect()
+        } else {
+            input.split_whitespace().collect()
+        };
         if items.is_empty() {
             return;
         }

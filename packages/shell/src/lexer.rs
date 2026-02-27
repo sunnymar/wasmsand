@@ -842,9 +842,20 @@ fn classify_word(word: String) -> Token {
         _ => {
             if let Some(eq_pos) = word.find('=') {
                 let name = &word[..eq_pos];
-                if !name.is_empty() && is_valid_var_name(name) {
-                    let value = word[eq_pos + 1..].to_string();
-                    return Token::Assignment(name.to_string(), value);
+                if !name.is_empty() {
+                    // Regular variable assignment: FOO=bar
+                    if is_valid_var_name(name) {
+                        let value = word[eq_pos + 1..].to_string();
+                        return Token::Assignment(name.to_string(), value);
+                    }
+                    // Array element assignment: arr[idx]=value or assoc[key]=value
+                    if let Some(bracket_pos) = name.find('[') {
+                        let base = &name[..bracket_pos];
+                        if name.ends_with(']') && !base.is_empty() && is_valid_var_name(base) {
+                            let value = word[eq_pos + 1..].to_string();
+                            return Token::Assignment(name.to_string(), value);
+                        }
+                    }
                 }
             }
             Token::Word(word)

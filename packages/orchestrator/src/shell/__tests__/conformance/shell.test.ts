@@ -922,4 +922,109 @@ describe('shell conformance', () => {
       expect(r.stdout).toBe('fallback\n');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Array slicing
+  // ---------------------------------------------------------------------------
+  describe('array slicing', () => {
+    it('${arr[@]:offset} slices from offset', async () => {
+      const r = await runner.run(`arr=(a b c d e); echo "\${arr[@]:2}"`);
+      expect(r.stdout).toBe('c d e\n');
+    });
+
+    it('${arr[@]:offset:length} slices with length', async () => {
+      const r = await runner.run(`arr=(a b c d e); echo "\${arr[@]:1:3}"`);
+      expect(r.stdout).toBe('b c d\n');
+    });
+
+    it('${arr[@]: -N} slices from end', async () => {
+      const r = await runner.run(`arr=(a b c d e); echo "\${arr[@]: -2}"`);
+      expect(r.stdout).toBe('d e\n');
+    });
+
+    it('negative array index ${arr[-1]}', async () => {
+      const r = await runner.run(`arr=(a b c); echo "\${arr[-1]}"`);
+      expect(r.stdout).toBe('c\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Associative arrays (declare -A)
+  // ---------------------------------------------------------------------------
+  describe('associative arrays', () => {
+    it('declare -A and element access', async () => {
+      const r = await runner.run(`declare -A m; m[name]=alice; m[age]=30; echo "\${m[name]} is \${m[age]}"`);
+      expect(r.stdout).toBe('alice is 30\n');
+    });
+
+    it('declare -A with inline initialization', async () => {
+      const r = await runner.run(`declare -A m=([x]=10 [y]=20); echo "\${m[x]} \${m[y]}"`);
+      expect(r.stdout).toBe('10 20\n');
+    });
+
+    it('${#assoc[@]} returns count of keys', async () => {
+      const r = await runner.run(`declare -A m=([a]=1 [b]=2 [c]=3); echo "\${#m[@]}"`);
+      expect(r.stdout).toBe('3\n');
+    });
+
+    it('${assoc[@]} expands all values', async () => {
+      const r = await runner.run(`declare -A m=([x]=hello [y]=world); echo "\${m[@]}" | sed 's/ /\\n/g' | sort`);
+      expect(r.stdout).toBe('hello\nworld\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // sort -f and -b flags
+  // ---------------------------------------------------------------------------
+  describe('sort flags', () => {
+    it('sort -f folds case', async () => {
+      const r = await runner.run(`printf "banana\\nApple\\ncherry\\n" | sort -f`);
+      expect(r.stdout).toBe('Apple\nbanana\ncherry\n');
+    });
+
+    it('sort -b ignores leading blanks', async () => {
+      const r = await runner.run(`printf "  z\\na\\n  b\\n" | sort -b`);
+      expect(r.stdout).toBe('a\n  b\n  z\n');
+    });
+
+    it('sort -fb combined', async () => {
+      const r = await runner.run(`printf "  Banana\\napple\\n  Cherry\\n" | sort -fb`);
+      expect(r.stdout).toBe('apple\n  Banana\n  Cherry\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // head -c and tail -c byte mode
+  // ---------------------------------------------------------------------------
+  describe('head/tail -c byte mode', () => {
+    it('head -c N outputs first N bytes', async () => {
+      const r = await runner.run(`echo "hello world" | head -c 5`);
+      expect(r.stdout).toBe('hello');
+    });
+
+    it('tail -c N outputs last N bytes', async () => {
+      const r = await runner.run(`printf "hello world" | tail -c 5`);
+      expect(r.stdout).toBe('world');
+    });
+
+    it('head -c with file', async () => {
+      const r = await runner.run(`echo "abcdefgh" > /tmp/hc.txt && head -c 4 /tmp/hc.txt`);
+      expect(r.stdout).toBe('abcd');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // xargs -0 null-delimited input
+  // ---------------------------------------------------------------------------
+  describe('xargs -0', () => {
+    it('splits on null bytes', async () => {
+      const r = await runner.run(`printf "a\\0b\\0c" | xargs -0 echo`);
+      expect(r.stdout).toBe('echo a b c\n');
+    });
+
+    it('-0 with -n 1 processes one at a time', async () => {
+      const r = await runner.run(`printf "hello\\0world" | xargs -0 -n 1 echo`);
+      expect(r.stdout).toBe('echo hello\necho world\n');
+    });
+  });
 });
