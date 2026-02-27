@@ -208,7 +208,7 @@ fn exec_path(
     // Read the file
     let text = host
         .read_file(&resolved)
-        .map_err(|_| ShellError::HostError(format!("no such file or directory: {cmd_path}")))?;
+        .map_err(|e| ShellError::HostError(format!("{}: {}", cmd_path, e)))?;
 
     let first_line = text.lines().next().unwrap_or("");
     let interpreter = parse_shebang(first_line);
@@ -298,15 +298,16 @@ fn exec_shell_command(
 }
 
 /// Apply path resolution and command dispatch for external commands.
-/// Returns Some(result) if the command was handled (shebang, sh/bash dispatch),
-/// or None if the caller should proceed with normal spawn.
+/// Returns the resolved program name and arguments for spawning.
+/// If the command was fully handled (shebang, sh/bash dispatch),
+/// returns Err(ControlFlow) instead.
 fn dispatch_external_command(
     state: &mut ShellState,
     host: &dyn HostInterface,
     cmd_name: &str,
     args: &[&str],
     stdin_data: &str,
-) -> Result<Option<(String, Vec<String>)>, ControlFlow> {
+) -> Result<(String, Vec<String>), ControlFlow> {
     // 1. Shebang check — if cmd_name contains '/'
     if cmd_name.contains('/') {
         match exec_path(state, host, cmd_name, args, stdin_data) {
@@ -330,10 +331,7 @@ fn dispatch_external_command(
         }
     }
 
-    // 3. Python command dispatch
-    if cmd_name == "python" || cmd_name == "python3" || is_python_interpreter(cmd_name) {
-        // Just let it go through to host.spawn with resolved args
-    }
+    // 3. Python — falls through to host.spawn with resolved args.
 
     // 4. needs_default_dir check — append cwd if needed
     let mut final_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -345,7 +343,73 @@ fn dispatch_external_command(
     let args_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
     let resolved_args = resolve_command_args(state, host, cmd_name, &args_refs);
 
-    Ok(Some((cmd_name.to_string(), resolved_args)))
+    Ok((cmd_name.to_string(), resolved_args))
+}
+
+/// Apply output redirects (stdout/stderr overwrite, append, merge, etc.)
+/// to the given stdout/stderr buffers. This is called after a command
+/// finishes execution to process any `>`, `>>`, `2>`, `2>>`, `2>&1`, `&>`
+/// redirections attached to the command.
+fn apply_output_redirects(
+    state: &ShellState,
+    host: &dyn HostInterface,
+    redirects: &[codepod_shell::ast::Redirect],
+    stdout: &mut String,
+    stderr: &mut String,
+) -> Result<(), ShellError> {
+    let mut last_stdout_redirect_path: Option<String> = None;
+    for redir in redirects {
+        match &redir.redirect_type {
+            RedirectType::StdoutOverwrite(path) => {
+                let resolved = state.resolve_path(path);
+                host.write_file(&resolved, stdout, WriteMode::Truncate)
+                    .map_err(|e| ShellError::HostError(e.to_string()))?;
+                *stdout = String::new();
+                last_stdout_redirect_path = Some(resolved);
+            }
+            RedirectType::StdoutAppend(path) => {
+                let resolved = state.resolve_path(path);
+                host.write_file(&resolved, stdout, WriteMode::Append)
+                    .map_err(|e| ShellError::HostError(e.to_string()))?;
+                *stdout = String::new();
+                last_stdout_redirect_path = Some(resolved);
+            }
+            RedirectType::StderrOverwrite(path) => {
+                let resolved = state.resolve_path(path);
+                host.write_file(&resolved, stderr, WriteMode::Truncate)
+                    .map_err(|e| ShellError::HostError(e.to_string()))?;
+                *stderr = String::new();
+            }
+            RedirectType::StderrAppend(path) => {
+                let resolved = state.resolve_path(path);
+                host.write_file(&resolved, stderr, WriteMode::Append)
+                    .map_err(|e| ShellError::HostError(e.to_string()))?;
+                *stderr = String::new();
+            }
+            RedirectType::StderrToStdout => {
+                if let Some(ref file_path) = last_stdout_redirect_path {
+                    if !stderr.is_empty() {
+                        host.write_file(file_path, stderr, WriteMode::Append)
+                            .map_err(|e| ShellError::HostError(e.to_string()))?;
+                    }
+                } else {
+                    stdout.push_str(stderr);
+                }
+                *stderr = String::new();
+            }
+            RedirectType::BothOverwrite(path) => {
+                let resolved = state.resolve_path(path);
+                let combined = format!("{stdout}{stderr}");
+                host.write_file(&resolved, &combined, WriteMode::Truncate)
+                    .map_err(|e| ShellError::HostError(e.to_string()))?;
+                *stdout = String::new();
+                *stderr = String::new();
+            }
+            // Input redirects are handled separately; skip them here.
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Execute a parsed `Command` AST node.
@@ -491,57 +555,7 @@ pub fn exec_command(
                 };
 
                 // Process output redirects for builtins too
-                let mut last_stdout_redirect_path: Option<String> = None;
-                for redir in redirects {
-                    match &redir.redirect_type {
-                        RedirectType::StdoutOverwrite(path) => {
-                            let resolved = state.resolve_path(path);
-                            host.write_file(&resolved, &stdout, WriteMode::Truncate)
-                                .map_err(|e| ShellError::HostError(e.to_string()))?;
-                            stdout = String::new();
-                            last_stdout_redirect_path = Some(resolved);
-                        }
-                        RedirectType::StdoutAppend(path) => {
-                            let resolved = state.resolve_path(path);
-                            host.write_file(&resolved, &stdout, WriteMode::Append)
-                                .map_err(|e| ShellError::HostError(e.to_string()))?;
-                            stdout = String::new();
-                            last_stdout_redirect_path = Some(resolved);
-                        }
-                        RedirectType::StderrOverwrite(path) => {
-                            let resolved = state.resolve_path(path);
-                            host.write_file(&resolved, &stderr, WriteMode::Truncate)
-                                .map_err(|e| ShellError::HostError(e.to_string()))?;
-                            stderr = String::new();
-                        }
-                        RedirectType::StderrAppend(path) => {
-                            let resolved = state.resolve_path(path);
-                            host.write_file(&resolved, &stderr, WriteMode::Append)
-                                .map_err(|e| ShellError::HostError(e.to_string()))?;
-                            stderr = String::new();
-                        }
-                        RedirectType::StderrToStdout => {
-                            if let Some(ref file_path) = last_stdout_redirect_path {
-                                if !stderr.is_empty() {
-                                    host.write_file(file_path, &stderr, WriteMode::Append)
-                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
-                                }
-                            } else {
-                                stdout.push_str(&stderr);
-                            }
-                            stderr = String::new();
-                        }
-                        RedirectType::BothOverwrite(path) => {
-                            let resolved = state.resolve_path(path);
-                            let combined = format!("{stdout}{stderr}");
-                            host.write_file(&resolved, &combined, WriteMode::Truncate)
-                                .map_err(|e| ShellError::HostError(e.to_string()))?;
-                            stdout = String::new();
-                            stderr = String::new();
-                        }
-                        _ => {}
-                    }
-                }
+                apply_output_redirects(state, host, redirects, &mut stdout, &mut stderr)?;
 
                 return Ok(ControlFlow::Normal(RunResult {
                     exit_code,
@@ -554,11 +568,7 @@ pub fn exec_command(
             // ── Path resolution and command dispatch ─────────────────────
             let (spawn_program, spawn_args) =
                 match dispatch_external_command(state, host, cmd_name, &args, &stdin_data) {
-                    Ok(Some((prog, resolved))) => (prog, resolved),
-                    Ok(None) => (
-                        cmd_name.to_string(),
-                        args.iter().map(|s| s.to_string()).collect(),
-                    ),
+                    Ok((prog, resolved)) => (prog, resolved),
                     Err(flow) => {
                         // Command was handled by dispatch (shebang, sh/bash)
                         let run = match flow {
@@ -570,59 +580,7 @@ pub fn exec_command(
                         let mut stderr = run.stderr;
 
                         // Process output redirects for dispatched commands too
-                        let mut last_stdout_redirect_path: Option<String> = None;
-                        for redir in redirects {
-                            match &redir.redirect_type {
-                                RedirectType::StdoutOverwrite(path) => {
-                                    let resolved = state.resolve_path(path);
-                                    host.write_file(&resolved, &stdout, WriteMode::Truncate)
-                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
-                                    stdout = String::new();
-                                    last_stdout_redirect_path = Some(resolved);
-                                }
-                                RedirectType::StdoutAppend(path) => {
-                                    let resolved = state.resolve_path(path);
-                                    host.write_file(&resolved, &stdout, WriteMode::Append)
-                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
-                                    stdout = String::new();
-                                    last_stdout_redirect_path = Some(resolved);
-                                }
-                                RedirectType::StderrOverwrite(path) => {
-                                    let resolved = state.resolve_path(path);
-                                    host.write_file(&resolved, &stderr, WriteMode::Truncate)
-                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
-                                    stderr = String::new();
-                                }
-                                RedirectType::StderrAppend(path) => {
-                                    let resolved = state.resolve_path(path);
-                                    host.write_file(&resolved, &stderr, WriteMode::Append)
-                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
-                                    stderr = String::new();
-                                }
-                                RedirectType::StderrToStdout => {
-                                    if let Some(ref file_path) = last_stdout_redirect_path {
-                                        if !stderr.is_empty() {
-                                            host.write_file(file_path, &stderr, WriteMode::Append)
-                                                .map_err(|e| {
-                                                    ShellError::HostError(e.to_string())
-                                                })?;
-                                        }
-                                    } else {
-                                        stdout.push_str(&stderr);
-                                    }
-                                    stderr = String::new();
-                                }
-                                RedirectType::BothOverwrite(path) => {
-                                    let resolved = state.resolve_path(path);
-                                    let combined = format!("{stdout}{stderr}");
-                                    host.write_file(&resolved, &combined, WriteMode::Truncate)
-                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
-                                    stdout = String::new();
-                                    stderr = String::new();
-                                }
-                                _ => {}
-                            }
-                        }
+                        apply_output_redirects(state, host, redirects, &mut stdout, &mut stderr)?;
 
                         return Ok(ControlFlow::Normal(RunResult {
                             exit_code: run.exit_code,
@@ -657,63 +615,7 @@ pub fn exec_command(
             let mut stderr = spawn_result.stderr;
 
             // ── Phase 2: Process output redirects ────────────────────────
-            let mut last_stdout_redirect_path: Option<String> = None;
-
-            for redir in redirects {
-                match &redir.redirect_type {
-                    RedirectType::StdoutOverwrite(path) => {
-                        let resolved = state.resolve_path(path);
-                        host.write_file(&resolved, &stdout, WriteMode::Truncate)
-                            .map_err(|e| ShellError::HostError(e.to_string()))?;
-                        stdout = String::new();
-                        last_stdout_redirect_path = Some(resolved);
-                    }
-                    RedirectType::StdoutAppend(path) => {
-                        let resolved = state.resolve_path(path);
-                        host.write_file(&resolved, &stdout, WriteMode::Append)
-                            .map_err(|e| ShellError::HostError(e.to_string()))?;
-                        stdout = String::new();
-                        last_stdout_redirect_path = Some(resolved);
-                    }
-                    RedirectType::StderrOverwrite(path) => {
-                        let resolved = state.resolve_path(path);
-                        host.write_file(&resolved, &stderr, WriteMode::Truncate)
-                            .map_err(|e| ShellError::HostError(e.to_string()))?;
-                        stderr = String::new();
-                    }
-                    RedirectType::StderrAppend(path) => {
-                        let resolved = state.resolve_path(path);
-                        host.write_file(&resolved, &stderr, WriteMode::Append)
-                            .map_err(|e| ShellError::HostError(e.to_string()))?;
-                        stderr = String::new();
-                    }
-                    RedirectType::StderrToStdout => {
-                        if let Some(ref file_path) = last_stdout_redirect_path {
-                            if !stderr.is_empty() {
-                                // Append stderr to the file where stdout was redirected
-                                host.write_file(file_path, &stderr, WriteMode::Append)
-                                    .map_err(|e| ShellError::HostError(e.to_string()))?;
-                            }
-                        } else {
-                            stdout.push_str(&stderr);
-                        }
-                        stderr = String::new();
-                    }
-                    RedirectType::BothOverwrite(path) => {
-                        let resolved = state.resolve_path(path);
-                        let combined = format!("{stdout}{stderr}");
-                        host.write_file(&resolved, &combined, WriteMode::Truncate)
-                            .map_err(|e| ShellError::HostError(e.to_string()))?;
-                        stdout = String::new();
-                        stderr = String::new();
-                    }
-                    // Input redirects were handled in Phase 1; skip them here.
-                    RedirectType::StdinFrom(_)
-                    | RedirectType::Heredoc(_)
-                    | RedirectType::HeredocStrip(_)
-                    | RedirectType::HereString(_) => {}
-                }
-            }
+            apply_output_redirects(state, host, redirects, &mut stdout, &mut stderr)?;
 
             Ok(ControlFlow::Normal(RunResult {
                 exit_code: spawn_result.exit_code,
@@ -832,93 +734,13 @@ pub fn exec_command(
                                     let mut bstderr = r.stderr;
 
                                     // Handle output redirects
-                                    let mut blsrp: Option<String> = None;
-                                    for redir in redirects {
-                                        match &redir.redirect_type {
-                                            RedirectType::StdoutOverwrite(path) => {
-                                                let resolved = state.resolve_path(path);
-                                                host.write_file(
-                                                    &resolved,
-                                                    &bstdout,
-                                                    WriteMode::Truncate,
-                                                )
-                                                .map_err(|e| {
-                                                    ShellError::HostError(e.to_string())
-                                                })?;
-                                                bstdout = String::new();
-                                                blsrp = Some(resolved);
-                                            }
-                                            RedirectType::StdoutAppend(path) => {
-                                                let resolved = state.resolve_path(path);
-                                                host.write_file(
-                                                    &resolved,
-                                                    &bstdout,
-                                                    WriteMode::Append,
-                                                )
-                                                .map_err(|e| {
-                                                    ShellError::HostError(e.to_string())
-                                                })?;
-                                                bstdout = String::new();
-                                                blsrp = Some(resolved);
-                                            }
-                                            RedirectType::StderrOverwrite(path) => {
-                                                let resolved = state.resolve_path(path);
-                                                host.write_file(
-                                                    &resolved,
-                                                    &bstderr,
-                                                    WriteMode::Truncate,
-                                                )
-                                                .map_err(|e| {
-                                                    ShellError::HostError(e.to_string())
-                                                })?;
-                                                bstderr = String::new();
-                                            }
-                                            RedirectType::StderrAppend(path) => {
-                                                let resolved = state.resolve_path(path);
-                                                host.write_file(
-                                                    &resolved,
-                                                    &bstderr,
-                                                    WriteMode::Append,
-                                                )
-                                                .map_err(|e| {
-                                                    ShellError::HostError(e.to_string())
-                                                })?;
-                                                bstderr = String::new();
-                                            }
-                                            RedirectType::StderrToStdout => {
-                                                if let Some(ref file_path) = blsrp {
-                                                    if !bstderr.is_empty() {
-                                                        host.write_file(
-                                                            file_path,
-                                                            &bstderr,
-                                                            WriteMode::Append,
-                                                        )
-                                                        .map_err(|e| {
-                                                            ShellError::HostError(e.to_string())
-                                                        })?;
-                                                    }
-                                                } else {
-                                                    bstdout.push_str(&bstderr);
-                                                }
-                                                bstderr = String::new();
-                                            }
-                                            RedirectType::BothOverwrite(path) => {
-                                                let resolved = state.resolve_path(path);
-                                                let combined = format!("{bstdout}{bstderr}");
-                                                host.write_file(
-                                                    &resolved,
-                                                    &combined,
-                                                    WriteMode::Truncate,
-                                                )
-                                                .map_err(|e| {
-                                                    ShellError::HostError(e.to_string())
-                                                })?;
-                                                bstdout = String::new();
-                                                bstderr = String::new();
-                                            }
-                                            _ => {}
-                                        }
-                                    }
+                                    apply_output_redirects(
+                                        state,
+                                        host,
+                                        redirects,
+                                        &mut bstdout,
+                                        &mut bstderr,
+                                    )?;
 
                                     state.last_exit_code = r.exit_code;
                                     last_result = RunResult {
@@ -975,15 +797,7 @@ pub fn exec_command(
                                 stdin_data = last_result.stdout.clone();
                                 continue;
                             }
-                            Ok(dispatch_info) => {
-                                let (prog, resolved_args) = match dispatch_info {
-                                    Some((p, a)) => (p, a),
-                                    None => (
-                                        cmd_name.to_string(),
-                                        args.iter().map(|s| s.to_string()).collect(),
-                                    ),
-                                };
-
+                            Ok((prog, resolved_args)) => {
                                 let env_pairs: Vec<(&str, &str)> = state
                                     .env
                                     .iter()
@@ -1005,100 +819,13 @@ pub fn exec_command(
                                         let mut stderr = spawn_result.stderr;
 
                                         // Handle output redirects in pipeline stages
-                                        let mut last_stdout_redirect_path: Option<String> = None;
-
-                                        for redir in redirects {
-                                            match &redir.redirect_type {
-                                                RedirectType::StdoutOverwrite(path) => {
-                                                    let resolved = state.resolve_path(path);
-                                                    host.write_file(
-                                                        &resolved,
-                                                        &stdout,
-                                                        WriteMode::Truncate,
-                                                    )
-                                                    .map_err(|e| {
-                                                        ShellError::HostError(e.to_string())
-                                                    })?;
-                                                    stdout = String::new();
-                                                    last_stdout_redirect_path = Some(resolved);
-                                                }
-                                                RedirectType::StdoutAppend(path) => {
-                                                    let resolved = state.resolve_path(path);
-                                                    host.write_file(
-                                                        &resolved,
-                                                        &stdout,
-                                                        WriteMode::Append,
-                                                    )
-                                                    .map_err(|e| {
-                                                        ShellError::HostError(e.to_string())
-                                                    })?;
-                                                    stdout = String::new();
-                                                    last_stdout_redirect_path = Some(resolved);
-                                                }
-                                                RedirectType::StderrOverwrite(path) => {
-                                                    let resolved = state.resolve_path(path);
-                                                    host.write_file(
-                                                        &resolved,
-                                                        &stderr,
-                                                        WriteMode::Truncate,
-                                                    )
-                                                    .map_err(|e| {
-                                                        ShellError::HostError(e.to_string())
-                                                    })?;
-                                                    stderr = String::new();
-                                                }
-                                                RedirectType::StderrAppend(path) => {
-                                                    let resolved = state.resolve_path(path);
-                                                    host.write_file(
-                                                        &resolved,
-                                                        &stderr,
-                                                        WriteMode::Append,
-                                                    )
-                                                    .map_err(|e| {
-                                                        ShellError::HostError(e.to_string())
-                                                    })?;
-                                                    stderr = String::new();
-                                                }
-                                                RedirectType::StderrToStdout => {
-                                                    if let Some(ref file_path) =
-                                                        last_stdout_redirect_path
-                                                    {
-                                                        if !stderr.is_empty() {
-                                                            host.write_file(
-                                                                file_path,
-                                                                &stderr,
-                                                                WriteMode::Append,
-                                                            )
-                                                            .map_err(|e| {
-                                                                ShellError::HostError(e.to_string())
-                                                            })?;
-                                                        }
-                                                    } else {
-                                                        stdout.push_str(&stderr);
-                                                    }
-                                                    stderr = String::new();
-                                                }
-                                                RedirectType::BothOverwrite(path) => {
-                                                    let resolved = state.resolve_path(path);
-                                                    let combined = format!("{stdout}{stderr}");
-                                                    host.write_file(
-                                                        &resolved,
-                                                        &combined,
-                                                        WriteMode::Truncate,
-                                                    )
-                                                    .map_err(|e| {
-                                                        ShellError::HostError(e.to_string())
-                                                    })?;
-                                                    stdout = String::new();
-                                                    stderr = String::new();
-                                                }
-                                                // Input redirects already handled above.
-                                                RedirectType::StdinFrom(_)
-                                                | RedirectType::Heredoc(_)
-                                                | RedirectType::HeredocStrip(_)
-                                                | RedirectType::HereString(_) => {}
-                                            }
-                                        }
+                                        apply_output_redirects(
+                                            state,
+                                            host,
+                                            redirects,
+                                            &mut stdout,
+                                            &mut stderr,
+                                        )?;
 
                                         state.last_exit_code = spawn_result.exit_code;
                                         last_result = RunResult {
@@ -5237,7 +4964,7 @@ mod tests {
             panic!("expected Normal")
         };
         assert_ne!(run.exit_code, 0);
-        assert!(run.stderr.contains("no such file"));
+        assert!(run.stderr.contains("not found"));
     }
 
     #[test]
@@ -5639,8 +5366,8 @@ mod tests {
         let host = MockHost::new().with_file("/home/user/file.txt", b"data");
         let mut state = ShellState::new_default();
         let result = dispatch_external_command(&mut state, &host, "cat", &["file.txt"], "");
-        // Should return Ok(Some(...)) with resolved args
-        let (prog, args) = result.unwrap().unwrap();
+        // Should return Ok(...) with resolved args
+        let (prog, args) = result.unwrap();
         assert_eq!(prog, "cat");
         assert_eq!(args[0], "/home/user/file.txt");
     }
