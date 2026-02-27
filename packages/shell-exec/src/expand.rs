@@ -67,6 +67,180 @@ pub fn expand_words_with_splitting(
     result
 }
 
+/// Parse a raw assignment value string into a `Word` with proper parts.
+///
+/// The lexer stores assignment values as raw strings (e.g. `$(echo hi)` is
+/// kept literally). This function scans for `$VAR`, `${...}`, `$(cmd)`, and
+/// `$((expr))` patterns, producing `WordPart` entries so that `expand_word`
+/// properly evaluates substitutions.
+pub fn parse_assignment_value(raw: &str) -> Word {
+    let chars: Vec<char> = raw.chars().collect();
+    let len = chars.len();
+    let mut parts: Vec<WordPart> = Vec::new();
+    let mut literal = String::new();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '\\' && i + 1 < len {
+            // Escaped character -- keep literally
+            literal.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+
+        if chars[i] == '$' && i + 1 < len {
+            // Flush accumulated literal
+            if !literal.is_empty() {
+                parts.push(WordPart::Literal(std::mem::take(&mut literal)));
+            }
+
+            if chars[i + 1] == '(' {
+                if i + 2 < len && chars[i + 2] == '(' {
+                    // $((expr)) -- arithmetic expansion
+                    let start = i + 3;
+                    let mut depth = 1;
+                    let mut j = start;
+                    while j < len && depth > 0 {
+                        if j + 1 < len && chars[j] == '(' && chars[j + 1] == '(' {
+                            depth += 1;
+                            j += 2;
+                        } else if j + 1 < len && chars[j] == ')' && chars[j + 1] == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            j += 2;
+                        } else {
+                            j += 1;
+                        }
+                    }
+                    let expr: String = chars[start..j].iter().collect();
+                    parts.push(WordPart::ArithmeticExpansion(expr));
+                    i = if j + 1 < len { j + 2 } else { j };
+                } else {
+                    // $(cmd) -- command substitution
+                    let start = i + 2;
+                    let mut depth = 1;
+                    let mut j = start;
+                    while j < len && depth > 0 {
+                        if chars[j] == '(' {
+                            depth += 1;
+                        } else if chars[j] == ')' {
+                            depth -= 1;
+                        }
+                        if depth > 0 {
+                            j += 1;
+                        }
+                    }
+                    let cmd: String = chars[start..j].iter().collect();
+                    parts.push(WordPart::CommandSub(cmd));
+                    i = j + 1;
+                }
+            } else if chars[i + 1] == '{' {
+                // ${...} -- parameter expansion
+                let start = i + 2;
+                let mut depth = 1;
+                let mut j = start;
+                while j < len && depth > 0 {
+                    if chars[j] == '{' {
+                        depth += 1;
+                    } else if chars[j] == '}' {
+                        depth -= 1;
+                    }
+                    if depth > 0 {
+                        j += 1;
+                    }
+                }
+                let inner: String = chars[start..j].iter().collect();
+                // Parse the parameter expansion into its components
+                let part = parse_param_expansion_inner(&inner);
+                parts.push(part);
+                i = j + 1;
+            } else {
+                // $VAR -- simple variable
+                let start = i + 1;
+                let mut j = start;
+                // Special single-char variables: $?, $#, $@, $*, $0-$9, $$, $!
+                if j < len
+                    && (chars[j] == '?'
+                        || chars[j] == '#'
+                        || chars[j] == '@'
+                        || chars[j] == '*'
+                        || chars[j] == '$'
+                        || chars[j] == '!'
+                        || chars[j].is_ascii_digit())
+                {
+                    j += 1;
+                } else {
+                    while j < len && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                        j += 1;
+                    }
+                }
+                if j > start {
+                    let name: String = chars[start..j].iter().collect();
+                    parts.push(WordPart::Variable(name));
+                } else {
+                    // Bare $ not followed by valid variable char
+                    literal.push('$');
+                }
+                i = j;
+            }
+        } else {
+            literal.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    if !literal.is_empty() {
+        parts.push(WordPart::Literal(literal));
+    }
+
+    if parts.is_empty() {
+        parts.push(WordPart::Literal(String::new()));
+    }
+
+    Word { parts }
+}
+
+/// Parse the inner content of `${...}` into a `WordPart`.
+///
+/// Handles: `${var}`, `${var:-default}`, `${var:=default}`, `${var:+alt}`,
+/// `${var:?err}`, `${#var}`, `${var%pat}`, `${var%%pat}`, `${var#pat}`,
+/// `${var##pat}`, `${var^^}`, `${var,,}`, `${var^}`, `${var/pat/repl}`,
+/// `${var:off:len}`, etc.
+fn parse_param_expansion_inner(inner: &str) -> WordPart {
+    // ${#var} -- length
+    if inner.starts_with('#') && inner.len() > 1 && !inner.contains(':') {
+        return WordPart::ParamExpansion {
+            var: inner[1..].to_string(),
+            op: "#".to_string(),
+            default: String::new(),
+        };
+    }
+
+    // Find the operator position: look for :-, :=, :+, :?, %, %%, #, ##, ^^, ,,, ^, /, :
+    // Try longer operators first
+    let ops = [
+        "%%", "##", "^^", ",,", ":-", ":=", ":+", ":?", "^", "/", "%", "#", ":",
+    ];
+    for op in ops {
+        if let Some(pos) = inner.find(op) {
+            if pos > 0 {
+                let var = &inner[..pos];
+                let default = &inner[pos + op.len()..];
+                return WordPart::ParamExpansion {
+                    var: var.to_string(),
+                    op: op.to_string(),
+                    default: default.to_string(),
+                };
+            }
+        }
+    }
+
+    // Simple ${var}
+    WordPart::Variable(inner.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Brace expansion
 // ---------------------------------------------------------------------------
@@ -470,15 +644,14 @@ fn expand_param(state: &mut ShellState, var: &str, op: &str, operand: &str) -> S
             match &val {
                 Some(v) if !v.is_empty() => v.clone(),
                 _ => {
-                    // In the TypeScript version this throws an error.
-                    // For now we return the error message as output.
-                    // A future refactor could propagate errors.
                     let msg = if operand.is_empty() {
                         "parameter null or not set"
                     } else {
                         operand
                     };
-                    format!("{var}: {msg}")
+                    // Signal an error to the executor via state.param_error
+                    state.param_error = Some(format!("{var}: {msg}"));
+                    String::new()
                 }
             }
         }
@@ -1140,8 +1313,14 @@ mod tests {
             default: "custom error".into(),
         };
         let result = expand_word_part(&mut state, &part, None);
-        assert!(result.contains("NOVAR"));
-        assert!(result.contains("custom error"));
+        assert_eq!(result, "");
+        // Error message should be stored in state.param_error
+        let err = state
+            .param_error
+            .as_ref()
+            .expect("param_error should be set");
+        assert!(err.contains("NOVAR"));
+        assert!(err.contains("custom error"));
     }
 
     // ---- String length (#) ----

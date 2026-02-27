@@ -208,9 +208,13 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
       try {
         const s = vfs.stat(path);
         const info = {
-          type: s.type,
+          exists: true,
+          is_file: s.type === 'file',
+          is_dir: s.type === 'dir',
+          is_symlink: s.type === 'symlink',
           size: s.size,
           mode: s.permissions,
+          mtime_ms: s.mtime ? s.mtime.getTime() : 0,
         };
         return writeJson(memory, outPtr, outCap, info);
       } catch {

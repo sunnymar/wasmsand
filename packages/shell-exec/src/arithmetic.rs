@@ -312,6 +312,35 @@ fn parse_env_int(state: &ShellState, var: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// Resolve a variable name, checking positional parameters and special
+/// variables in addition to the environment.
+fn resolve_var(state: &ShellState, name: &str) -> String {
+    // Special variables
+    match name {
+        "?" => return state.last_exit_code.to_string(),
+        "#" => return state.positional_args.len().to_string(),
+        "@" | "*" => return state.positional_args.join(" "),
+        _ => {}
+    }
+    // Positional parameters ($1, $2, ...)
+    if let Ok(idx) = name.parse::<usize>() {
+        if idx == 0 {
+            return "0".to_string();
+        }
+        return state
+            .positional_args
+            .get(idx - 1)
+            .cloned()
+            .unwrap_or_else(|| "0".to_string());
+    }
+    // Environment variable
+    state
+        .env
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| "0".to_string())
+}
+
 /// Replace `$VAR` and `${VAR}` with their values from env.
 fn expand_dollar_vars(state: &ShellState, expr: &str) -> String {
     let mut result = String::with_capacity(expr.len());
@@ -331,8 +360,7 @@ fn expand_dollar_vars(state: &ShellState, expr: &str) -> String {
                 if i < bytes.len() {
                     i += 1; // skip '}'
                 }
-                let val = state.env.get(name).map(|s| s.as_str()).unwrap_or("0");
-                result.push_str(val);
+                result.push_str(&resolve_var(state, name));
             } else {
                 // $VAR
                 let start = i;
@@ -341,8 +369,7 @@ fn expand_dollar_vars(state: &ShellState, expr: &str) -> String {
                 }
                 if i > start {
                     let name = &expr[start..i];
-                    let val = state.env.get(name).map(|s| s.as_str()).unwrap_or("0");
-                    result.push_str(val);
+                    result.push_str(&resolve_var(state, name));
                 } else {
                     result.push('$');
                 }

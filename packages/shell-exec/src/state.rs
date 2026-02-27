@@ -28,6 +28,8 @@ pub struct ShellState {
     pub cwd: String,
     /// Seed for $RANDOM pseudo-random number generator.
     pub rng_seed: u64,
+    /// Set by ${var:?msg} expansion to signal an error to the executor.
+    pub param_error: Option<String>,
 }
 
 impl ShellState {
@@ -55,6 +57,7 @@ impl ShellState {
             history: Vec::new(),
             cwd: "/home/user".into(),
             rng_seed: 12345, // deterministic default; host can override
+            param_error: None,
         }
     }
 

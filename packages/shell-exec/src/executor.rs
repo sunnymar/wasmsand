@@ -445,6 +445,16 @@ pub fn exec_command(
             }
 
             let expanded = expand_words_with_splitting(state, words, Some(&exec_fn));
+
+            // Check for ${var:?msg} error during expansion
+            if let Some(err_msg) = state.param_error.take() {
+                state.last_exit_code = 1;
+                return Ok(ControlFlow::Normal(RunResult::error(
+                    1,
+                    format!("{err_msg}\n"),
+                )));
+            }
+
             if expanded.is_empty() {
                 return Ok(ControlFlow::Normal(RunResult::empty()));
             }
@@ -477,7 +487,19 @@ pub fn exec_command(
 
                 let result = exec_command(state, host, &func_body);
 
-                state.local_var_stack.pop();
+                // Restore local variables from the popped frame
+                if let Some(frame) = state.local_var_stack.pop() {
+                    for (name, prev_value) in frame {
+                        match prev_value {
+                            Some(v) => {
+                                state.env.insert(name, v);
+                            }
+                            None => {
+                                state.env.remove(&name);
+                            }
+                        }
+                    }
+                }
                 state.function_depth -= 1;
                 state.positional_args = saved_positionals;
 
@@ -1219,8 +1241,9 @@ fn process_assignments(
     exec: Option<ExecFn>,
 ) {
     for assignment in assignments {
-        // Expand the value using word expansion
-        let word = Word::literal(&assignment.value);
+        // Parse the raw assignment value into a Word with proper parts
+        // (the parser stores values as raw strings, so $(...) etc. need re-parsing)
+        let word = crate::expand::parse_assignment_value(&assignment.value);
         let value = expand_word(state, &word, exec);
 
         // Append assignment: name ends with '+'
