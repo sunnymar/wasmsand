@@ -1761,4 +1761,43 @@ y"; echo "\${items[@]}"`);
       expect(r.stdout.trim()).toBe('line2');
     });
   });
+
+  // ---------- ${!var} indirect expansion ----------
+  describe('indirect variable expansion', () => {
+    it('${!var} expands to value of named variable', async () => {
+      const r = await runner.run(`greeting="hello"; name="greeting"; echo \${!name}`);
+      expect(r.stdout.trim()).toBe('hello');
+    });
+
+    it('${!var} returns empty when indirect var is unset', async () => {
+      const r = await runner.run(`name="nonexistent"; echo ">\${!name}<"`);
+      expect(r.stdout.trim()).toBe('><');
+    });
+  });
+
+  // ---------- awk rand/srand ----------
+  describe('awk rand/srand', () => {
+    it('awk rand() returns a number between 0 and 1', async () => {
+      const r = await runner.run(`awk 'BEGIN { x = rand(); print (x >= 0 && x < 1) ? "ok" : "fail" }'`);
+      expect(r.stdout.trim()).toBe('ok');
+    });
+
+    it('awk srand() with same seed produces same sequence', async () => {
+      const r = await runner.run(`awk 'BEGIN { srand(42); a=rand(); srand(42); b=rand(); print (a == b) ? "ok" : "fail" }'`);
+      expect(r.stdout.trim()).toBe('ok');
+    });
+  });
+
+  // ---------- awk split with regex ----------
+  describe('awk split with regex', () => {
+    it('split with multi-char regex separator', async () => {
+      const r = await runner.run(`echo "a::b::c" | awk '{ n = split($0, arr, "::"); print n, arr[1], arr[2], arr[3] }'`);
+      expect(r.stdout.trim()).toBe('3 a b c');
+    });
+
+    it('split with regex pattern separator', async () => {
+      const r = await runner.run(`echo "a1b2c3d" | awk '{ n = split($0, arr, /[0-9]/); print n, arr[1], arr[2], arr[3] }'`);
+      expect(r.stdout.trim()).toBe('4 a b c');
+    });
+  });
 });

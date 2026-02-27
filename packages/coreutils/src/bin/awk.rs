@@ -1087,6 +1087,8 @@ struct AwkInterp {
     /// Lines for getline support — set by the main loop
     input_lines: Vec<String>,
     input_line_idx: usize,
+    /// Seed for rand() — simple LCG PRNG
+    rand_seed: u64,
 }
 
 enum ControlFlow {
@@ -1111,7 +1113,19 @@ impl AwkInterp {
             output_files: HashMap::new(),
             input_lines: Vec::new(),
             input_line_idx: 0,
+            rand_seed: 12345, // default seed (deterministic until srand() called)
         }
+    }
+
+    /// Simple LCG pseudo-random number generator returning 0.0..1.0
+    fn rand_next(&mut self) -> f64 {
+        self.rand_seed = self
+            .rand_seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        // Extract bits 16-47 for better distribution
+        let bits = (self.rand_seed >> 16) & 0x7FFFFFFF;
+        bits as f64 / 0x7FFFFFFF_u64 as f64
     }
 
     fn set_record(&mut self, line: &str) {
@@ -1370,21 +1384,23 @@ impl AwkInterp {
                     return Value::Num(0.0);
                 };
                 let sep = if args.len() > 2 {
-                    self.eval_expr(&args[2]).to_str()
+                    extract_regex_or_str(&args[2], self)
                 } else {
                     self.fs.clone()
                 };
-                let parts: Vec<&str> = if sep == " " {
-                    s.split_whitespace().collect()
+                let parts: Vec<String> = if sep == " " {
+                    s.split_whitespace().map(|p| p.to_string()).collect()
                 } else if sep.len() == 1 {
-                    s.split(sep.chars().next().unwrap()).collect()
+                    s.split(sep.chars().next().unwrap())
+                        .map(|p| p.to_string())
+                        .collect()
                 } else {
-                    vec![&s]
+                    regex_split(&sep, &s)
                 };
                 let map = self.arrays.entry(arr_name).or_default();
                 map.clear();
                 for (i, part) in parts.iter().enumerate() {
-                    map.insert((i + 1).to_string(), Value::Str(part.to_string()));
+                    map.insert((i + 1).to_string(), Value::Str(part.clone()));
                 }
                 Value::Num(parts.len() as f64)
             }
@@ -1437,6 +1453,28 @@ impl AwkInterp {
             "exp" => Value::Num(self.eval_expr(&args[0]).to_num().exp()),
             "sin" => Value::Num(self.eval_expr(&args[0]).to_num().sin()),
             "cos" => Value::Num(self.eval_expr(&args[0]).to_num().cos()),
+            "atan2" => {
+                let y = self.eval_expr(&args[0]).to_num();
+                let x = if args.len() > 1 {
+                    self.eval_expr(&args[1]).to_num()
+                } else {
+                    0.0
+                };
+                Value::Num(y.atan2(x))
+            }
+            "rand" => Value::Num(self.rand_next()),
+            "srand" => {
+                let old_seed = self.rand_seed;
+                if !args.is_empty() {
+                    self.rand_seed = self.eval_expr(&args[0]).to_num() as u64;
+                } else {
+                    self.rand_seed = self
+                        .rand_seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1);
+                }
+                Value::Num(old_seed as f64)
+            }
             _ => Value::Num(0.0),
         }
     }

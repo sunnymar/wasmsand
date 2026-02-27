@@ -1526,6 +1526,12 @@ export class ShellRunner extends ShellBuiltins {
       const { var: name, op, default: operand } = part.ParamExpansion;
       const val = this.env.get(name);
       switch (op) {
+        case '!': {
+          // Indirect expansion: ${!var} — look up variable named by var's value
+          const indirect = this.env.get(name);
+          if (indirect === undefined) return '';
+          return this.env.get(indirect) ?? '';
+        }
         case ':-': return (val !== undefined && val !== '') ? val : operand;
         case ':=': {
           if (val === undefined || val === '') {
