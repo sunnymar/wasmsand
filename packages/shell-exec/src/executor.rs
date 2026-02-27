@@ -540,6 +540,7 @@ pub fn exec_command(
                     other => return Ok(other),
                 }
             }
+            state.last_exit_code = last_exit_code;
             Ok(ControlFlow::Normal(RunResult {
                 exit_code: last_exit_code,
                 stdout: combined_stdout,
@@ -553,7 +554,7 @@ pub fn exec_command(
             let mut combined_stdout = String::new();
             let mut combined_stderr = String::new();
             let mut last_exit_code = 0;
-            let max_iterations = 10_000;
+            let max_iterations = 100_000;
 
             for _ in 0..max_iterations {
                 let cond_result = exec_command(state, host, condition)?;
@@ -576,6 +577,7 @@ pub fn exec_command(
                     other => return Ok(other),
                 }
             }
+            state.last_exit_code = last_exit_code;
             Ok(ControlFlow::Normal(RunResult {
                 exit_code: last_exit_code,
                 stdout: combined_stdout,
@@ -628,6 +630,7 @@ pub fn exec_command(
                     eval_arithmetic(state, step);
                 }
             }
+            state.last_exit_code = last_exit_code;
             Ok(ControlFlow::Normal(RunResult {
                 exit_code: last_exit_code,
                 stdout: combined_stdout,
@@ -654,9 +657,21 @@ pub fn exec_command(
         Command::Subshell { body } => {
             let saved_env = state.env.clone();
             let saved_cwd = state.cwd.clone();
+            let saved_functions = state.functions.clone();
+            let saved_arrays = state.arrays.clone();
+            let saved_assoc_arrays = state.assoc_arrays.clone();
+            let saved_flags = state.flags.clone();
+            let saved_traps = state.traps.clone();
+            let saved_last_exit_code = state.last_exit_code;
             let result = exec_command(state, host, body);
             state.env = saved_env;
             state.cwd = saved_cwd;
+            state.functions = saved_functions;
+            state.arrays = saved_arrays;
+            state.assoc_arrays = saved_assoc_arrays;
+            state.flags = saved_flags;
+            state.traps = saved_traps;
+            state.last_exit_code = saved_last_exit_code;
             result
         }
 
@@ -667,6 +682,7 @@ pub fn exec_command(
         Command::Negate { body } => match exec_command(state, host, body)? {
             ControlFlow::Normal(mut r) => {
                 r.exit_code = if r.exit_code == 0 { 1 } else { 0 };
+                state.last_exit_code = r.exit_code;
                 Ok(ControlFlow::Normal(r))
             }
             other => Ok(other),
@@ -685,8 +701,10 @@ pub fn exec_command(
         // ── DoubleBracket [[ ... ]] ─────────────────────────────────────
         Command::DoubleBracket { expr } => {
             let result = eval_double_bracket(state, host, expr, Some(&exec_fn));
+            let exit_code = if result { 0 } else { 1 };
+            state.last_exit_code = exit_code;
             Ok(ControlFlow::Normal(RunResult {
-                exit_code: if result { 0 } else { 1 },
+                exit_code,
                 stdout: String::new(),
                 stderr: String::new(),
                 execution_time_ms: 0,
@@ -697,8 +715,10 @@ pub fn exec_command(
         Command::ArithmeticCommand { expr } => {
             use crate::arithmetic::eval_arithmetic;
             let val = eval_arithmetic(state, expr);
+            let exit_code = if val != 0 { 0 } else { 1 };
+            state.last_exit_code = exit_code;
             Ok(ControlFlow::Normal(RunResult {
-                exit_code: if val != 0 { 0 } else { 1 },
+                exit_code,
                 stdout: String::new(),
                 stderr: String::new(),
                 execution_time_ms: 0,
@@ -980,7 +1000,12 @@ fn expand_bracket_word(state: &mut ShellState, word: &str, exec: Option<ExecFn>)
                 }
                 parts.push(codepod_shell::ast::WordPart::Variable(var_name));
             } else if i < chars.len()
-                && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '?')
+                && (chars[i].is_alphanumeric()
+                    || chars[i] == '_'
+                    || chars[i] == '?'
+                    || chars[i] == '#'
+                    || chars[i] == '$'
+                    || chars[i] == '!')
             {
                 // $VAR or $? etc.
                 let mut var_name = String::new();
