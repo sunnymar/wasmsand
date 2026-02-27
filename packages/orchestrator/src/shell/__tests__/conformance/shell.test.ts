@@ -1027,4 +1027,114 @@ describe('shell conformance', () => {
       expect(r.stdout).toBe('echo hello\necho world\n');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // shift builtin
+  // ---------------------------------------------------------------------------
+  describe('shift builtin', () => {
+    it('shifts positional parameters', async () => {
+      const r = await runner.run(`f() { echo "$1"; shift; echo "$1"; }; f a b c`);
+      expect(r.stdout).toBe('a\nb\n');
+    });
+
+    it('shift N removes N parameters', async () => {
+      const r = await runner.run(`f() { shift 2; echo "$1"; }; f a b c d`);
+      expect(r.stdout).toBe('c\n');
+    });
+
+    it('$# updates after shift', async () => {
+      const r = await runner.run(`f() { echo "$#"; shift; echo "$#"; }; f x y z`);
+      expect(r.stdout).toBe('3\n2\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // type and command builtins
+  // ---------------------------------------------------------------------------
+  describe('type and command builtins', () => {
+    it('type identifies builtins', async () => {
+      const r = await runner.run(`type echo`);
+      expect(r.stdout).toBe('echo is a shell builtin\n');
+    });
+
+    it('type identifies external tools', async () => {
+      const r = await runner.run(`type grep`);
+      expect(r.stdout).toBe('grep is /usr/bin/grep\n');
+    });
+
+    it('type identifies functions', async () => {
+      const r = await runner.run(`myfn() { echo hi; }; type myfn`);
+      expect(r.stdout).toBe('myfn is a function\n');
+    });
+
+    it('command -v returns path for tools', async () => {
+      const r = await runner.run(`command -v sort`);
+      expect(r.stdout).toBe('/usr/bin/sort\n');
+    });
+
+    it('command -v exits 1 for unknown', async () => {
+      const r = await runner.run(`command -v nonexistent`);
+      expect(r.exitCode).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // let builtin
+  // ---------------------------------------------------------------------------
+  describe('let builtin', () => {
+    it('evaluates arithmetic', async () => {
+      const r = await runner.run(`let x=5+3; echo $x`);
+      expect(r.stdout).toBe('8\n');
+    });
+
+    it('returns 1 when expression is zero', async () => {
+      const r = await runner.run(`let "0"; echo $?`);
+      expect(r.stdout).toBe('1\n');
+    });
+
+    it('returns 0 when expression is nonzero', async () => {
+      const r = await runner.run(`let "42"; echo $?`);
+      expect(r.stdout).toBe('0\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Array += append
+  // ---------------------------------------------------------------------------
+  describe('array append', () => {
+    it('arr+=(elem) appends to array', async () => {
+      const r = await runner.run(`arr=(a b); arr+=(c d); echo "\${arr[@]}"`);
+      expect(r.stdout).toBe('a b c d\n');
+    });
+
+    it('var+=string appends to string', async () => {
+      const r = await runner.run(`x=hello; x+=world; echo "$x"`);
+      expect(r.stdout).toBe('helloworld\n');
+    });
+
+    it('${#arr[@]} reflects appended elements', async () => {
+      const r = await runner.run(`arr=(1 2); arr+=(3); echo "\${#arr[@]}"`);
+      expect(r.stdout).toBe('3\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // unset array element
+  // ---------------------------------------------------------------------------
+  describe('unset array element', () => {
+    it('unset arr[idx] removes element', async () => {
+      const r = await runner.run(`arr=(a b c); unset arr[1]; echo "\${arr[0]} \${arr[2]}"`);
+      expect(r.stdout).toBe('a c\n');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // wc -L (max line length)
+  // ---------------------------------------------------------------------------
+  describe('wc -L', () => {
+    it('outputs max line length', async () => {
+      const r = await runner.run(`printf "hi\\nhello world\\nbye\\n" | wc -L`);
+      expect(r.stdout.trim()).toBe('11');
+    });
+  });
 });

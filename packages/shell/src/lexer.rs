@@ -840,6 +840,15 @@ fn classify_word(word: String) -> Token {
         "case" => Token::Case,
         "esac" => Token::Esac,
         _ => {
+            // Append assignment: VAR+=value (check before simple = assignment)
+            if let Some(plus_eq) = word.find("+=") {
+                let name = &word[..plus_eq];
+                if !name.is_empty() && is_valid_var_name(name) {
+                    let value = word[plus_eq + 2..].to_string();
+                    // Encode append by suffixing name with "+"
+                    return Token::Assignment(format!("{}+", name), value);
+                }
+            }
             if let Some(eq_pos) = word.find('=') {
                 let name = &word[..eq_pos];
                 if !name.is_empty() {

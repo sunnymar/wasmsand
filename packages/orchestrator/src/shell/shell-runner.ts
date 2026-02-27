@@ -531,6 +531,23 @@ export class ShellRunner extends ShellBuiltins {
     // Process assignments (expand variables and command substitutions in values)
     for (const assignment of simple.assignments) {
       const value = await this.expandAssignmentValue(assignment.value);
+      // Append assignment: name ends with "+" (e.g. VAR+=value, arr+=(elem))
+      if (assignment.name.endsWith('+')) {
+        const realName = assignment.name.slice(0, -1);
+        if (value.startsWith('(') && value.endsWith(')')) {
+          // Array append: arr+=(elem1 elem2)
+          const inner = value.slice(1, -1).trim();
+          const elements = inner.length > 0 ? inner.split(/\s+/) : [];
+          const arr = this.arrays.get(realName) ?? [];
+          arr.push(...elements);
+          this.arrays.set(realName, arr);
+        } else {
+          // String append: var+=string
+          const prev = this.env.get(realName) ?? '';
+          this.env.set(realName, prev + value);
+        }
+        continue;
+      }
       // Array element assignment: arr[idx]=value or assoc[key]=value
       const arrAssignMatch = assignment.name.match(/^(\w+)\[(.+)\]$/);
       if (arrAssignMatch) {
@@ -717,6 +734,56 @@ export class ShellRunner extends ShellBuiltins {
       result = this.builtinTrap(args);
     } else if (cmdName === 'declare' || cmdName === 'typeset') {
       result = this.builtinDeclare(args);
+    } else if (cmdName === 'shift') {
+      const n = args.length > 0 ? parseInt(args[0], 10) || 1 : 1;
+      const positionals = this.getPositionalArgs();
+      const remaining = positionals.slice(n);
+      // Clear old positional params
+      for (let pi = 1; pi <= positionals.length; pi++) this.env.delete(String(pi));
+      // Set new ones
+      for (let pi = 0; pi < remaining.length; pi++) this.env.set(String(pi + 1), remaining[pi]);
+      this.env.set('#', String(remaining.length));
+      result = { ...EMPTY_RESULT };
+    } else if (cmdName === 'type') {
+      let stdout = '';
+      let exitCode = 0;
+      for (const name of args) {
+        if (SHELL_BUILTINS.has(name)) {
+          stdout += `${name} is a shell builtin\n`;
+        } else if (this.functions.get(name)) {
+          stdout += `${name} is a function\n`;
+        } else if (this.mgr.hasTool(name)) {
+          stdout += `${name} is /usr/bin/${name}\n`;
+        } else {
+          stdout += `bash: type: ${name}: not found\n`;
+          exitCode = 1;
+        }
+      }
+      result = { exitCode, stdout, stderr: '', executionTimeMs: 0 };
+    } else if (cmdName === 'command') {
+      // command [-v] name — run command bypassing functions, or -v to check existence
+      if (args.length > 0 && args[0] === '-v') {
+        let stdout = '';
+        let exitCode = 0;
+        for (const name of args.slice(1)) {
+          if (SHELL_BUILTINS.has(name)) {
+            stdout += `${name}\n`;
+          } else if (this.mgr.hasTool(name)) {
+            stdout += `/usr/bin/${name}\n`;
+          } else {
+            exitCode = 1;
+          }
+        }
+        result = { exitCode, stdout, stderr: '', executionTimeMs: 0 };
+      }
+      // Without -v, fall through to normal command execution (bypasses functions)
+    } else if (cmdName === 'let') {
+      let exitCode = 0;
+      for (const expr of args) {
+        const val = this.evalArithmetic(expr);
+        exitCode = val === 0 ? 1 : 0;
+      }
+      result = { exitCode, stdout: '', stderr: '', executionTimeMs: 0 };
     }
 
     if (!result) {

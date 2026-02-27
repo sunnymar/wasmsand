@@ -9,6 +9,7 @@ struct Counts {
     lines: usize,
     words: usize,
     bytes: usize,
+    max_line_len: usize,
 }
 
 impl Counts {
@@ -17,6 +18,7 @@ impl Counts {
             lines: 0,
             words: 0,
             bytes: 0,
+            max_line_len: 0,
         }
     }
 
@@ -24,6 +26,9 @@ impl Counts {
         self.lines += other.lines;
         self.words += other.words;
         self.bytes += other.bytes;
+        if other.max_line_len > self.max_line_len {
+            self.max_line_len = other.max_line_len;
+        }
     }
 }
 
@@ -35,11 +40,21 @@ fn count_reader<R: Read>(reader: R) -> io::Result<Counts> {
         counts.lines += 1;
         counts.bytes += line.len() + 1; // +1 for the newline
         counts.words += line.split_whitespace().count();
+        if line.len() > counts.max_line_len {
+            counts.max_line_len = line.len();
+        }
     }
     Ok(counts)
 }
 
-fn print_counts(counts: &Counts, show_lines: bool, show_words: bool, show_bytes: bool, name: &str) {
+fn print_counts(
+    counts: &Counts,
+    show_lines: bool,
+    show_words: bool,
+    show_bytes: bool,
+    show_max_line_len: bool,
+    name: &str,
+) {
     let mut parts: Vec<String> = Vec::new();
     if show_lines {
         parts.push(format!("{:>8}", counts.lines));
@@ -49,6 +64,9 @@ fn print_counts(counts: &Counts, show_lines: bool, show_words: bool, show_bytes:
     }
     if show_bytes {
         parts.push(format!("{:>8}", counts.bytes));
+    }
+    if show_max_line_len {
+        parts.push(format!("{:>8}", counts.max_line_len));
     }
     let line = parts.join("");
     if name.is_empty() {
@@ -64,6 +82,7 @@ fn main() {
     let mut show_lines = false;
     let mut show_words = false;
     let mut show_bytes = false;
+    let mut show_max_line_len = false;
     let mut files: Vec<String> = Vec::new();
 
     for arg in &args[1..] {
@@ -77,6 +96,7 @@ fn main() {
                     'l' => show_lines = true,
                     'w' => show_words = true,
                     'c' => show_bytes = true,
+                    'L' => show_max_line_len = true,
                     _ => {
                         eprintln!("wc: invalid option -- '{}'", ch);
                         process::exit(1);
@@ -88,8 +108,8 @@ fn main() {
         }
     }
 
-    // If no specific flag is set, show all three
-    if !show_lines && !show_words && !show_bytes {
+    // If no specific flag is set, show all three (but not -L)
+    if !show_lines && !show_words && !show_bytes && !show_max_line_len {
         show_lines = true;
         show_words = true;
         show_bytes = true;
@@ -101,7 +121,14 @@ fn main() {
         // Read from stdin
         let stdin = io::stdin();
         match count_reader(stdin.lock()) {
-            Ok(counts) => print_counts(&counts, show_lines, show_words, show_bytes, ""),
+            Ok(counts) => print_counts(
+                &counts,
+                show_lines,
+                show_words,
+                show_bytes,
+                show_max_line_len,
+                "",
+            ),
             Err(e) => {
                 eprintln!("wc: {}", e);
                 exit_code = 1;
@@ -113,7 +140,14 @@ fn main() {
             match File::open(file) {
                 Ok(f) => match count_reader(f) {
                     Ok(counts) => {
-                        print_counts(&counts, show_lines, show_words, show_bytes, file);
+                        print_counts(
+                            &counts,
+                            show_lines,
+                            show_words,
+                            show_bytes,
+                            show_max_line_len,
+                            file,
+                        );
                         total.add(&counts);
                     }
                     Err(e) => {
@@ -128,7 +162,14 @@ fn main() {
             }
         }
         if files.len() > 1 {
-            print_counts(&total, show_lines, show_words, show_bytes, "total");
+            print_counts(
+                &total,
+                show_lines,
+                show_words,
+                show_bytes,
+                show_max_line_len,
+                "total",
+            );
         }
     }
 

@@ -124,6 +124,25 @@ export abstract class ShellBuiltins {
   /** Builtin: unset — remove env variables. */
   protected builtinUnset(args: string[]): RunResult {
     for (const name of args) {
+      // Check for array element: unset arr[idx]
+      const arrMatch = name.match(/^(\w+)\[(.+)\]$/);
+      if (arrMatch) {
+        const arrName = arrMatch[1];
+        const subscript = arrMatch[2];
+        const assoc = this.assocArrays.get(arrName);
+        if (assoc) {
+          assoc.delete(subscript);
+          continue;
+        }
+        const arr = this.arrays.get(arrName);
+        if (arr) {
+          const idx = parseInt(subscript, 10);
+          if (!isNaN(idx) && idx >= 0 && idx < arr.length) {
+            arr[idx] = '';
+          }
+          continue;
+        }
+      }
       this.env.delete(name);
       this.arrays.delete(name);
       this.assocArrays.delete(name);
