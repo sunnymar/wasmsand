@@ -256,7 +256,7 @@ pub fn restore_brace_sentinels(words: &[String]) -> Vec<String> {
 pub fn expand_globs(host: &dyn HostInterface, words: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     for word in words {
-        if word.contains('*') || word.contains('?') {
+        if word.contains('*') || word.contains('?') || word.contains('[') {
             match host.glob(word) {
                 Ok(mut matches) if !matches.is_empty() => {
                     matches.sort();
