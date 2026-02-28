@@ -4,7 +4,7 @@ import { NodeAdapter } from '../platform/node-adapter';
 import { resolve } from 'path';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('Sandbox packages option', () => {
   let sandbox: Sandbox;
@@ -13,7 +13,6 @@ describe('Sandbox packages option', () => {
   it('installs requested packages into VFS', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['requests'],
     });
@@ -24,7 +23,6 @@ describe('Sandbox packages option', () => {
   it('does not install packages not requested', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: [],
     });
@@ -35,7 +33,6 @@ describe('Sandbox packages option', () => {
   it('auto-installs dependencies', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['pandas'],
     });
@@ -47,7 +44,6 @@ describe('Sandbox packages option', () => {
   it('requests module provides expected API surface', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['requests'],
     });
@@ -90,7 +86,6 @@ print('ok')
   it('numpy array operations work', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['numpy'],
     });
@@ -103,7 +98,6 @@ print('ok')
   it('numpy linalg works', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['numpy'],
     });
@@ -116,7 +110,6 @@ print('ok')
   it('numpy exp/log roundtrip', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['numpy'],
     });
@@ -133,7 +126,6 @@ print('ok')
   it('numpy sin/cos at known values', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['numpy'],
     });
@@ -149,7 +141,6 @@ print('ok')
   it('numpy squeeze and expand_dims', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['numpy'],
     });
@@ -168,7 +159,6 @@ print('ok')
   it('numpy argmax with axis', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['numpy'],
     });
@@ -184,7 +174,6 @@ print(result.tolist())
   it('numpy slice syntax', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['numpy'],
     });
@@ -200,7 +189,6 @@ print(sliced.tolist())
   it('sqlite3 in-memory database CRUD', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['sqlite3'],
     });
@@ -238,7 +226,6 @@ print('ok')
   it('sqlite3 connection.execute shortcut', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['sqlite3'],
     });
@@ -259,7 +246,6 @@ print('ok')
   it('PIL Image.new and size', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['PIL'],
     });
@@ -272,7 +258,6 @@ print('ok')
   it('PIL getpixel/putpixel round-trip', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['PIL'],
     });
@@ -288,7 +273,6 @@ print(img.getpixel((3, 4)))
   it('PIL resize and crop', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['PIL'],
     });
@@ -305,7 +289,6 @@ print(resized.size, cropped.size)
   it('PIL save/open PNG round-trip', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['PIL'],
     });
@@ -322,7 +305,6 @@ print(img2.size, img2.getpixel((0, 0)))
   it('matplotlib plot + savefig SVG', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['matplotlib'],
     });
@@ -341,7 +323,6 @@ print(content[:4])
   it('matplotlib bar chart SVG', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['matplotlib'],
     });
@@ -361,7 +342,6 @@ print('ok')
   it('matplotlib scatter plot SVG', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['matplotlib'],
     });
@@ -380,7 +360,6 @@ print('ok')
   it('matplotlib histogram', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['matplotlib'],
     });
@@ -398,7 +377,6 @@ print('ok')
   it('matplotlib savefig PNG via PIL backend', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       packages: ['matplotlib'],
     });
@@ -417,7 +395,6 @@ print('ok')
   it('works with no packages option', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     // Should work fine without packages option

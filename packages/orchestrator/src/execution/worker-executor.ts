@@ -7,7 +7,7 @@
 
 import type { Worker } from 'node:worker_threads';
 import type { VFS } from '../vfs/vfs.js';
-import type { RunResult } from '../shell/shell-runner.js';
+import type { RunResult } from '../shell/shell-types.js';
 import {
   SAB_SIZE,
   STATUS_RESPONSE,
@@ -21,7 +21,7 @@ import type { ExtensionRegistry } from '../extension/registry.js';
 export interface WorkerConfig {
   vfs: VFS;
   wasmDir: string;
-  shellWasmPath: string;
+  shellExecWasmPath: string;
   toolRegistry: [string, string][];
   networkEnabled?: boolean;
   stdoutBytes?: number;
@@ -34,7 +34,7 @@ export interface WorkerConfig {
 }
 
 export interface WorkerRunResult extends RunResult {
-  /** Environment updates from the worker, for syncing back to ShellRunner. */
+  /** Environment updates from the worker, for syncing back to ShellInstance. */
   env?: [string, string][];
 }
 
@@ -183,7 +183,7 @@ export class WorkerExecutor {
       type: 'init',
       sab: this.sab,
       wasmDir: this.config.wasmDir,
-      shellWasmPath: this.config.shellWasmPath,
+      shellExecWasmPath: this.config.shellExecWasmPath,
       toolRegistry: this.config.toolRegistry,
       networkEnabled: this.config.networkEnabled ?? false,
       stdoutBytes: this.config.stdoutBytes,

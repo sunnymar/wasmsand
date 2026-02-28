@@ -12,13 +12,13 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('Security: adversarial inputs', () => {
 
   it('extension blocked by allowlist cannot be reached via pipe', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo'] },
       extensions: [{
@@ -33,7 +33,7 @@ describe('Security: adversarial inputs', () => {
 
   it('blocked tool cannot be reached via command substitution', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo'] },
     });
@@ -51,7 +51,7 @@ describe('Security: adversarial inputs', () => {
 
   it('script file cannot run blocked commands', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo', 'cat'] },
     });
@@ -69,7 +69,7 @@ describe('Security: adversarial inputs', () => {
     let cmd = 'echo innermost';
     for (let i = 0; i < 60; i++) cmd = `echo $(${cmd})`;
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
     });
     const result = await sb.run(cmd);
@@ -80,7 +80,7 @@ describe('Security: adversarial inputs', () => {
 
   it('output truncation works under repeated writes', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
       security: { limits: { stdoutBytes: 1024 } },
     });
@@ -93,7 +93,7 @@ describe('Security: adversarial inputs', () => {
 
   it('very long command is rejected', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
       security: { limits: { commandBytes: 100 } },
     });
@@ -105,7 +105,7 @@ describe('Security: adversarial inputs', () => {
 
   it('symlink chains are bounded', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
     });
     // Create a circular symlink chain: link1 -> link2 -> link1
@@ -116,7 +116,7 @@ describe('Security: adversarial inputs', () => {
 
   it('path traversal via .. is neutralized', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
     });
     // Try to escape writable directories.
@@ -129,7 +129,7 @@ describe('Security: adversarial inputs', () => {
 
   it('fork inherits allowlist restrictions', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM,
+      wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo'] },
     });

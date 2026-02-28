@@ -35,5 +35,9 @@ fn main() -> ExitCode {
     #[cfg(feature = "sqlite3")]
     let config = config.add_native_module(sqlite3_def);
 
+    // _codepod host bridge module — always available (not feature-gated)
+    let codepod_def = codepod_host_native::module_def(&config.ctx);
+    let config = config.add_native_module(codepod_def);
+
     rustpython::run(config)
 }

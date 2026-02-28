@@ -16,14 +16,13 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('Security MVP acceptance', () => {
   // AC1: Infinite loop terminated by timeout
   it('AC1: infinite loop is killed by timeout', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { timeoutMs: 100 } },
     });
@@ -40,7 +39,6 @@ describe('Security MVP acceptance', () => {
   it('AC1: chained infinite commands killed by timeout', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { timeoutMs: 100 } },
     });
@@ -54,7 +52,6 @@ describe('Security MVP acceptance', () => {
   it('AC2: curl without network policy fails', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     const result = await sb.run('curl https://evil.com');
@@ -66,7 +63,6 @@ describe('Security MVP acceptance', () => {
   it('AC2: wget without network policy fails', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     const result = await sb.run('wget https://evil.com');
@@ -79,7 +75,6 @@ describe('Security MVP acceptance', () => {
   it('AC3: VFS is isolated — no host filesystem access', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     // /etc/passwd doesn't exist in the virtual FS
@@ -92,7 +87,6 @@ describe('Security MVP acceptance', () => {
   it('AC4: stdout flood truncated at cap', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { stdoutBytes: 100 } },
     });
@@ -105,7 +99,6 @@ describe('Security MVP acceptance', () => {
   it('AC4: stderr flood truncated at cap', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { stderrBytes: 50 } },
     });
@@ -119,7 +112,6 @@ describe('Security MVP acceptance', () => {
   it('AC5: oversized command rejected before execution', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { commandBytes: 50 } },
     });
@@ -133,7 +125,6 @@ describe('Security MVP acceptance', () => {
   it('AC5: command under limit executes normally', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { commandBytes: 1000 } },
     });
@@ -147,12 +138,10 @@ describe('Security MVP acceptance', () => {
   it('AC6: two sessions have isolated filesystems', async () => {
     const sb1 = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     const sb2 = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
 
@@ -171,7 +160,6 @@ describe('Security MVP acceptance', () => {
   it('AC6: forked sandbox is isolated from parent after fork', async () => {
     const parent = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     parent.writeFile('/tmp/shared.txt', new TextEncoder().encode('before'));
@@ -193,7 +181,6 @@ describe('Security MVP acceptance', () => {
     const events: any[] = [];
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: {
         onAuditEvent: (e) => events.push(e),
@@ -223,7 +210,6 @@ describe('Security MVP acceptance', () => {
     const events: any[] = [];
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: {
         limits: { timeoutMs: 1 },
@@ -244,7 +230,6 @@ describe('Security MVP acceptance', () => {
     const events: any[] = [];
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: {
         toolAllowlist: ['echo'],
@@ -263,7 +248,6 @@ describe('Security MVP acceptance', () => {
     const events: any[] = [];
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: {
         limits: { stdoutBytes: 20 },
@@ -282,7 +266,6 @@ describe('Security MVP acceptance', () => {
   it('tool allowlist blocks unauthorized tool', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo'] },
     });
@@ -295,7 +278,6 @@ describe('Security MVP acceptance', () => {
   it('tool allowlist allows authorized tool', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo', 'cat'] },
     });
@@ -310,7 +292,6 @@ describe('Security MVP acceptance', () => {
   it('file count limit prevents inode exhaustion', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { fileCount: 30 } },
     });
@@ -331,7 +312,6 @@ describe('Security MVP acceptance', () => {
   it('tool allowlist blocks extension not in list', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo'] },
       extensions: [{
@@ -349,7 +329,6 @@ describe('Security MVP acceptance', () => {
   it('tool allowlist allows extension in list', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { toolAllowlist: ['echo', 'greet'] },
       extensions: [{
@@ -368,7 +347,6 @@ describe('Security MVP acceptance', () => {
   it('extension output is truncated to stdout limit', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       security: { limits: { stdoutBytes: 100 } },
       extensions: [{
@@ -386,7 +364,6 @@ describe('Security MVP acceptance', () => {
   it('destroyed sandbox rejects all operations', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     sb.destroy();

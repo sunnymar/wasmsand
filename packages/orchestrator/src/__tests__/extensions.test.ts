@@ -11,7 +11,7 @@ import { NodeAdapter } from '../platform/node-adapter.js';
 import type { ExtensionConfig } from '../extension/types.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('Extension commands', () => {
   let sandbox: Sandbox;
@@ -23,7 +23,6 @@ describe('Extension commands', () => {
   it('runs an extension command and returns output', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'greet',
@@ -39,7 +38,6 @@ describe('Extension commands', () => {
   it('extension receives args', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'myext',
@@ -57,7 +55,6 @@ describe('Extension commands', () => {
   it('extension receives piped stdin', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'upper',
@@ -75,7 +72,6 @@ describe('Extension commands', () => {
   it('--help returns extension description', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'helper',
@@ -91,7 +87,6 @@ describe('Extension commands', () => {
   it('which finds extension command', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'myext',
@@ -106,7 +101,6 @@ describe('Extension commands', () => {
   it('extension output can be redirected to file', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'gen',
@@ -121,7 +115,6 @@ describe('Extension commands', () => {
   it('multiple extensions in one sandbox', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [
         { name: 'ext1', command: async () => ({ stdout: 'one\n', exitCode: 0 }) },
@@ -137,7 +130,6 @@ describe('Extension commands', () => {
   it('extension with non-zero exit code', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'fail',
@@ -152,7 +144,6 @@ describe('Extension commands', () => {
   it('extension with && chaining respects exit code', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [
         { name: 'fail', command: async () => ({ stdout: '', exitCode: 1 }) },
@@ -175,7 +166,6 @@ describe('Extension Python packages', () => {
   it('pip list shows registered packages', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'mylib',
@@ -191,7 +181,6 @@ describe('Extension Python packages', () => {
   it('pip show displays package metadata', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'analyzer',
@@ -213,7 +202,6 @@ describe('Extension Python packages', () => {
   it('pip show returns error for nonexistent package', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     const result = await sandbox.run('pip show nonexistent');
@@ -223,7 +211,6 @@ describe('Extension Python packages', () => {
   it('pip install says already satisfied for registered package', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'mypkg',
@@ -238,7 +225,6 @@ describe('Extension Python packages', () => {
   it('pip install fails for unknown package', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
     const result = await sandbox.run('pip install unknown');
@@ -249,7 +235,6 @@ describe('Extension Python packages', () => {
   it('package files are installed in VFS', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'testpkg',
@@ -268,7 +253,6 @@ describe('Extension Python packages', () => {
   it('codepod_ext.py bridge is installed when packages exist', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'x',
@@ -276,14 +260,13 @@ describe('Extension Python packages', () => {
       }],
     });
     const content = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/codepod_ext.py'));
-    expect(content).toContain('_EXTENSION_FD = 1022');
+    expect(content).toContain('import _codepod');
     expect(content).toContain('def call(');
   });
 
   it('extension with both command and package', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       extensions: [{
         name: 'dualext',

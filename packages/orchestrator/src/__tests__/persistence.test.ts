@@ -15,7 +15,7 @@ import { FsBackend } from '../persistence/fs-backend.js';
 import { PersistenceManager } from '../persistence/manager.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 /** Helper: encode a string as UTF-8 bytes. */
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -172,7 +172,7 @@ describe('Sandbox exportState / importState', () => {
   });
 
   it('round-trips files and env via Sandbox', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     sandbox.writeFile('/tmp/hello.txt', enc('world'));
     sandbox.setEnv('MY_KEY', 'my_value');
@@ -180,7 +180,7 @@ describe('Sandbox exportState / importState', () => {
     const blob = sandbox.exportState();
 
     // Create a second sandbox and import
-    const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     try {
       sandbox2.importState(blob);
 
@@ -192,13 +192,13 @@ describe('Sandbox exportState / importState', () => {
   });
 
   it('importState overwrites existing files', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     sandbox.writeFile('/tmp/overwrite.txt', enc('original'));
     const blob = sandbox.exportState();
 
     // Create second sandbox with different content
-    const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     try {
       sandbox2.writeFile('/tmp/overwrite.txt', enc('should-be-overwritten'));
       sandbox2.importState(blob);
@@ -210,7 +210,7 @@ describe('Sandbox exportState / importState', () => {
   });
 
   it('throws on destroyed sandbox', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.destroy();
     expect(() => sandbox.exportState()).toThrow(/destroyed/);
     expect(() => sandbox.importState(new Uint8Array(0))).toThrow(/destroyed/);
@@ -488,7 +488,7 @@ describe('Sandbox persistent mode integration', () => {
     const backend = new MemoryBackend();
 
     const sb1 = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(),
+      wasmDir: WASM_DIR, adapter: new NodeAdapter(),
       persistence: { mode: 'persistent', namespace: 'integ', autosaveMs: 50, backend },
     });
 
@@ -501,7 +501,7 @@ describe('Sandbox persistent mode integration', () => {
 
     // Create a new sandbox with same backend/namespace — should auto-load
     const sb2 = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(),
+      wasmDir: WASM_DIR, adapter: new NodeAdapter(),
       persistence: { mode: 'persistent', namespace: 'integ', backend },
     });
     try {
@@ -516,7 +516,7 @@ describe('Sandbox persistent mode integration', () => {
     const backend = new MemoryBackend();
 
     const sb1 = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(),
+      wasmDir: WASM_DIR, adapter: new NodeAdapter(),
       persistence: { mode: 'session', namespace: 'sess', backend },
     });
 
@@ -525,7 +525,7 @@ describe('Sandbox persistent mode integration', () => {
     sb1.destroy();
 
     const sb2 = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(),
+      wasmDir: WASM_DIR, adapter: new NodeAdapter(),
       persistence: { mode: 'session', namespace: 'sess', backend },
     });
     try {
@@ -539,7 +539,7 @@ describe('Sandbox persistent mode integration', () => {
 
   it('ephemeral mode: save/load throws', async () => {
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(),
+      wasmDir: WASM_DIR, adapter: new NodeAdapter(),
     });
     try {
       await expect(sb.saveState()).rejects.toThrow(/not configured/);
@@ -554,7 +554,7 @@ describe('Sandbox persistent mode integration', () => {
     const backend = new MemoryBackend();
 
     const sb = await Sandbox.create({
-      wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(),
+      wasmDir: WASM_DIR, adapter: new NodeAdapter(),
       persistence: { mode: 'session', namespace: 'clear', backend },
     });
     sb.writeFile('/tmp/clear.txt', enc('gone'));

@@ -17,8 +17,7 @@ describe('socket shim source', () => {
     expect(SOCKET_SHIM_SOURCE).toContain('def close(');
     expect(SOCKET_SHIM_SOURCE).toContain('def create_connection(');
     expect(SOCKET_SHIM_SOURCE).toContain('def getaddrinfo(');
-    expect(SOCKET_SHIM_SOURCE).toContain('CONTROL_FD');
-    expect(SOCKET_SHIM_SOURCE).toContain('CONTROL_FD = 1023');
+    expect(SOCKET_SHIM_SOURCE).toContain('import _codepod');
   });
 
   it('contains Content-Length aware flush logic', () => {

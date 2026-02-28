@@ -1,5 +1,5 @@
 /**
- * Sandbox: high-level facade wrapping VFS + ProcessManager + ShellRunner.
+ * Sandbox: high-level facade wrapping VFS + ProcessManager + ShellInstance.
  *
  * Provides a simple API for creating an isolated sandbox, running shell
  * commands, and interacting with the in-memory filesystem.
@@ -8,8 +8,9 @@
 import { VFS } from './vfs/vfs.js';
 import type { VfsOptions } from './vfs/vfs.js';
 import { ProcessManager } from './process/manager.js';
-import { ShellRunner } from './shell/shell-runner.js';
-import type { RunResult } from './shell/shell-runner.js';
+import { ShellInstance } from './shell/shell-instance.js';
+import type { ShellLike } from './shell/shell-like.js';
+import type { RunResult } from './shell/shell-types.js';
 import type { HistoryEntry } from './shell/history.js';
 import type { PlatformAdapter } from './platform/adapter.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
@@ -50,8 +51,8 @@ export interface SandboxOptions {
   timeoutMs?: number;
   /** Max VFS size in bytes. Default 256MB. */
   fsLimitBytes?: number;
-  /** Path to the shell parser wasm. Defaults to `${wasmDir}/codepod-shell.wasm`. */
-  shellWasmPath?: string;
+  /** Path to the shell-exec WASM binary. Defaults to `${wasmDir}/codepod-shell-exec.wasm`. */
+  shellExecWasmPath?: string;
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
   /** Security policy and limits. */
@@ -74,11 +75,11 @@ const DEFAULT_FS_LIMIT = 256 * 1024 * 1024; // 256 MB
 /** Internal config for the Sandbox constructor. Not part of the public API. */
 interface SandboxParts {
   vfs: VFS;
-  runner: ShellRunner;
+  runner: ShellLike;
   timeoutMs: number;
   adapter: PlatformAdapter;
   wasmDir: string;
-  shellWasmPath: string;
+  shellExecWasmPath: string;
   mgr: ProcessManager;
   bridge?: NetworkBridge;
   networkPolicy?: NetworkPolicy;
@@ -89,12 +90,12 @@ interface SandboxParts {
 
 export class Sandbox {
   private vfs: VFS;
-  private runner: ShellRunner;
+  private runner: ShellLike;
   private timeoutMs: number;
   private destroyed = false;
   private adapter: PlatformAdapter;
   private wasmDir: string;
-  private shellWasmPath: string;
+  private shellExecWasmPath: string;
   private mgr: ProcessManager;
   private envSnapshots: Map<string, Map<string, string>> = new Map();
   private bridge: NetworkBridge | null = null;
@@ -112,7 +113,7 @@ export class Sandbox {
     this.timeoutMs = parts.timeoutMs;
     this.adapter = parts.adapter;
     this.wasmDir = parts.wasmDir;
-    this.shellWasmPath = parts.shellWasmPath;
+    this.shellExecWasmPath = parts.shellExecWasmPath;
     this.mgr = parts.mgr;
     this.bridge = parts.bridge ?? null;
     this.networkPolicy = parts.networkPolicy;
@@ -138,7 +139,12 @@ export class Sandbox {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fsLimitBytes = options.fsLimitBytes ?? DEFAULT_FS_LIMIT;
 
-    const vfs = new VFS({ fsLimitBytes, fileCount: options.security?.limits?.fileCount });
+    const vfs = new VFS({
+      fsLimitBytes,
+      fileCount: options.security?.limits?.fileCount,
+      // Allow writes to system paths needed by virtual commands (pip, pkg)
+      writablePaths: ['/home/user', '/tmp', '/usr/lib/python', '/etc/codepod', '/usr/share/pkg'],
+    });
     const { gateway, bridge } = await Sandbox.createNetworkBridge(options.network);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir);
@@ -149,7 +155,7 @@ export class Sandbox {
       for (const ext of options.extensions) extensionRegistry.register(ext);
     }
 
-    // Process host mounts before ShellRunner so files are available immediately
+    // Process host mounts before shell so files are available immediately
     if (options.mounts) {
       for (const mc of options.mounts) {
         const provider = new HostMount(mc.files, { writable: mc.writable });
@@ -157,46 +163,52 @@ export class Sandbox {
       }
     }
 
-    const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/codepod-shell.wasm`;
-    const runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
+    const shellExecWasmPath = options.shellExecWasmPath ?? `${options.wasmDir}/codepod-shell-exec.wasm`;
 
-    // Wire extension registry to ShellRunner
-    if (extensionRegistry.list().length > 0) {
-      runner.setExtensionRegistry(extensionRegistry);
+    // Pre-load all tool modules so spawnSync can use them synchronously
+    await mgr.preloadModules();
+
+    // Use a mutable ref so the syncSpawn closure can access the ShellInstance's deadline
+    let shellInstanceRef: ShellInstance | null = null;
+    const secLimits = options.security?.limits;
+
+    const runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
+      syncSpawn: (cmd, args, env, stdin, cwd) =>
+        mgr.spawnSync(cmd, args, env, stdin, cwd, {
+          deadlineMs: shellInstanceRef?.getDeadlineMs(),
+          memoryBytes: secLimits?.memoryBytes,
+        }),
+      networkBridge: bridge,
+      extensionRegistry,
+      toolAllowlist: options.security?.toolAllowlist,
+    });
+    shellInstanceRef = runner;
+
+    // Wire output limits
+    if (secLimits) {
+      runner.setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
     }
 
-    // Apply tool allowlist to ShellRunner so extensions are also gated
-    if (options.security?.toolAllowlist) {
-      runner.setToolAllowlist(options.security.toolAllowlist);
-    }
-
-    // Apply output limits from security options
-    if (options.security?.limits) {
-      runner.setOutputLimits(options.security.limits.stdoutBytes, options.security.limits.stderrBytes);
-    }
-
-    // Apply memory limit
-    if (options.security?.limits?.memoryBytes !== undefined) {
-      runner.setMemoryLimit(options.security.limits.memoryBytes);
-    }
-
-    // Wire PackageManager if packagePolicy is configured
-    if (options.security?.packagePolicy) {
-      const packageManager = new PackageManager(vfs, options.security.packagePolicy);
-      runner.setPackageManager(packageManager);
-    }
-
-    // Wire audit handler so builtins can emit audit events
-    if (options.security?.onAuditEvent) {
-      const sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      const handler = options.security.onAuditEvent;
-      runner.setAuditHandler((type: string, data?: Record<string, unknown>) => {
-        handler({
-          type,
-          sessionId,
-          timestamp: Date.now(),
-          ...data,
-        });
+    // Install sandbox-native package files into VFS
+    if (options.packages && options.packages.length > 0) {
+      const pkgRegistry = new PackageRegistry();
+      const toInstall = new Set<string>();
+      for (const name of options.packages) {
+        for (const dep of pkgRegistry.resolveDeps(name)) {
+          toInstall.add(dep);
+        }
+      }
+      vfs.withWriteAccess(() => {
+        for (const name of toInstall) {
+          const meta = pkgRegistry.get(name);
+          if (!meta) continue;
+          for (const [relPath, content] of Object.entries(meta.pythonFiles)) {
+            const fullPath = `/usr/lib/python/${relPath}`;
+            const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+            vfs.mkdirp(dir);
+            vfs.writeFile(fullPath, new TextEncoder().encode(content));
+          }
+        }
       });
     }
 
@@ -235,30 +247,49 @@ export class Sandbox {
       });
     }
 
-    // Always create PackageRegistry for pip builtin (runtime install/uninstall)
-    const pkgRegistry = new PackageRegistry();
-    runner.setPackageRegistry(pkgRegistry);
-
-    // Install sandbox-native packages from PackageRegistry
-    if (options.packages && options.packages.length > 0) {
-      const toInstall = new Set<string>();
-      for (const name of options.packages) {
-        for (const dep of pkgRegistry.resolveDeps(name)) {
-          toInstall.add(dep);
-        }
-      }
+    // Bootstrap VFS config data for Rust virtual commands (curl/wget/pkg/pip)
+    {
+      const enc = new TextEncoder();
       vfs.withWriteAccess(() => {
-        for (const name of toInstall) {
-          const meta = pkgRegistry.get(name);
-          if (!meta) continue;
-          for (const [relPath, content] of Object.entries(meta.pythonFiles)) {
-            const fullPath = `/usr/lib/python/${relPath}`;
-            const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
-            vfs.mkdirp(dir);
-            vfs.writeFile(fullPath, new TextEncoder().encode(content));
+        vfs.mkdirp('/etc/codepod');
+
+        // pkg policy
+        const pkgPolicy = options.security?.packagePolicy ?? { enabled: false };
+        vfs.writeFile('/etc/codepod/pkg-policy.json', enc.encode(JSON.stringify(pkgPolicy)));
+
+        // pip registry (from PackageRegistry)
+        const pkgRegistry = new PackageRegistry();
+        const regData = pkgRegistry.available().map(n => {
+          const m = pkgRegistry.get(n)!;
+          return { name: m.name, version: m.version, summary: m.summary, dependencies: m.dependencies, files: m.pythonFiles };
+        });
+        vfs.writeFile('/etc/codepod/pip-registry.json', enc.encode(JSON.stringify(regData)));
+
+        // pip installed state (include pre-installed packages from options.packages)
+        const preInstalled: { name: string; version: string }[] = [];
+        if (options.packages && options.packages.length > 0) {
+          const preReg = new PackageRegistry();
+          const resolved = new Set<string>();
+          for (const name of options.packages) {
+            for (const dep of preReg.resolveDeps(name)) resolved.add(dep);
           }
-          runner.markPackageInstalled(name);
+          for (const name of resolved) {
+            const meta = preReg.get(name);
+            if (meta) preInstalled.push({ name: meta.name, version: meta.version });
+          }
         }
+        vfs.writeFile('/etc/codepod/pip-installed.json', enc.encode(JSON.stringify(preInstalled)));
+
+        // extension metadata
+        const extMeta = extensionRegistry.list().map(e => ({
+          name: e.name,
+          description: e.description,
+          hasCommand: !!e.command,
+          pythonPackage: e.pythonPackage
+            ? { version: e.pythonPackage.version, summary: e.pythonPackage.summary }
+            : null,
+        }));
+        vfs.writeFile('/etc/codepod/extensions.json', enc.encode(JSON.stringify(extMeta)));
       });
     }
 
@@ -270,13 +301,13 @@ export class Sandbox {
 
     // Create WorkerExecutor for hard-kill preemption when enabled.
     const workerExecutor = await Sandbox.createWorkerExecutor(
-      vfs, options.wasmDir, shellWasmPath, tools, adapter,
+      vfs, options.wasmDir, shellExecWasmPath, tools, adapter,
       options.security, bridge, options.network, extensionRegistry,
     );
 
     const sb = new Sandbox({
       vfs, runner, timeoutMs, adapter,
-      wasmDir: options.wasmDir, shellWasmPath,
+      wasmDir: options.wasmDir, shellExecWasmPath,
       mgr, bridge, networkPolicy: options.network,
       security: options.security, workerExecutor,
       extensionRegistry,
@@ -350,7 +381,7 @@ export class Sandbox {
   private static async createWorkerExecutor(
     vfs: VFS,
     wasmDir: string,
-    shellWasmPath: string,
+    shellExecWasmPath: string,
     tools: Map<string, string>,
     adapter: PlatformAdapter,
     security?: SecurityOptions,
@@ -367,7 +398,7 @@ export class Sandbox {
     return new WE({
       vfs,
       wasmDir,
-      shellWasmPath,
+      shellExecWasmPath,
       toolRegistry,
       stdoutBytes: security.limits?.stdoutBytes,
       stderrBytes: security.limits?.stderrBytes,
@@ -590,7 +621,30 @@ export class Sandbox {
     const { gateway, bridge } = await Sandbox.createNetworkBridge(this.networkPolicy);
     const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir);
-    const childRunner = new ShellRunner(childVfs, childMgr, this.adapter, this.shellWasmPath, gateway);
+
+    // Pre-load all tool modules so spawnSync can use them synchronously
+    await childMgr.preloadModules();
+
+    let childShellRef: ShellInstance | null = null;
+    const secLimits = this.security?.limits;
+
+    // Fork as ShellInstance — create a fresh instance and copy env
+    const childRunner = await ShellInstance.create(childVfs, childMgr, this.adapter, this.shellExecWasmPath, {
+      syncSpawn: (cmd, args, env, stdin, cwd) =>
+        childMgr.spawnSync(cmd, args, env, stdin, cwd, {
+          deadlineMs: childShellRef?.getDeadlineMs(),
+          memoryBytes: secLimits?.memoryBytes,
+        }),
+      networkBridge: bridge,
+      extensionRegistry: this.extensionRegistry ?? undefined,
+      toolAllowlist: this.security?.toolAllowlist,
+    });
+    childShellRef = childRunner;
+
+    // Wire output limits to forked runner
+    if (secLimits) {
+      childRunner.setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
+    }
 
     // Copy env
     const envMap = this.runner.getEnvMap();
@@ -598,30 +652,18 @@ export class Sandbox {
       childRunner.setEnv(k, v);
     }
 
-    // Propagate tool allowlist and output limits to forked runner
-    if (this.security?.toolAllowlist) {
-      childRunner.setToolAllowlist(this.security.toolAllowlist);
-    }
-    if (this.security?.limits) {
-      childRunner.setOutputLimits(this.security.limits.stdoutBytes, this.security.limits.stderrBytes);
-    }
-
-    // Wire extension registry to forked runner
-    if (this.extensionRegistry && this.extensionRegistry.list().length > 0) {
-      childRunner.setExtensionRegistry(this.extensionRegistry);
-    }
-
     // Create WorkerExecutor for the child if parent uses hard-kill
     const childWorkerExecutor = await Sandbox.createWorkerExecutor(
-      childVfs, this.wasmDir, this.shellWasmPath, tools, this.adapter,
-      this.security, bridge, this.networkPolicy,
+      childVfs, this.wasmDir, this.shellExecWasmPath, tools, this.adapter,
+      this.security, bridge, this.networkPolicy, this.extensionRegistry ?? undefined,
     );
 
     return new Sandbox({
       vfs: childVfs, runner: childRunner, timeoutMs: this.timeoutMs,
-      adapter: this.adapter, wasmDir: this.wasmDir, shellWasmPath: this.shellWasmPath,
+      adapter: this.adapter, wasmDir: this.wasmDir, shellExecWasmPath: this.shellExecWasmPath,
       mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
       security: this.security, workerExecutor: childWorkerExecutor,
+      extensionRegistry: this.extensionRegistry ?? undefined,
     });
   }
 
@@ -644,6 +686,7 @@ export class Sandbox {
     this.persistenceManager?.dispose().catch(() => {});
     this.workerExecutor?.dispose();
     this.bridge?.dispose();
+    this.runner.destroy?.();
   }
 
   private assertAlive(): void {

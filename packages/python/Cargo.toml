@@ -26,6 +26,9 @@ rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca6389
   "host_env",
 ] }
 
+# Host bridge module (always included — provides _codepod native module)
+codepod-host-native = { path = "crates/codepod-host" }
+
 # Native package crates (optional, gated by features)
 numpy-rust-python = { path = "../numpy-rust/crates/numpy-rust-python", optional = true }
 pandas-native = { path = "crates/pandas", optional = true }

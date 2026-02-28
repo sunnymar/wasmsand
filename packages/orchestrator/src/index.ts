@@ -2,7 +2,7 @@
 export { VFS } from './vfs/vfs.js';
 export type { VfsOptions } from './vfs/vfs.js';
 export { ProcessManager } from './process/manager.js';
-export { ShellRunner } from './shell/shell-runner.js';
+export { ShellInstance } from './shell/shell-instance.js';
 export { PythonRunner } from './python/python-runner.js';
 export { Sandbox } from './sandbox.js';
 export type { SandboxOptions, MountConfig } from './sandbox.js';
@@ -11,7 +11,7 @@ export { BrowserAdapter } from './platform/browser-adapter.js';
 // Node consumers: import { NodeAdapter } from '@codepod/sandbox/node'
 export type { PlatformAdapter } from './platform/adapter.js';
 export type { SpawnOptions, SpawnResult } from './process/process.js';
-export type { RunResult } from './shell/shell-runner.js';
+export type { RunResult } from './shell/shell-types.js';
 export { NetworkGateway, NetworkAccessDenied } from './network/gateway.js';
 export type { NetworkPolicy } from './network/gateway.js';
 export { NetworkBridge } from './network/bridge.js';

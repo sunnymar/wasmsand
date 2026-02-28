@@ -1,0 +1,8 @@
+[package]
+name = "codepod-host-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustpython-vm = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893", default-features = false }
+rustpython-derive = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }

@@ -4,13 +4,13 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { resolve } from 'node:path';
 
-import { ShellRunner } from '../../shell-runner.js';
+import { ShellInstance } from '../../shell-instance.js';
 import { ProcessManager } from '../../../process/manager.js';
 import { VFS } from '../../../vfs/vfs.js';
 import { NodeAdapter } from '../../../platform/node-adapter.js';
 
 const FIXTURES = resolve(import.meta.dirname, '../../../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../fixtures/codepod-shell.wasm');
+const SHELL_EXEC_WASM = resolve(import.meta.dirname, '../fixtures/codepod-shell-exec.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
@@ -44,7 +44,7 @@ const enc = (s: string) => new TextEncoder().encode(s);
 
 describe('rg conformance', () => {
   let vfs: VFS;
-  let runner: ShellRunner;
+  let runner: ShellInstance;
 
   beforeEach(async () => {
     vfs = new VFS();
@@ -53,7 +53,10 @@ describe('rg conformance', () => {
     for (const tool of TOOLS) {
       mgr.registerTool(tool, resolve(FIXTURES, wasmName(tool)));
     }
-    runner = new ShellRunner(vfs, mgr, adapter, SHELL_WASM);
+    await mgr.preloadModules();
+    runner = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+      syncSpawn: (cmd, args, env, stdin, cwd) => mgr.spawnSync(cmd, args, env, stdin, cwd),
+    });
 
     // Create test file tree
     await runner.run('mkdir -p /home/user/project/src /home/user/project/tests /home/user/project/docs /home/user/project/target/debug');

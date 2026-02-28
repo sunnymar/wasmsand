@@ -308,9 +308,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codepod-host-native"
+version = "0.1.0"
+dependencies = [
+ "rustpython-derive",
+ "rustpython-vm",
+]
+
+[[package]]
 name = "codepod-python"
 version = "0.1.0"
 dependencies = [
+ "codepod-host-native",
  "numpy-rust-python",
  "pandas-native",
  "pil-rust-python",
@@ -323,6 +332,16 @@ dependencies = [
 name = "codepod-shell"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codepod-shell-exec"
+version = "0.1.0"
+dependencies = [
+ "codepod-shell",
+ "regex",
  "serde",
  "serde_json",
 ]
@@ -1488,6 +1507,10 @@ dependencies = [
 [[package]]
 name = "pandas-native"
 version = "0.1.0"
+dependencies = [
+ "rustpython-derive",
+ "rustpython-vm",
+]
 
 [[package]]
 name = "parking_lot"
@@ -2570,6 +2593,10 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 [[package]]
 name = "sklearn-native"
 version = "0.1.0"
+dependencies = [
+ "rustpython-derive",
+ "rustpython-vm",
+]
 
 [[package]]
 name = "smallvec"

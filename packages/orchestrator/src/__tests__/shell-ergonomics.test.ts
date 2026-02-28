@@ -8,7 +8,7 @@ import { NodeAdapter } from '../platform/node-adapter.js';
 import { resolve } from 'node:path';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('history builtin', () => {
   let sandbox: Sandbox;
@@ -18,7 +18,7 @@ describe('history builtin', () => {
   });
 
   it('history list returns executed commands', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     await sandbox.run('echo hello');
     await sandbox.run('echo world');
     const result = await sandbox.run('history list');
@@ -30,7 +30,7 @@ describe('history builtin', () => {
   });
 
   it('history with no args defaults to list', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     await sandbox.run('echo test');
     const result = await sandbox.run('history');
     expect(result.exitCode).toBe(0);
@@ -38,7 +38,7 @@ describe('history builtin', () => {
   });
 
   it('history clear empties history', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     await sandbox.run('echo hello');
     await sandbox.run('history clear');
     const result = await sandbox.run('history list');
@@ -48,7 +48,7 @@ describe('history builtin', () => {
   });
 
   it('history entries have sequential indices', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     await sandbox.run('echo first');
     await sandbox.run('echo second');
     const result = await sandbox.run('history list');
@@ -60,14 +60,14 @@ describe('history builtin', () => {
   });
 
   it('history unknown subcommand returns error', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const result = await sandbox.run('history bogus');
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('unknown subcommand');
   });
 
   it('getHistory() returns entries via Sandbox API', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     await sandbox.run('echo hello');
     await sandbox.run('echo world');
     const entries = sandbox.getHistory();
@@ -80,7 +80,7 @@ describe('history builtin', () => {
   });
 
   it('clearHistory() clears entries via Sandbox API', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     await sandbox.run('echo hello');
     expect(sandbox.getHistory().length).toBe(1);
     sandbox.clearHistory();
@@ -96,7 +96,7 @@ describe('cross-feature integration', () => {
   });
 
   it('file data survives export/import', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     // Write a file to a writable location to simulate package metadata
     const fakeWasm = new TextEncoder().encode('fake-wasm-binary');
@@ -107,7 +107,7 @@ describe('cross-feature integration', () => {
     const blob = sandbox.exportState();
 
     // Create a new sandbox and import
-    const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     try {
       sandbox2.importState(blob);
 
@@ -120,7 +120,7 @@ describe('cross-feature integration', () => {
   });
 
   it('/proc/uptime increases between reads', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     const result1 = await sandbox.run('cat /proc/uptime');
     expect(result1.exitCode).toBe(0);
@@ -137,7 +137,7 @@ describe('cross-feature integration', () => {
   });
 
   it('history tracks commands across different features', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     // Run a mix of builtins and WASM commands
     await sandbox.run('echo hello');

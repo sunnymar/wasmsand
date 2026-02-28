@@ -4,7 +4,7 @@ import { WorkerExecutor } from '../worker-executor.js';
 import { VFS } from '../../vfs/vfs.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/codepod-shell.wasm');
+const SHELL_EXEC_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/codepod-shell-exec.wasm');
 
 /** Build a tool registry for the tests. */
 function makeToolRegistry(...names: string[]): [string, string][] {
@@ -38,7 +38,7 @@ describe('WorkerExecutor', () => {
     executor = new WorkerExecutor({
       vfs,
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
+      shellExecWasmPath: SHELL_EXEC_WASM,
       toolRegistry: [],
     });
     const env = new Map([
@@ -57,7 +57,7 @@ describe('WorkerExecutor', () => {
     executor = new WorkerExecutor({
       vfs,
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
+      shellExecWasmPath: SHELL_EXEC_WASM,
       toolRegistry: makeToolRegistry('cat'),
     });
     const env = new Map([
@@ -74,7 +74,7 @@ describe('WorkerExecutor', () => {
     executor = new WorkerExecutor({
       vfs,
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
+      shellExecWasmPath: SHELL_EXEC_WASM,
       toolRegistry: makeToolRegistry('seq'),
     });
     const env = new Map([
@@ -92,7 +92,7 @@ describe('WorkerExecutor', () => {
     executor = new WorkerExecutor({
       vfs,
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
+      shellExecWasmPath: SHELL_EXEC_WASM,
       toolRegistry: makeToolRegistry('seq'),
     });
     const env = new Map([
@@ -113,7 +113,7 @@ describe('WorkerExecutor', () => {
     executor = new WorkerExecutor({
       vfs,
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
+      shellExecWasmPath: SHELL_EXEC_WASM,
       toolRegistry: makeToolRegistry('seq'),
     });
     const env = new Map([
@@ -139,7 +139,7 @@ describe('WorkerExecutor', () => {
     executor = new WorkerExecutor({
       vfs,
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
+      shellExecWasmPath: SHELL_EXEC_WASM,
       toolRegistry: [],
     });
     expect(executor.isRunning()).toBe(false);

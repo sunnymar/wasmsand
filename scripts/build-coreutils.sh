@@ -8,10 +8,11 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_DIR="$REPO_ROOT/target/wasm32-wasip1/release"
 FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
 
-echo "Building coreutils + shell to wasm32-wasip1..."
+echo "Building coreutils + shell + shell-exec to wasm32-wasip1..."
 cargo build \
   -p codepod-coreutils \
   -p codepod-shell \
+  -p codepod-shell-exec \
   -p true-cmd-wasm \
   -p false-cmd-wasm \
   --target wasm32-wasip1 \
@@ -38,6 +39,7 @@ if [[ "${1:-}" == "--copy-fixtures" ]]; then
   cp "$TARGET_DIR/true-cmd-wasm.wasm" "$FIXTURES_DIR/true-cmd.wasm"
   cp "$TARGET_DIR/false-cmd-wasm.wasm" "$FIXTURES_DIR/false-cmd.wasm"
   cp "$TARGET_DIR/codepod-shell.wasm" "$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures/codepod-shell.wasm"
+  cp "$TARGET_DIR/codepod-shell-exec.wasm" "$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures/codepod-shell-exec.wasm"
 
   echo "Done."
 fi
