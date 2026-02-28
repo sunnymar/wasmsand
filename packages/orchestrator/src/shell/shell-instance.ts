@@ -131,7 +131,7 @@ export class ShellInstance implements ShellLike {
     if (options?.extensionRegistry && typeof WebAssembly.Suspending === 'function') {
       shellImports.host_extension_invoke = new WebAssembly.Suspending(
         shellImports.host_extension_invoke as (...args: number[]) => Promise<number>,
-      );
+      ) as unknown as WebAssembly.ImportValue;
     }
 
     // WASI P1 stubs (minimal -- shell-exec doesn't use WASI for I/O)
