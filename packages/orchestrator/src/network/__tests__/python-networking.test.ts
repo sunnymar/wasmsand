@@ -75,6 +75,7 @@ describe('Python networking via socket shim', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       network: { allowedHosts: ['127.0.0.1'] },
     });
 
@@ -100,6 +101,7 @@ print(resp.read().decode())
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       network: { allowedHosts: ['127.0.0.1'] },
     });
 
@@ -128,6 +130,7 @@ conn.close()
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       network: { allowedHosts: ['127.0.0.1'] },
     });
 
@@ -159,6 +162,7 @@ print(data['body'])
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       network: { allowedHosts: ['allowed.com'] },
     });
 
@@ -186,6 +190,7 @@ except Exception as e:
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
 
     try {

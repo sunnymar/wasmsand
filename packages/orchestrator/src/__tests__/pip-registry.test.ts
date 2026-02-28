@@ -15,6 +15,7 @@ describe('pip with PackageRegistry', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const install = await sandbox.run('pip install requests');
     expect(install.exitCode).toBe(0);
@@ -29,6 +30,7 @@ describe('pip with PackageRegistry', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['requests'],
     });
     const uninstall = await sandbox.run('pip uninstall requests -y');
@@ -43,6 +45,7 @@ describe('pip with PackageRegistry', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['requests'],
     });
     const result = await sandbox.run('pip list');
@@ -56,6 +59,7 @@ describe('pip with PackageRegistry', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip install nonexistent-pkg');
     expect(result.exitCode).not.toBe(0);
@@ -68,6 +72,7 @@ describe('pip with PackageRegistry', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip install pandas');
     expect(result.exitCode).toBe(0);
@@ -80,6 +85,7 @@ describe('pip with PackageRegistry', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip show requests');
     expect(result.exitCode).toBe(0);

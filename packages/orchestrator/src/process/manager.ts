@@ -211,6 +211,147 @@ export class ProcessManager {
     this.moduleCache.set(wasmPath, module);
     return module;
   }
+
+  /**
+   * Pre-load all registered tool modules into the cache so they can be
+   * used synchronously by spawnSync().
+   */
+  async preloadModules(): Promise<void> {
+    const paths = new Set(this.registry.values());
+    await Promise.all(Array.from(paths).map(p => this.loadModule(p)));
+  }
+
+  /**
+   * Synchronous spawn for the rust-wasm backend (host_spawn callback).
+   * Requires that the module has been pre-loaded via preloadModules().
+   * Falls back to returning an error if the module is not cached.
+   */
+  spawnSync(
+    command: string,
+    args: string[],
+    env: Record<string, string>,
+    stdin: Uint8Array,
+    cwd: string,
+    opts?: { deadlineMs?: number; stdoutLimit?: number; stderrLimit?: number; memoryBytes?: number },
+  ): { exit_code: number; stdout: string; stderr: string } {
+    if (this.toolAllowlist && !this.toolAllowlist.has(command)) {
+      return {
+        exit_code: 126,
+        stdout: '',
+        stderr: `${command}: tool not allowed by security policy\n`,
+      };
+    }
+
+    let wasmPath: string;
+    try {
+      wasmPath = this.resolveTool(command);
+    } catch {
+      return { exit_code: 127, stdout: '', stderr: `${command}: not found\n` };
+    }
+
+    const module = this.moduleCache.get(wasmPath);
+    if (!module) {
+      return { exit_code: 127, stdout: '', stderr: `${command}: module not loaded\n` };
+    }
+
+    const host = new WasiHost({
+      vfs: this.vfs,
+      args: [command, ...args],
+      env,
+      preopens: { '/': '/' },
+      stdin,
+      stdoutLimit: opts?.stdoutLimit,
+      stderrLimit: opts?.stderrLimit,
+      deadlineMs: opts?.deadlineMs,
+    });
+
+    const imports = host.getImports() as WebAssembly.Imports & Record<string, WebAssembly.ModuleImports>;
+
+    // If memoryBytes is set, inject a bounded memory into the import object
+    if (opts?.memoryBytes !== undefined) {
+      const maxPages = Math.ceil(opts.memoryBytes / 65536);
+      const moduleImportDescs2 = WebAssembly.Module.imports(module);
+      for (const imp of moduleImportDescs2) {
+        if (imp.kind === 'memory') {
+          const mem = new WebAssembly.Memory({ initial: 1, maximum: maxPages });
+          if (!imports[imp.module]) imports[imp.module] = {};
+          imports[imp.module][imp.name] = mem;
+        }
+      }
+    }
+
+    // If the module imports from the `codepod` namespace, inject Python host
+    // imports using a memory proxy.
+    const moduleImportDescs = WebAssembly.Module.imports(module);
+    const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
+
+    let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
+
+    if (needsCodepod) {
+      let memRef: WebAssembly.Memory | null = null;
+      setMemoryRef = (mem: WebAssembly.Memory) => { memRef = mem; };
+
+      const memoryProxy = new Proxy({} as WebAssembly.Memory, {
+        get(_target, prop) {
+          if (!memRef) throw new Error('memory not initialized');
+          const val = (memRef as unknown as Record<string | symbol, unknown>)[prop];
+          return typeof val === 'function' ? (val as Function).bind(memRef) : val;
+        },
+      });
+
+      imports.codepod = createPythonImports({
+        memory: memoryProxy,
+        networkBridge: this.networkBridge ?? undefined,
+        extensionHandler: this.extensionHandler ?? undefined,
+      });
+    }
+
+    // Synchronous instantiation (works because Module is already compiled)
+    let instance: WebAssembly.Instance;
+    try {
+      instance = new WebAssembly.Instance(module, imports);
+    } catch (e: unknown) {
+      if (opts?.memoryBytes !== undefined && e instanceof Error && /memory/i.test(e.message)) {
+        return { exit_code: 1, stdout: '', stderr: `memory limit exceeded\n` };
+      }
+      throw e;
+    }
+
+    // Check exported memory against limit
+    if (opts?.memoryBytes !== undefined) {
+      const mem = instance.exports.memory as WebAssembly.Memory | undefined;
+      if (mem) {
+        const moduleImports3 = WebAssembly.Module.imports(module);
+        const hasMemoryImport = moduleImports3.some(imp => imp.kind === 'memory');
+        if (!hasMemoryImport) {
+          return { exit_code: 1, stdout: '', stderr: `memory limit exceeded\n` };
+        }
+        if (mem.buffer.byteLength > opts.memoryBytes) {
+          return { exit_code: 1, stdout: '', stderr: `memory limit exceeded\n` };
+        }
+      }
+    }
+
+    if (setMemoryRef) {
+      setMemoryRef(instance.exports.memory as WebAssembly.Memory);
+    }
+
+    this.currentHost = host;
+    const exitCode = host.start(instance);
+    this.currentHost = null;
+
+    const stdoutTruncated = host.isStdoutTruncated();
+    const stderrTruncated = host.isStderrTruncated();
+
+    return {
+      exit_code: exitCode,
+      stdout: host.getStdout(),
+      stderr: host.getStderr(),
+      ...(stdoutTruncated || stderrTruncated ? {
+        truncated: { stdout: stdoutTruncated, stderr: stderrTruncated },
+      } : {}),
+    };
+  }
 }
 
 /** Drain all available bytes from a pipe read end into a single Uint8Array. */

@@ -45,6 +45,8 @@ export class ShellInstance implements ShellLike {
 
   // Environment (local mirror for Sandbox snapshot/restore)
   private env: Map<string, string> = new Map(DEFAULT_ENV);
+  // Track which env vars have been synced to the WASM module
+  private syncedEnv: Map<string, string> = new Map(DEFAULT_ENV);
 
   // History
   private historyEntries: HistoryEntry[] = [];
@@ -53,6 +55,10 @@ export class ShellInstance implements ShellLike {
   // Cancellation
   private cancelledReason: string | null = null;
   private deadlineMs: number = Infinity;
+
+  // Output limits
+  private stdoutLimitBytes: number | undefined;
+  private stderrLimitBytes: number | undefined;
 
   private constructor(instance: WebAssembly.Instance) {
     this.instance = instance;
@@ -217,6 +223,8 @@ export class ShellInstance implements ShellLike {
   /** Replace all env vars (for restore). */
   setEnvMap(env: Map<string, string>): void {
     this.env = new Map(env);
+    // Force resync on next run
+    this.syncedEnv = new Map();
   }
 
   // ── History ──
@@ -243,6 +251,18 @@ export class ShellInstance implements ShellLike {
   resetCancel(timeoutMs?: number): void {
     this.cancelledReason = null;
     this.deadlineMs = timeoutMs !== undefined ? Date.now() + timeoutMs : Infinity;
+  }
+
+  /** Return the current deadline (epoch ms, or Infinity if none). */
+  getDeadlineMs(): number {
+    return this.deadlineMs;
+  }
+
+  // ── Output limits ──
+
+  setOutputLimits(stdoutBytes?: number, stderrBytes?: number): void {
+    this.stdoutLimitBytes = stdoutBytes;
+    this.stderrLimitBytes = stderrBytes;
   }
 
   // ── Command execution ──
@@ -274,6 +294,45 @@ export class ShellInstance implements ShellLike {
 
     if (!alloc || !dealloc) {
       throw new Error('WASM module does not export __alloc/__dealloc');
+    }
+
+    // Sync env changes to the WASM module by prepending export statements
+    const envExports: string[] = [];
+    for (const [k, v] of this.env) {
+      if (this.syncedEnv.get(k) !== v) {
+        // Escape single quotes in value for shell safety
+        const escaped = v.replace(/'/g, "'\\''");
+        envExports.push(`export ${k}='${escaped}'`);
+        this.syncedEnv.set(k, v);
+      }
+    }
+    // Check for unset vars
+    for (const k of this.syncedEnv.keys()) {
+      if (!this.env.has(k)) {
+        envExports.push(`unset ${k}`);
+        this.syncedEnv.delete(k);
+      }
+    }
+
+    // If we have env changes, run them first (silently)
+    if (envExports.length > 0) {
+      const envCmd = envExports.join('; ');
+      const envEncoder = new TextEncoder();
+      const envBytes = envEncoder.encode(envCmd);
+      const envCmdPtr = alloc(envBytes.length);
+      new Uint8Array(this.memory.buffer, envCmdPtr, envBytes.length).set(envBytes);
+
+      let envOutCap = 256;
+      let envOutPtr = alloc(envOutCap);
+      const envNeeded = runCommand(envCmdPtr, envBytes.length, envOutPtr, envOutCap);
+      if (envNeeded > envOutCap) {
+        dealloc(envOutPtr, envOutCap);
+        envOutCap = envNeeded;
+        envOutPtr = alloc(envOutCap);
+        runCommand(envCmdPtr, envBytes.length, envOutPtr, envOutCap);
+      }
+      dealloc(envCmdPtr, envBytes.length);
+      dealloc(envOutPtr, envOutCap);
     }
 
     // Record in history
@@ -312,11 +371,47 @@ export class ShellInstance implements ShellLike {
     dealloc(outPtr, outCap);
 
     const result = JSON.parse(resultJson);
+    let stdout: string = result.stdout ?? '';
+    let stderr: string = result.stderr ?? '';
+    let truncated: { stdout: boolean; stderr: boolean } | undefined;
+
+    const enc = new TextEncoder();
+
+    if (this.stdoutLimitBytes !== undefined && enc.encode(stdout).byteLength > this.stdoutLimitBytes) {
+      // Truncate to approximate byte limit (may split multi-byte chars, but safe for ASCII-heavy output)
+      const bytes = enc.encode(stdout);
+      stdout = new TextDecoder().decode(bytes.slice(0, this.stdoutLimitBytes));
+      truncated = { stdout: true, stderr: false };
+    }
+
+    if (this.stderrLimitBytes !== undefined && enc.encode(stderr).byteLength > this.stderrLimitBytes) {
+      const bytes = enc.encode(stderr);
+      stderr = new TextDecoder().decode(bytes.slice(0, this.stderrLimitBytes));
+      truncated = truncated
+        ? { ...truncated, stderr: true }
+        : { stdout: false, stderr: true };
+    }
+
+    // Check if the command was cancelled or timed out
+    let errorClass: import('../security.js').ErrorClass | undefined;
+    let exitCode = result.exit_code ?? 0;
+
+    if (this.cancelledReason === 'TIMEOUT' || (this.deadlineMs !== Infinity && Date.now() > this.deadlineMs)) {
+      errorClass = 'TIMEOUT';
+      exitCode = 124;
+      this.cancelledReason = 'TIMEOUT';
+    } else if (this.cancelledReason === 'CANCELLED') {
+      errorClass = 'CANCELLED';
+      exitCode = 125;
+    }
+
     return {
-      exitCode: result.exit_code ?? 0,
-      stdout: result.stdout ?? '',
-      stderr: result.stderr ?? '',
+      exitCode,
+      stdout,
+      stderr,
       executionTimeMs: result.execution_time_ms ?? 0,
+      ...(truncated ? { truncated } : {}),
+      ...(errorClass ? { errorClass } : {}),
     };
   }
 

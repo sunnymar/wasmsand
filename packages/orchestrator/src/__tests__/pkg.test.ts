@@ -223,6 +223,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -238,6 +239,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       // No packagePolicy — packageManager will be null
     });
 
@@ -251,6 +253,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: {
           enabled: true,
@@ -270,6 +273,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -285,6 +289,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -304,6 +309,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -321,6 +327,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: {
           enabled: true,
@@ -349,6 +356,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -364,6 +372,7 @@ describe('pkg shell builtin', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },

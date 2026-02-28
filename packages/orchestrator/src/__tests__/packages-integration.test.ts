@@ -15,6 +15,7 @@ describe('Sandbox packages option', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['requests'],
     });
     const result = await sandbox.run('python3 -c "import requests; print(requests.__version__)"');
@@ -26,6 +27,7 @@ describe('Sandbox packages option', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: [],
     });
     const result = await sandbox.run('python3 -c "import requests"');
@@ -37,6 +39,7 @@ describe('Sandbox packages option', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['pandas'],
     });
     // pandas depends on numpy — numpy should also be installed
@@ -49,6 +52,7 @@ describe('Sandbox packages option', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['requests'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -92,6 +96,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['numpy'],
     });
     const result = await sandbox.run(
@@ -105,6 +110,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['numpy'],
     });
     const result = await sandbox.run(
@@ -118,6 +124,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['numpy'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -135,6 +142,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['numpy'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -151,6 +159,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['numpy'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -170,6 +179,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['numpy'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -186,6 +196,7 @@ print(result.tolist())
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['numpy'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -202,6 +213,7 @@ print(sliced.tolist())
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['sqlite3'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -240,6 +252,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['sqlite3'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -261,6 +274,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['PIL'],
     });
     const result = await sandbox.run(
@@ -274,6 +288,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['PIL'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -290,6 +305,7 @@ print(img.getpixel((3, 4)))
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['PIL'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -307,6 +323,7 @@ print(resized.size, cropped.size)
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['PIL'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -324,6 +341,7 @@ print(img2.size, img2.getpixel((0, 0)))
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['matplotlib'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -343,6 +361,7 @@ print(content[:4])
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['matplotlib'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -363,6 +382,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['matplotlib'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -382,6 +402,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['matplotlib'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -400,6 +421,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       packages: ['matplotlib'],
     });
     const result = await sandbox.run(`python3 -c "
@@ -419,6 +441,7 @@ print('ok')
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     // Should work fine without packages option
     const result = await sandbox.run('echo hello');

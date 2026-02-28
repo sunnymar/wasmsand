@@ -56,6 +56,7 @@ describe('Security MVP acceptance', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const result = await sb.run('curl https://evil.com');
     expect(result.exitCode).not.toBe(0);
@@ -68,6 +69,7 @@ describe('Security MVP acceptance', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const result = await sb.run('wget https://evil.com');
     expect(result.exitCode).not.toBe(0);
@@ -351,6 +353,7 @@ describe('Security MVP acceptance', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       security: { toolAllowlist: ['echo', 'greet'] },
       extensions: [{
         name: 'greet',

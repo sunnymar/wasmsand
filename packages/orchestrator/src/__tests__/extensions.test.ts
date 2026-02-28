@@ -25,6 +25,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'greet',
         description: 'Say hello',
@@ -41,6 +42,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'myext',
         command: async (input) => ({
@@ -59,6 +61,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'upper',
         command: async (input) => ({
@@ -77,6 +80,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'helper',
         description: 'A helpful command\nUsage: helper [opts]',
@@ -93,6 +97,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'myext',
         command: async () => ({ stdout: '', exitCode: 0 }),
@@ -108,6 +113,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'gen',
         command: async () => ({ stdout: 'generated content', exitCode: 0 }),
@@ -123,6 +129,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [
         { name: 'ext1', command: async () => ({ stdout: 'one\n', exitCode: 0 }) },
         { name: 'ext2', command: async () => ({ stdout: 'two\n', exitCode: 0 }) },
@@ -139,6 +146,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'fail',
         command: async () => ({ stdout: '', stderr: 'oops\n', exitCode: 1 }),
@@ -154,6 +162,7 @@ describe('Extension commands', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [
         { name: 'fail', command: async () => ({ stdout: '', exitCode: 1 }) },
         { name: 'ok', command: async () => ({ stdout: 'ran\n', exitCode: 0 }) },
@@ -177,6 +186,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'mylib',
         pythonPackage: { version: '2.1.0', summary: 'A test lib', files: { '__init__.py': 'x = 1' } },
@@ -193,6 +203,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'analyzer',
         pythonPackage: {
@@ -215,6 +226,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip show nonexistent');
     expect(result.exitCode).toBe(1);
@@ -225,6 +237,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'mypkg',
         pythonPackage: { version: '1.0.0', files: { '__init__.py': '' } },
@@ -240,6 +253,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip install unknown');
     expect(result.exitCode).toBe(1);
@@ -251,6 +265,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'testpkg',
         pythonPackage: {
@@ -270,6 +285,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'x',
         pythonPackage: { version: '1.0', files: { '__init__.py': '' } },
@@ -285,6 +301,7 @@ describe('Extension Python packages', () => {
       wasmDir: WASM_DIR,
       shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
+      shellBackend: 'typescript',
       extensions: [{
         name: 'dualext',
         description: 'Dual extension',
