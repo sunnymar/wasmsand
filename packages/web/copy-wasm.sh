@@ -7,8 +7,8 @@ OUT="public/wasm"
 
 mkdir -p "$OUT"
 
-# Shell parser
-cp "$SHELL_FIXTURES/codepod-shell.wasm" "$OUT/"
+# Shell executor (Rust WASM)
+cp "$SHELL_FIXTURES/codepod-shell-exec.wasm" "$OUT/"
 
 # All coreutils + python
 cp "$FIXTURES"/*.wasm "$OUT/"

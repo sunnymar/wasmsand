@@ -1,4 +1,4 @@
-import { VFS, ProcessManager, ShellRunner, BrowserAdapter } from '@codepod/sandbox';
+import { VFS, ProcessManager, ShellInstance, BrowserAdapter } from '@codepod/sandbox';
 import { createTerminal } from './terminal.js';
 import '@xterm/xterm/css/xterm.css';
 
@@ -18,8 +18,10 @@ async function boot(): Promise<void> {
   // Register python3
   mgr.registerTool('python3', `${WASM_BASE}/python3.wasm`);
 
-  const shellWasmUrl = `${WASM_BASE}/codepod-shell.wasm`;
-  const runner = new ShellRunner(vfs, mgr, adapter, shellWasmUrl);
+  const shellWasmUrl = `${WASM_BASE}/codepod-shell-exec.wasm`;
+  const runner = await ShellInstance.create(vfs, mgr, adapter, shellWasmUrl, {
+    syncSpawn: (cmd, args, env, stdin, cwd) => mgr.spawnSync(cmd, args, env, stdin, cwd),
+  });
 
   const container = document.getElementById('terminal');
   if (!container) throw new Error('Missing #terminal element');
