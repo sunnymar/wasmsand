@@ -2,7 +2,7 @@
  * Execution Worker entrypoint.
  *
  * Runs inside a Worker thread. Receives init + run messages from the main
- * thread, executes commands via ShellRunner, and posts results back.
+ * thread, executes commands via ShellInstance, and posts results back.
  * VFS access goes through VfsProxy (SAB + Atomics).
  */
 
@@ -16,8 +16,8 @@ import {
   decodeResponse,
 } from './proxy-protocol.js';
 import { ProcessManager } from '../process/manager.js';
-import { ShellRunner } from '../shell/shell-runner.js';
-import type { RunResult } from '../shell/shell-runner.js';
+import { ShellInstance } from '../shell/shell-instance.js';
+import type { RunResult } from '../shell/shell-types.js';
 import { CancelledError } from '../security.js';
 
 if (!parentPort) throw new Error('Must run as Worker thread');
@@ -26,7 +26,7 @@ interface InitMessage {
   type: 'init';
   sab: SharedArrayBuffer;
   wasmDir: string;
-  shellWasmPath: string;
+  shellExecWasmPath: string;
   toolRegistry: [string, string][];
   networkEnabled: boolean;
   stdoutBytes?: number;
@@ -47,11 +47,11 @@ interface RunMessage {
   stderrLimit?: number;
 }
 
-let runner: ShellRunner | null = null;
+let runner: ShellInstance | null = null;
 
 parentPort.on('message', async (msg: InitMessage | RunMessage) => {
   if (msg.type === 'init') {
-    const { sab, wasmDir, shellWasmPath, toolRegistry } = msg;
+    const { sab, wasmDir, shellExecWasmPath, toolRegistry } = msg;
 
     const { NodeAdapter } = await import('../platform/node-adapter.js');
     const adapter = new NodeAdapter();
@@ -76,22 +76,6 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
       mgr.registerTool(name, path);
     }
 
-    runner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, networkGateway, {
-      skipPopulateBin: true,
-    });
-
-    if (msg.stdoutBytes !== undefined || msg.stderrBytes !== undefined) {
-      runner.setOutputLimits(msg.stdoutBytes, msg.stderrBytes);
-    }
-
-    if (msg.memoryBytes !== undefined) {
-      runner.setMemoryLimit(msg.memoryBytes);
-    }
-
-    if (msg.bridgeSab !== undefined) {
-      runner.setEnv('PYTHONPATH', '/usr/lib/python');
-    }
-
     // Set up extension handler proxy: worker blocks on Atomics.wait while
     // main thread runs the async extension handler, then notifies.
     if (msg.hasExtensions) {
@@ -110,6 +94,22 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
         return resp.metadata as Record<string, unknown>;
       };
       mgr.setExtensionHandler(extensionProxy);
+    }
+
+    // Pre-load all tool modules so spawnSync can use them synchronously
+    await mgr.preloadModules();
+
+    runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
+      syncSpawn: (cmd, args, env, stdin, cwd) =>
+        mgr.spawnSync(cmd, args, env, stdin, cwd),
+    });
+
+    if (msg.stdoutBytes !== undefined || msg.stderrBytes !== undefined) {
+      runner.setOutputLimits(msg.stdoutBytes, msg.stderrBytes);
+    }
+
+    if (msg.bridgeSab !== undefined) {
+      runner.setEnv('PYTHONPATH', '/usr/lib/python');
     }
 
     parentPort!.postMessage({ type: 'ready' });

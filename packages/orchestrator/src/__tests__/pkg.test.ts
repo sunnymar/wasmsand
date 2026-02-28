@@ -209,7 +209,7 @@ describe('PackageManager', () => {
 // ---- Shell builtin integration tests ----
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('pkg shell builtin', () => {
   let sandbox: Sandbox;
@@ -221,9 +221,7 @@ describe('pkg shell builtin', () => {
   it('pkg list returns empty initially', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -237,9 +235,7 @@ describe('pkg shell builtin', () => {
   it('pkg returns error when disabled (no packagePolicy)', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       // No packagePolicy — packageManager will be null
     });
 
@@ -251,9 +247,7 @@ describe('pkg shell builtin', () => {
   it('pkg install rejects denied host', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: {
           enabled: true,
@@ -271,9 +265,7 @@ describe('pkg shell builtin', () => {
   it('pkg info on unknown package returns not found', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -287,9 +279,7 @@ describe('pkg shell builtin', () => {
   it('pkg with no subcommand shows usage', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -307,9 +297,7 @@ describe('pkg shell builtin', () => {
   it('pkg remove on unknown package returns error', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -325,9 +313,7 @@ describe('pkg shell builtin', () => {
 
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: {
           enabled: true,
@@ -354,9 +340,7 @@ describe('pkg shell builtin', () => {
   it('pkg install with no URL shows error', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },
@@ -370,9 +354,7 @@ describe('pkg shell builtin', () => {
   it('pkg unknown subcommand returns error', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       security: {
         packagePolicy: { enabled: true },
       },

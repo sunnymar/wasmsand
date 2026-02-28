@@ -1,5 +1,5 @@
 /**
- * Sandbox: high-level facade wrapping VFS + ProcessManager + ShellRunner.
+ * Sandbox: high-level facade wrapping VFS + ProcessManager + ShellInstance.
  *
  * Provides a simple API for creating an isolated sandbox, running shell
  * commands, and interacting with the in-memory filesystem.
@@ -8,10 +8,9 @@
 import { VFS } from './vfs/vfs.js';
 import type { VfsOptions } from './vfs/vfs.js';
 import { ProcessManager } from './process/manager.js';
-import { ShellRunner } from './shell/shell-runner.js';
 import { ShellInstance } from './shell/shell-instance.js';
 import type { ShellLike } from './shell/shell-like.js';
-import type { RunResult } from './shell/shell-runner.js';
+import type { RunResult } from './shell/shell-types.js';
 import type { HistoryEntry } from './shell/history.js';
 import type { PlatformAdapter } from './platform/adapter.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
@@ -52,14 +51,7 @@ export interface SandboxOptions {
   timeoutMs?: number;
   /** Max VFS size in bytes. Default 256MB. */
   fsLimitBytes?: number;
-  /** Path to the shell parser wasm. Defaults to `${wasmDir}/codepod-shell.wasm`. */
-  shellWasmPath?: string;
-  /**
-   * Shell backend: 'typescript' uses ShellRunner (TS executor, default),
-   * 'rust-wasm' uses ShellInstance (Rust WASM executor).
-   */
-  shellBackend?: 'typescript' | 'rust-wasm';
-  /** Path to the shell-exec WASM binary (for rust-wasm backend). Defaults to `${wasmDir}/codepod-shell-exec.wasm`. */
+  /** Path to the shell-exec WASM binary. Defaults to `${wasmDir}/codepod-shell-exec.wasm`. */
   shellExecWasmPath?: string;
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
@@ -87,15 +79,13 @@ interface SandboxParts {
   timeoutMs: number;
   adapter: PlatformAdapter;
   wasmDir: string;
-  shellWasmPath: string;
-  shellExecWasmPath?: string;
+  shellExecWasmPath: string;
   mgr: ProcessManager;
   bridge?: NetworkBridge;
   networkPolicy?: NetworkPolicy;
   security?: SecurityOptions;
   workerExecutor?: WorkerExecutor;
   extensionRegistry?: ExtensionRegistry;
-  shellBackend?: 'typescript' | 'rust-wasm';
 }
 
 export class Sandbox {
@@ -105,7 +95,7 @@ export class Sandbox {
   private destroyed = false;
   private adapter: PlatformAdapter;
   private wasmDir: string;
-  private shellWasmPath: string;
+  private shellExecWasmPath: string;
   private mgr: ProcessManager;
   private envSnapshots: Map<string, Map<string, string>> = new Map();
   private bridge: NetworkBridge | null = null;
@@ -116,8 +106,6 @@ export class Sandbox {
   private workerExecutor: WorkerExecutor | null = null;
   private persistenceManager: PersistenceManager | null = null;
   private extensionRegistry: ExtensionRegistry | null = null;
-  private shellBackend: 'typescript' | 'rust-wasm';
-  private shellExecWasmPath: string | undefined;
 
   private constructor(parts: SandboxParts) {
     this.vfs = parts.vfs;
@@ -125,7 +113,7 @@ export class Sandbox {
     this.timeoutMs = parts.timeoutMs;
     this.adapter = parts.adapter;
     this.wasmDir = parts.wasmDir;
-    this.shellWasmPath = parts.shellWasmPath;
+    this.shellExecWasmPath = parts.shellExecWasmPath;
     this.mgr = parts.mgr;
     this.bridge = parts.bridge ?? null;
     this.networkPolicy = parts.networkPolicy;
@@ -134,8 +122,6 @@ export class Sandbox {
     this.auditHandler = parts.security?.onAuditEvent;
     this.workerExecutor = parts.workerExecutor ?? null;
     this.extensionRegistry = parts.extensionRegistry ?? null;
-    this.shellBackend = parts.shellBackend ?? 'rust-wasm';
-    this.shellExecWasmPath = parts.shellExecWasmPath;
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -164,7 +150,7 @@ export class Sandbox {
       for (const ext of options.extensions) extensionRegistry.register(ext);
     }
 
-    // Process host mounts before ShellRunner so files are available immediately
+    // Process host mounts before shell so files are available immediately
     if (options.mounts) {
       for (const mc of options.mounts) {
         const provider = new HostMount(mc.files, { writable: mc.writable });
@@ -172,114 +158,31 @@ export class Sandbox {
       }
     }
 
-    const shellBackend = options.shellBackend ?? 'rust-wasm';
-    const shellWasmPath = options.shellWasmPath ?? `${options.wasmDir}/codepod-shell.wasm`;
+    const shellExecWasmPath = options.shellExecWasmPath ?? `${options.wasmDir}/codepod-shell-exec.wasm`;
 
-    let runner: ShellLike;
+    // Pre-load all tool modules so spawnSync can use them synchronously
+    await mgr.preloadModules();
 
-    let shellExecWasmPath: string | undefined;
+    // Use a mutable ref so the syncSpawn closure can access the ShellInstance's deadline
+    let shellInstanceRef: ShellInstance | null = null;
+    const secLimits = options.security?.limits;
 
-    if (shellBackend === 'rust-wasm') {
-      // Rust WASM backend: ShellInstance handles parsing + execution in WASM
-      shellExecWasmPath = options.shellExecWasmPath ?? `${options.wasmDir}/codepod-shell-exec.wasm`;
+    const runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
+      syncSpawn: (cmd, args, env, stdin, cwd) =>
+        mgr.spawnSync(cmd, args, env, stdin, cwd, {
+          deadlineMs: shellInstanceRef?.getDeadlineMs(),
+          memoryBytes: secLimits?.memoryBytes,
+        }),
+    });
+    shellInstanceRef = runner;
 
-      // Pre-load all tool modules so spawnSync can use them synchronously
-      await mgr.preloadModules();
-
-      // Use a mutable ref so the syncSpawn closure can access the ShellInstance's deadline
-      let shellInstanceRef: ShellInstance | null = null;
-      const secLimits = options.security?.limits;
-
-      runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
-        syncSpawn: (cmd, args, env, stdin, cwd) =>
-          mgr.spawnSync(cmd, args, env, stdin, cwd, {
-            deadlineMs: shellInstanceRef?.getDeadlineMs(),
-            memoryBytes: secLimits?.memoryBytes,
-          }),
-      });
-      shellInstanceRef = runner as ShellInstance;
-
-      // Wire output limits
-      if (secLimits) {
-        (runner as ShellInstance).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
-      }
-    } else {
-      // TypeScript backend: ShellRunner parses via WASM, executes in TS
-      const tsRunner = new ShellRunner(vfs, mgr, adapter, shellWasmPath, gateway);
-
-      // Wire extension registry to ShellRunner
-      if (extensionRegistry.list().length > 0) {
-        tsRunner.setExtensionRegistry(extensionRegistry);
-      }
-
-      // Apply tool allowlist to ShellRunner so extensions are also gated
-      if (options.security?.toolAllowlist) {
-        tsRunner.setToolAllowlist(options.security.toolAllowlist);
-      }
-
-      // Apply output limits from security options
-      if (options.security?.limits) {
-        tsRunner.setOutputLimits(options.security.limits.stdoutBytes, options.security.limits.stderrBytes);
-      }
-
-      // Apply memory limit
-      if (options.security?.limits?.memoryBytes !== undefined) {
-        tsRunner.setMemoryLimit(options.security.limits.memoryBytes);
-      }
-
-      // Wire PackageManager if packagePolicy is configured
-      if (options.security?.packagePolicy) {
-        const packageManager = new PackageManager(vfs, options.security.packagePolicy);
-        tsRunner.setPackageManager(packageManager);
-      }
-
-      // Wire audit handler so builtins can emit audit events
-      if (options.security?.onAuditEvent) {
-        const sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-        const handler = options.security.onAuditEvent;
-        tsRunner.setAuditHandler((type: string, data?: Record<string, unknown>) => {
-          handler({
-            type,
-            sessionId,
-            timestamp: Date.now(),
-            ...data,
-          });
-        });
-      }
-
-      // Always create PackageRegistry for pip builtin (runtime install/uninstall)
-      const pkgRegistry = new PackageRegistry();
-      tsRunner.setPackageRegistry(pkgRegistry);
-
-      // Install sandbox-native packages from PackageRegistry
-      if (options.packages && options.packages.length > 0) {
-        const toInstall = new Set<string>();
-        for (const name of options.packages) {
-          for (const dep of pkgRegistry.resolveDeps(name)) {
-            toInstall.add(dep);
-          }
-        }
-        vfs.withWriteAccess(() => {
-          for (const name of toInstall) {
-            const meta = pkgRegistry.get(name);
-            if (!meta) continue;
-            for (const [relPath, content] of Object.entries(meta.pythonFiles)) {
-              const fullPath = `/usr/lib/python/${relPath}`;
-              const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
-              vfs.mkdirp(dir);
-              vfs.writeFile(fullPath, new TextEncoder().encode(content));
-            }
-            tsRunner.markPackageInstalled(name);
-          }
-        });
-      }
-
-      runner = tsRunner;
+    // Wire output limits
+    if (secLimits) {
+      runner.setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
     }
 
-    // Install sandbox-native package files into VFS for rust-wasm backend
-    // (pip builtin is handled via host_spawn, but VFS files still need to be present)
-    if (shellBackend === 'rust-wasm' && options.packages && options.packages.length > 0) {
+    // Install sandbox-native package files into VFS
+    if (options.packages && options.packages.length > 0) {
       const pkgRegistry = new PackageRegistry();
       const toInstall = new Set<string>();
       for (const name of options.packages) {
@@ -344,16 +247,16 @@ export class Sandbox {
 
     // Create WorkerExecutor for hard-kill preemption when enabled.
     const workerExecutor = await Sandbox.createWorkerExecutor(
-      vfs, options.wasmDir, shellWasmPath, tools, adapter,
+      vfs, options.wasmDir, shellExecWasmPath, tools, adapter,
       options.security, bridge, options.network, extensionRegistry,
     );
 
     const sb = new Sandbox({
       vfs, runner, timeoutMs, adapter,
-      wasmDir: options.wasmDir, shellWasmPath, shellExecWasmPath,
+      wasmDir: options.wasmDir, shellExecWasmPath,
       mgr, bridge, networkPolicy: options.network,
       security: options.security, workerExecutor,
-      extensionRegistry, shellBackend,
+      extensionRegistry,
     });
 
     // Wire persistence if configured
@@ -424,7 +327,7 @@ export class Sandbox {
   private static async createWorkerExecutor(
     vfs: VFS,
     wasmDir: string,
-    shellWasmPath: string,
+    shellExecWasmPath: string,
     tools: Map<string, string>,
     adapter: PlatformAdapter,
     security?: SecurityOptions,
@@ -441,7 +344,7 @@ export class Sandbox {
     return new WE({
       vfs,
       wasmDir,
-      shellWasmPath,
+      shellExecWasmPath,
       toolRegistry,
       stdoutBytes: security.limits?.stdoutBytes,
       stderrBytes: security.limits?.stderrBytes,
@@ -665,47 +568,25 @@ export class Sandbox {
     const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir);
 
-    let childRunner: ShellLike;
+    // Pre-load all tool modules so spawnSync can use them synchronously
+    await childMgr.preloadModules();
 
-    if (this.shellBackend === 'rust-wasm') {
-      // Pre-load all tool modules so spawnSync can use them synchronously
-      await childMgr.preloadModules();
+    let childShellRef: ShellInstance | null = null;
+    const secLimits = this.security?.limits;
 
-      let childShellRef: ShellInstance | null = null;
-      const secLimits = this.security?.limits;
+    // Fork as ShellInstance — create a fresh instance and copy env
+    const childRunner = await ShellInstance.create(childVfs, childMgr, this.adapter, this.shellExecWasmPath, {
+      syncSpawn: (cmd, args, env, stdin, cwd) =>
+        childMgr.spawnSync(cmd, args, env, stdin, cwd, {
+          deadlineMs: childShellRef?.getDeadlineMs(),
+          memoryBytes: secLimits?.memoryBytes,
+        }),
+    });
+    childShellRef = childRunner;
 
-      // Fork as ShellInstance — create a fresh instance and copy env
-      childRunner = await ShellInstance.create(childVfs, childMgr, this.adapter, this.shellExecWasmPath!, {
-        syncSpawn: (cmd, args, env, stdin, cwd) =>
-          childMgr.spawnSync(cmd, args, env, stdin, cwd, {
-            deadlineMs: childShellRef?.getDeadlineMs(),
-            memoryBytes: secLimits?.memoryBytes,
-          }),
-      });
-      childShellRef = childRunner as ShellInstance;
-
-      // Wire output limits to forked rust-wasm runner
-      if (secLimits) {
-        (childRunner as ShellInstance).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
-      }
-    } else {
-      // Fork as ShellRunner
-      const tsChildRunner = new ShellRunner(childVfs, childMgr, this.adapter, this.shellWasmPath, gateway);
-
-      // Propagate tool allowlist and output limits to forked runner
-      if (this.security?.toolAllowlist) {
-        tsChildRunner.setToolAllowlist(this.security.toolAllowlist);
-      }
-      if (this.security?.limits) {
-        tsChildRunner.setOutputLimits(this.security.limits.stdoutBytes, this.security.limits.stderrBytes);
-      }
-
-      // Wire extension registry to forked runner
-      if (this.extensionRegistry && this.extensionRegistry.list().length > 0) {
-        tsChildRunner.setExtensionRegistry(this.extensionRegistry);
-      }
-
-      childRunner = tsChildRunner;
+    // Wire output limits to forked runner
+    if (secLimits) {
+      childRunner.setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
     }
 
     // Copy env
@@ -716,17 +597,15 @@ export class Sandbox {
 
     // Create WorkerExecutor for the child if parent uses hard-kill
     const childWorkerExecutor = await Sandbox.createWorkerExecutor(
-      childVfs, this.wasmDir, this.shellWasmPath, tools, this.adapter,
+      childVfs, this.wasmDir, this.shellExecWasmPath, tools, this.adapter,
       this.security, bridge, this.networkPolicy,
     );
 
     return new Sandbox({
       vfs: childVfs, runner: childRunner, timeoutMs: this.timeoutMs,
-      adapter: this.adapter, wasmDir: this.wasmDir, shellWasmPath: this.shellWasmPath,
-      shellExecWasmPath: this.shellExecWasmPath,
+      adapter: this.adapter, wasmDir: this.wasmDir, shellExecWasmPath: this.shellExecWasmPath,
       mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
       security: this.security, workerExecutor: childWorkerExecutor,
-      shellBackend: this.shellBackend,
     });
   }
 

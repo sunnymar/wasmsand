@@ -10,7 +10,7 @@ const FIXTURES = resolve(
   import.meta.dirname,
   '../../platform/__tests__/fixtures',
 );
-const SHELL_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('PythonRunner', () => {
   let vfs: VFS;
@@ -167,7 +167,6 @@ describe('PythonRunner', () => {
       const adapter = new NodeAdapter();
       const sb = await Sandbox.create({
         wasmDir: FIXTURES,
-        shellWasmPath: SHELL_WASM,
         adapter,
         security: { hardKill: true, limits: { timeoutMs: 3000 } },
       });

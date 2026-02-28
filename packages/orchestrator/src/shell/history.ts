@@ -1,5 +1,5 @@
 /**
- * Command history tracking for ShellRunner.
+ * Command history tracking for the shell executor.
  *
  * Records executed commands with sequential indices and timestamps,
  * accessible via the `history` shell builtin and public API methods.

@@ -10,12 +10,12 @@ import { fileURLToPath } from 'node:url';
 import { VFS } from './vfs/vfs.js';
 import { ProcessManager } from './process/manager.js';
 import { NodeAdapter } from './platform/node-adapter.js';
-import { ShellRunner } from './shell/shell-runner.js';
+import { ShellInstance } from './shell/shell-instance.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const FIXTURES = resolve(__dirname, 'platform/__tests__/fixtures');
-const SHELL_WASM = resolve(__dirname, 'shell/__tests__/fixtures/codepod-shell.wasm');
+const SHELL_EXEC_WASM = resolve(__dirname, 'shell/__tests__/fixtures/codepod-shell-exec.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
@@ -43,7 +43,12 @@ async function main() {
     mgr.registerTool(tool, resolve(FIXTURES, wasmName(tool)));
   }
 
-  const shell = new ShellRunner(vfs, mgr, adapter, SHELL_WASM);
+  await mgr.preloadModules();
+
+  const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    syncSpawn: (cmd, args, env, stdin, cwd) =>
+      mgr.spawnSync(cmd, args, env, stdin, cwd),
+  });
   shell.setEnv('HOME', '/home/user');
   shell.setEnv('PWD', '/home/user');
   shell.setEnv('USER', 'user');

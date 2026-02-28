@@ -6,7 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
 const WASM_DIR = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/codepod-shell.wasm');
+
 const PYTHON_WASM = resolve(WASM_DIR, 'python3.wasm');
 
 // Skip all tests if python3.wasm is not available
@@ -73,9 +73,7 @@ describe('Python networking via socket shim', () => {
   it.skipIf(!hasPython)('GET request via urllib', async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       network: { allowedHosts: ['127.0.0.1'] },
     });
 
@@ -99,9 +97,7 @@ print(resp.read().decode())
   it.skipIf(!hasPython)('GET request via http.client', async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       network: { allowedHosts: ['127.0.0.1'] },
     });
 
@@ -128,9 +124,7 @@ conn.close()
   it.skipIf(!hasPython)('POST request with body', async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       network: { allowedHosts: ['127.0.0.1'] },
     });
 
@@ -160,9 +154,7 @@ print(data['body'])
   it.skipIf(!hasPython)('blocked host returns error', async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       network: { allowedHosts: ['allowed.com'] },
     });
 
@@ -188,9 +180,7 @@ except Exception as e:
   it.skipIf(!hasPython)('no networking without network config', async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
     });
 
     try {

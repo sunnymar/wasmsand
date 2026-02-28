@@ -1,9 +1,8 @@
 /**
  * Minimal interface for shell command execution.
  *
- * Both ShellRunner (TS executor) and ShellInstance (Rust WASM executor)
- * implement this interface, allowing Sandbox to use either backend
- * interchangeably.
+ * ShellInstance (Rust WASM executor) implements this interface,
+ * providing shell parsing and execution via WebAssembly.
  */
 
 import type { RunResult } from './shell-types.js';

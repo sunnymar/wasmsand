@@ -15,7 +15,7 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('DevProvider (/dev)', () => {
   it('/dev/null read returns empty bytes', () => {
@@ -292,21 +292,21 @@ describe('providers via Sandbox.run()', () => {
   });
 
   it('cat /dev/null returns empty stdout with exit code 0', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const result = await sandbox.run('cat /dev/null');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('');
   });
 
   it('cat /proc/version returns codepod', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const result = await sandbox.run('cat /proc/version');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('codepod');
   });
 
   it('ls /dev lists devices including null', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const result = await sandbox.run('ls /dev');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('null');
@@ -321,7 +321,7 @@ describe('providers after snapshot/restore and fork', () => {
   });
 
   it('/dev/null works after snapshot/restore', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const snapId = sandbox.snapshot();
     sandbox.restore(snapId);
 
@@ -331,7 +331,7 @@ describe('providers after snapshot/restore and fork', () => {
   });
 
   it('/proc/version available in fork', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const child = await sandbox.fork();
     try {
       const data = child.readFile('/proc/version');
@@ -343,7 +343,7 @@ describe('providers after snapshot/restore and fork', () => {
   });
 
   it('/dev devices are accessible in forked sandbox', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const child = await sandbox.fork();
     try {
       // /dev/null should return empty
@@ -367,7 +367,7 @@ describe('providers after snapshot/restore and fork', () => {
   });
 
   it('/proc files are accessible after multiple snapshot/restore cycles', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     // First snapshot/restore
     const snap1 = sandbox.snapshot();
@@ -391,7 +391,7 @@ describe('providers after snapshot/restore and fork', () => {
   });
 
   it('forked sandbox providers are independent from parent', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const child = await sandbox.fork();
     try {
       // Both parent and child should have working providers

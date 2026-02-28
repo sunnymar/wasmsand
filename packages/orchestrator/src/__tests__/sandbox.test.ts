@@ -10,7 +10,7 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('Sandbox', () => {
   let sandbox: Sandbox;
@@ -20,21 +20,21 @@ describe('Sandbox', () => {
   });
 
   it('create and run a simple command', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const result = await sandbox.run('echo hello');
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('hello');
   });
 
   it('run a pipeline', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const result = await sandbox.run('echo hello world | wc -c');
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('12');
   });
 
   it('writeFile and readFile', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const data = new TextEncoder().encode('test content');
     sandbox.writeFile('/tmp/test.txt', data);
     const read = sandbox.readFile('/tmp/test.txt');
@@ -42,21 +42,21 @@ describe('Sandbox', () => {
   });
 
   it('writeFile then cat via run', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.writeFile('/tmp/data.txt', new TextEncoder().encode('hello from host'));
     const result = await sandbox.run('cat /tmp/data.txt');
     expect(result.stdout).toBe('hello from host');
   });
 
   it('mkdir and readDir', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.mkdir('/tmp/mydir');
     const entries = sandbox.readDir('/tmp');
     expect(entries.some(e => e.name === 'mydir')).toBe(true);
   });
 
   it('stat returns file info', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.writeFile('/tmp/s.txt', new TextEncoder().encode('abc'));
     const s = sandbox.stat('/tmp/s.txt');
     expect(s.size).toBe(3);
@@ -64,14 +64,14 @@ describe('Sandbox', () => {
   });
 
   it('rm removes a file', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.writeFile('/tmp/del.txt', new TextEncoder().encode('x'));
     sandbox.rm('/tmp/del.txt');
     expect(() => sandbox.stat('/tmp/del.txt')).toThrow();
   });
 
   it('setEnv and getEnv', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.setEnv('MY_VAR', 'hello');
     expect(sandbox.getEnv('MY_VAR')).toBe('hello');
     const result = await sandbox.run('printenv MY_VAR');
@@ -79,24 +79,24 @@ describe('Sandbox', () => {
   });
 
   it('destroy prevents further use', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.destroy();
     expect(() => sandbox.readFile('/tmp/x')).toThrow(/destroyed/);
     sandbox.destroy(); // double destroy is safe
   });
 
   it('timeout returns exit code 124', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(), timeoutMs: 1 });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), timeoutMs: 1 });
     const result = await sandbox.run('yes hello | head -1000');
     expect(result.exitCode).toBe(124);
     expect(result.errorClass).toBe('TIMEOUT');
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Use a limit large enough to fit the tool stubs ShellRunner writes
+    // Use a limit large enough to fit the tool stubs the shell writes
     // to /bin and /usr/bin during init (~3KB) plus the first file, but
     // not the second.
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter(), fsLimitBytes: 16_384 });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 16_384 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(8_000));
     expect(() => {
       sandbox.writeFile('/tmp/b.txt', new Uint8Array(10_000));
@@ -104,14 +104,14 @@ describe('Sandbox', () => {
   });
 
   it('discovers tools via scanTools', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const result = await sandbox.run('uname');
     expect(result.stdout.trim()).toBe('codepod');
   });
 
   describe('snapshot and restore', () => {
     it('snapshot captures VFS + env state', async () => {
-      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
       sandbox.writeFile('/tmp/data.txt', new TextEncoder().encode('v1'));
       sandbox.setEnv('MY_VAR', 'original');
       const snapId = sandbox.snapshot();
@@ -127,7 +127,7 @@ describe('Sandbox', () => {
     });
 
     it('snapshots are reusable', async () => {
-      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
       sandbox.writeFile('/tmp/f.txt', new TextEncoder().encode('snap'));
       const snapId = sandbox.snapshot();
 
@@ -141,14 +141,14 @@ describe('Sandbox', () => {
     });
 
     it('restore throws for invalid snapshot ID', async () => {
-      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
       expect(() => sandbox.restore('nonexistent')).toThrow();
     });
   });
 
   describe('fork', () => {
     it('creates an independent sandbox with COW VFS', async () => {
-      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
       sandbox.writeFile('/tmp/shared.txt', new TextEncoder().encode('original'));
       sandbox.setEnv('FORKED', 'yes');
 
@@ -169,7 +169,7 @@ describe('Sandbox', () => {
     });
 
     it('forked sandbox can run commands independently', async () => {
-      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM, adapter: new NodeAdapter() });
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
       const child = await sandbox.fork();
       try {
         const result = await child.run('echo hello from fork');
@@ -185,7 +185,6 @@ describe('Sandbox', () => {
     it('rejects command exceeding commandBytes limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { commandBytes: 10 } },
       });
@@ -198,7 +197,6 @@ describe('Sandbox', () => {
     it('truncates stdout exceeding stdoutBytes limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { stdoutBytes: 20 } },
       });
@@ -211,7 +209,6 @@ describe('Sandbox', () => {
     it('truncates stderr exceeding stderrBytes limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { stderrBytes: 20 } },
       });
@@ -225,7 +222,6 @@ describe('Sandbox', () => {
       // which creates ~9 dirs + ~230 tool stubs in /bin and /usr/bin.
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { fileCount: 500 } },
       });
@@ -249,7 +245,6 @@ describe('Sandbox', () => {
     it('sets errorClass TIMEOUT on timeout', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         timeoutMs: 1,
       });
@@ -261,7 +256,6 @@ describe('Sandbox', () => {
     it('no truncation when output is within limits', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { stdoutBytes: 1_000_000 } },
       });
@@ -274,7 +268,6 @@ describe('Sandbox', () => {
     it('writes socket.py to VFS when network is configured', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         network: { allowedHosts: ['example.com'] },
       });
@@ -291,7 +284,6 @@ describe('Sandbox', () => {
     it('sets PYTHONPATH when network is configured', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         network: { allowedHosts: ['example.com'] },
       });
@@ -301,7 +293,6 @@ describe('Sandbox', () => {
     it('does not write socket.py when network is not configured', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
       });
       expect(() => sandbox.readFile('/usr/lib/python/socket.py')).toThrow();
@@ -310,7 +301,6 @@ describe('Sandbox', () => {
     it('forked sandbox inherits socket.py', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         network: { allowedHosts: ['example.com'] },
       });
@@ -328,7 +318,6 @@ describe('Sandbox', () => {
     it('truncates stdout at configured limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { stdoutBytes: 20 } },
       });
@@ -340,7 +329,6 @@ describe('Sandbox', () => {
     it('does not truncate when under limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { stdoutBytes: 10000 } },
       });
@@ -353,7 +341,6 @@ describe('Sandbox', () => {
     it('rejects file creation when limit reached', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { fileCount: 30 } },
       });
@@ -375,7 +362,6 @@ describe('Sandbox', () => {
     it('rejects command exceeding commandBytes limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { commandBytes: 50 } },
       });
@@ -387,7 +373,6 @@ describe('Sandbox', () => {
     it('allows command under the limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { commandBytes: 1000 } },
       });
@@ -402,7 +387,6 @@ describe('Sandbox', () => {
       // Python's time.time() calls clock_time_get — a tight loop calling it will now hit the deadline
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { timeoutMs: 300 } },
       });
@@ -418,7 +402,6 @@ describe('Sandbox', () => {
     it('kills a pure CPU-bound Python loop via worker termination', { timeout: 15000 }, async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { hardKill: true, limits: { timeoutMs: 3000 } },
       });
@@ -434,7 +417,6 @@ describe('Sandbox', () => {
     it('timeout kills long-running WASM via deadline in fdWrite', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { timeoutMs: 50 } },
       });
@@ -451,7 +433,6 @@ describe('Sandbox', () => {
     it('timeout kills chained commands via deadline in execCommand', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { timeoutMs: 50 } },
       });
@@ -466,7 +447,6 @@ describe('Sandbox', () => {
     it('blocks tools not in allowlist', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { toolAllowlist: ['echo', 'cat'] },
       });
@@ -478,7 +458,6 @@ describe('Sandbox', () => {
     it('allows tools in allowlist', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { toolAllowlist: ['echo', 'cat'] },
       });
@@ -490,7 +469,6 @@ describe('Sandbox', () => {
     it('no allowlist means all tools allowed', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
       });
       const result = await sandbox.run('uname');
@@ -502,7 +480,6 @@ describe('Sandbox', () => {
     it('rejects WASM that exceeds memoryBytes limit', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { memoryBytes: 1024 } }, // 1KB — too small for any WASM
       });
@@ -516,7 +493,6 @@ describe('Sandbox', () => {
     it('accepts security options on create', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: {
           limits: { stdoutBytes: 1024, stderrBytes: 1024 },
@@ -529,7 +505,6 @@ describe('Sandbox', () => {
     it('RunResult includes errorClass on timeout', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { limits: { timeoutMs: 1 } },
       });
@@ -543,7 +518,6 @@ describe('Sandbox', () => {
     it('timeout terminates execution via worker.terminate()', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { hardKill: true, limits: { timeoutMs: 200 } },
       });
@@ -558,7 +532,6 @@ describe('Sandbox', () => {
     it('cancel() immediately kills Worker execution', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { hardKill: true },
         timeoutMs: 30000,
@@ -574,7 +547,6 @@ describe('Sandbox', () => {
     it('next run after timeout works correctly', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { hardKill: true, limits: { timeoutMs: 100 } },
       });
@@ -588,7 +560,6 @@ describe('Sandbox', () => {
     it('VFS is consistent after timeout kill', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: { hardKill: true, limits: { timeoutMs: 100 } },
       });
@@ -605,7 +576,6 @@ describe('Sandbox', () => {
       const events: any[] = [];
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: {
           onAuditEvent: (event) => events.push(event),
@@ -624,7 +594,6 @@ describe('Sandbox', () => {
       const events: any[] = [];
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: {
           limits: { timeoutMs: 1 },
@@ -640,7 +609,6 @@ describe('Sandbox', () => {
       const events: any[] = [];
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: {
           onAuditEvent: (event) => events.push(event),
@@ -662,7 +630,6 @@ describe('Sandbox', () => {
       const events: any[] = [];
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: {
           limits: { stdoutBytes: 20 },
@@ -678,7 +645,6 @@ describe('Sandbox', () => {
       const events: any[] = [];
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
-        shellWasmPath: SHELL_WASM,
         adapter: new NodeAdapter(),
         security: {
           toolAllowlist: ['echo'],

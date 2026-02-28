@@ -8,7 +8,7 @@ import { NodeAdapter } from '../platform/node-adapter.js';
 import { HostMount } from '../vfs/host-mount.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 const enc = (s: string) => new TextEncoder().encode(s);
 
 describe('mounts', () => {
@@ -21,7 +21,6 @@ describe('mounts', () => {
   it('Sandbox.create with mounts makes files readable via shell', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       mounts: [{
         path: '/mnt/tools',
@@ -40,7 +39,6 @@ describe('mounts', () => {
   it('ls on mount point shows files', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       mounts: [{
         path: '/mnt/tools',
@@ -60,7 +58,6 @@ describe('mounts', () => {
   it('dynamic sandbox.mount() at runtime', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
 
@@ -76,7 +73,6 @@ describe('mounts', () => {
   it('dynamic mount with VirtualProvider instance', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
     });
 
@@ -91,7 +87,6 @@ describe('mounts', () => {
   it('mount dirs visible in parent listing', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       mounts: [{
         path: '/mnt/tools',
@@ -107,7 +102,6 @@ describe('mounts', () => {
   it('mounted files excluded from exportState()', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       mounts: [{
         path: '/mnt/tools',
@@ -132,7 +126,6 @@ describe('mounts', () => {
   it('mounts with nested subdirectories', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       mounts: [{
         path: '/mnt/pkg',
@@ -152,7 +145,6 @@ describe('mounts', () => {
   it('fork() preserves user mounts', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       mounts: [{
         path: '/mnt/tools',
@@ -181,7 +173,6 @@ describe('pythonPath', () => {
   it('pythonPath option sets PYTHONPATH correctly', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       pythonPath: ['/mnt/libs', '/mnt/extra'],
     });
@@ -193,7 +184,6 @@ describe('pythonPath', () => {
   it('pythonPath combined with network includes all paths', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       pythonPath: ['/mnt/libs'],
       network: { allowedHosts: ['example.com'] },
@@ -206,7 +196,6 @@ describe('pythonPath', () => {
   it('pythonPath without network still sets PYTHONPATH', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
       pythonPath: ['/mnt/mylib'],
     });

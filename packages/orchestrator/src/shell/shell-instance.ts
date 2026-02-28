@@ -1,7 +1,6 @@
 /**
  * ShellInstance: instantiates and drives the Rust shell-exec WASM module.
  *
- * Unlike ShellRunner (which parses via WASM but executes in TypeScript),
  * ShellInstance delegates both parsing AND execution to the Rust WASM binary.
  * The host provides filesystem, process spawning, and other services via
  * the `codepod` import namespace.

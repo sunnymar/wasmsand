@@ -4,7 +4,7 @@ import { NodeAdapter } from '../platform/node-adapter';
 import { resolve } from 'path';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../shell/__tests__/fixtures/codepod-shell.wasm');
+
 
 describe('pip with PackageRegistry', () => {
   let sandbox: Sandbox;
@@ -13,9 +13,7 @@ describe('pip with PackageRegistry', () => {
   it('pip install writes package files to VFS', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
     });
     const install = await sandbox.run('pip install requests');
     expect(install.exitCode).toBe(0);
@@ -28,9 +26,7 @@ describe('pip with PackageRegistry', () => {
   it('pip uninstall removes package files', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       packages: ['requests'],
     });
     const uninstall = await sandbox.run('pip uninstall requests -y');
@@ -43,9 +39,7 @@ describe('pip with PackageRegistry', () => {
   it('pip list shows installed packages', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
       packages: ['requests'],
     });
     const result = await sandbox.run('pip list');
@@ -57,9 +51,7 @@ describe('pip with PackageRegistry', () => {
   it('pip install unknown package fails with helpful message', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip install nonexistent-pkg');
     expect(result.exitCode).not.toBe(0);
@@ -70,9 +62,7 @@ describe('pip with PackageRegistry', () => {
   it('pip install auto-installs dependencies', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip install pandas');
     expect(result.exitCode).toBe(0);
@@ -83,9 +73,7 @@ describe('pip with PackageRegistry', () => {
   it('pip show displays package metadata', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
-      shellWasmPath: SHELL_WASM,
       adapter: new NodeAdapter(),
-      shellBackend: 'typescript',
     });
     const result = await sandbox.run('pip show requests');
     expect(result.exitCode).toBe(0);
