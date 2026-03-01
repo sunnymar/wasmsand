@@ -2139,11 +2139,17 @@ mod tests {
     fn glob_expansion_with_matches() {
         use crate::test_support::mock::MockHost;
 
-        let host = MockHost::new()
-            .with_glob_result("*.txt", vec!["b.txt".to_string(), "a.txt".to_string()]);
+        // expand_globs resolves relative patterns against cwd, so register the absolute pattern.
+        let host = MockHost::new().with_glob_result(
+            "/home/user/*.txt",
+            vec![
+                "/home/user/b.txt".to_string(),
+                "/home/user/a.txt".to_string(),
+            ],
+        );
         let input = vec!["*.txt".to_string()];
         let result = expand_globs(&host, &input, "/home/user");
-        // Should be sorted
+        // Should be sorted and stripped back to relative paths
         assert_eq!(result, vec!["a.txt", "b.txt"]);
     }
 
@@ -2162,8 +2168,11 @@ mod tests {
         use crate::test_support::mock::MockHost;
 
         let host = MockHost::new().with_glob_result(
-            "file?.txt",
-            vec!["file1.txt".to_string(), "file2.txt".to_string()],
+            "/home/user/file?.txt",
+            vec![
+                "/home/user/file1.txt".to_string(),
+                "/home/user/file2.txt".to_string(),
+            ],
         );
         let input = vec!["file?.txt".to_string()];
         let result = expand_globs(&host, &input, "/home/user");
@@ -2184,8 +2193,13 @@ mod tests {
     fn glob_expansion_mixed_words() {
         use crate::test_support::mock::MockHost;
 
-        let host = MockHost::new()
-            .with_glob_result("*.rs", vec!["main.rs".to_string(), "lib.rs".to_string()]);
+        let host = MockHost::new().with_glob_result(
+            "/home/user/*.rs",
+            vec![
+                "/home/user/main.rs".to_string(),
+                "/home/user/lib.rs".to_string(),
+            ],
+        );
         let input = vec!["echo".to_string(), "*.rs".to_string(), "done".to_string()];
         let result = expand_globs(&host, &input, "/home/user");
         assert_eq!(result, vec!["echo", "lib.rs", "main.rs", "done"]);

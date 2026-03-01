@@ -2097,6 +2097,7 @@ mod tests {
     fn pwd_prints_cwd() {
         let mut state = ShellState::new_default();
         state.cwd = "/tmp/mydir".to_string();
+        state.env.insert("PWD".into(), "/tmp/mydir".into());
         let host = MockHost::new();
         let r = expect_result(run_builtin(&mut state, &host, "pwd", &[]));
         assert_eq!(r.stdout, "/tmp/mydir\n");
@@ -2939,12 +2940,16 @@ mod tests {
     }
 
     #[test]
-    fn exec_with_args_falls_through() {
+    fn exec_with_args_handles_command() {
         let mut state = ShellState::new_default();
         let host = MockHost::new();
         let a = make_args(&["ls"]);
+        // exec is a real builtin — it dispatches the command internally.
+        // With no run callback and no spawn result, it returns 127.
         let result = try_builtin(&mut state, &host, "exec", &a, "", None);
-        assert!(result.is_none());
+        assert!(result.is_some());
+        let r = expect_result(result.unwrap());
+        assert_eq!(r.exit_code, 127);
     }
 
     // -- non-builtin falls through ----------------------------------------
