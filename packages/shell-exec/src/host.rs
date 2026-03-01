@@ -189,6 +189,9 @@ pub trait HostInterface {
 
     /// Close a host-side file descriptor.
     fn close_fd(&self, fd: i32) -> Result<(), HostError>;
+
+    /// Yield to the scheduler (cooperative scheduling: sleep(0)).
+    fn yield_now(&self) -> Result<(), HostError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +323,10 @@ extern "C" {
 
     /// Close a host-side file descriptor. Returns 0 on success, negative on error.
     fn host_close_fd(fd: i32) -> i32;
+
+    /// Yield to the JS microtask queue (cooperative scheduling: sleep(0)).
+    /// JSPI-suspending — allows other WASM stacks to run.
+    fn host_yield();
 }
 
 // ---------------------------------------------------------------------------
@@ -699,6 +706,11 @@ impl HostInterface for WasmHost {
                 fd, rc
             )));
         }
+        Ok(())
+    }
+
+    fn yield_now(&self) -> Result<(), HostError> {
+        unsafe { host_yield() };
         Ok(())
     }
 }

@@ -100,6 +100,13 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       return 0;
     },
 
+    // host_yield() -> void
+    // Async — yields to the JS microtask queue, allowing other WASM stacks to run.
+    // This is the cooperative scheduling primitive: sleep(0).
+    async host_yield(): Promise<void> {
+      await Promise.resolve();
+    },
+
     // ── Network / extensions (migrated) ──
 
     // host_network_fetch(req_ptr, req_len, out_ptr, out_cap) -> i32

@@ -368,5 +368,9 @@ pub mod mock {
         fn close_fd(&self, _fd: i32) -> Result<(), HostError> {
             Ok(())
         }
+
+        fn yield_now(&self) -> Result<(), HostError> {
+            Ok(())
+        }
     }
 }
