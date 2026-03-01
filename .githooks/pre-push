@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="$HOME/.deno/bin:$PATH"
+
 # Fast unit tests only (~150 tests in <1s).
 # Full integration suite runs in CI (GitHub Actions).
 echo "=== pre-push: running unit tests ==="
-bun test \
+deno test -A --no-check \
   packages/orchestrator/src/vfs/__tests__/vfs.test.ts \
   packages/orchestrator/src/vfs/__tests__/fd.test.ts \
   packages/orchestrator/src/vfs/__tests__/host-mount.test.ts \
