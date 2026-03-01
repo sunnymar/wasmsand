@@ -76,7 +76,7 @@ export class ProcessKernel {
     this.processTable.set(pid, {
       pid, promise, exitCode: -1, state: 'running', wasiHost, waiters: [],
     });
-    promise.then(() => {
+    const onExit = () => {
       const entry = this.processTable.get(pid);
       if (entry) {
         entry.state = 'exited';
@@ -84,7 +84,8 @@ export class ProcessKernel {
         for (const waiter of entry.waiters) waiter(entry.exitCode);
         entry.waiters.length = 0;
       }
-    });
+    };
+    promise.then(onExit, onExit);
   }
 
   allocPid(): number { return this.nextPid++; }
