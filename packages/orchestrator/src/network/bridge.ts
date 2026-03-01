@@ -103,19 +103,69 @@ export class NetworkBridge implements NetworkBridgeLike {
           }
 
           try {
-            const resp = await fetch(req.url, {
-              method: req.method,
-              headers: req.headers,
-              body: req.body || undefined,
-            });
-            const body = await resp.text();
-            const headers = {};
-            resp.headers.forEach((v, k) => { headers[k] = v; });
-            const result = JSON.stringify({ status: resp.status, body, headers });
-            const encoded = encoder.encode(result);
-            uint8.set(encoded, 8);
-            Atomics.store(int32, 1, encoded.byteLength);
-            Atomics.store(int32, 0, ${STATUS_RESPONSE_READY});
+            const MAX_REDIRECTS = 5;
+            const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+            let currentUrl = req.url;
+            let currentMethod = req.method;
+            let currentBody = req.body || undefined;
+            let resp;
+            let redirectCount = 0;
+
+            for (;;) {
+              // Re-validate policy on redirect hops
+              if (redirectCount > 0) {
+                const hopAccess = checkAccess(currentUrl);
+                if (!hopAccess.allowed) {
+                  const result = JSON.stringify({ status: 403, body: '', headers: {}, error: hopAccess.reason });
+                  const encoded = encoder.encode(result);
+                  uint8.set(encoded, 8);
+                  Atomics.store(int32, 1, encoded.byteLength);
+                  Atomics.store(int32, 0, ${STATUS_ERROR});
+                  resp = null;
+                  break;
+                }
+              }
+
+              resp = await fetch(currentUrl, {
+                method: currentMethod,
+                headers: req.headers,
+                body: currentBody,
+                redirect: 'manual',
+              });
+
+              if (!REDIRECT_STATUSES.has(resp.status)) break;
+
+              const location = resp.headers.get('location');
+              if (!location) break;
+
+              currentUrl = new URL(location, currentUrl).href;
+              if (resp.status === 303) {
+                currentMethod = 'GET';
+                currentBody = undefined;
+              }
+
+              redirectCount++;
+              if (redirectCount > MAX_REDIRECTS) {
+                const result = JSON.stringify({ status: 0, body: '', headers: {}, error: 'too many redirects' });
+                const encoded = encoder.encode(result);
+                uint8.set(encoded, 8);
+                Atomics.store(int32, 1, encoded.byteLength);
+                Atomics.store(int32, 0, ${STATUS_ERROR});
+                resp = null;
+                break;
+              }
+            }
+
+            if (resp) {
+              const body = await resp.text();
+              const headers = {};
+              resp.headers.forEach((v, k) => { headers[k] = v; });
+              const result = JSON.stringify({ status: resp.status, body, headers });
+              const encoded = encoder.encode(result);
+              uint8.set(encoded, 8);
+              Atomics.store(int32, 1, encoded.byteLength);
+              Atomics.store(int32, 0, ${STATUS_RESPONSE_READY});
+            }
           } catch (err) {
             const result = JSON.stringify({ status: 0, body: '', headers: {}, error: err.message });
             const encoded = encoder.encode(result);
