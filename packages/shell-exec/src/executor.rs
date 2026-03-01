@@ -820,13 +820,448 @@ pub fn exec_command(
             let saved_env = state.env.clone();
             let saved_arrays = state.arrays.clone();
             let saved_assoc = state.assoc_arrays.clone();
+            let saved_stdout_fd = state.stdout_fd;
+            let saved_stdin_fd = state.stdin_fd;
 
             let pipefail = state.flags.contains(&crate::state::ShellFlag::Pipefail);
             let mut pipefail_code = 0;
-            let mut last_result = RunResult::empty();
-            let mut stdin_data = String::new();
 
-            for cmd in commands {
+            let stage_count = commands.len();
+
+            // ── Try to create pipes for streaming pipeline ──
+            // If host.pipe() is available, we can wire stages together with
+            // real file descriptors and spawn external commands asynchronously.
+            // If pipe() fails (host doesn't support it yet), fall back to
+            // the sequential string-passing pipeline.
+            let mut pipes: Vec<(i32, i32)> = Vec::new();
+            let mut use_streaming = true;
+            for _ in 0..stage_count - 1 {
+                match host.pipe() {
+                    Ok((read_fd, write_fd)) => pipes.push((read_fd, write_fd)),
+                    Err(_) => {
+                        use_streaming = false;
+                        break;
+                    }
+                }
+            }
+
+            if !use_streaming {
+                // Clean up any pipes we managed to create before failure.
+                for (r, w) in &pipes {
+                    let _ = host.close_fd(*r);
+                    let _ = host.close_fd(*w);
+                }
+                pipes.clear();
+
+                // ── Sequential fallback pipeline (original behavior) ──
+                // Runs each stage to completion, captures stdout as a String,
+                // then passes it as stdin to the next stage.
+                let mut last_result = RunResult::empty();
+                let mut stdin_data = String::new();
+
+                for cmd in commands {
+                    match cmd {
+                        Command::Simple {
+                            words,
+                            redirects,
+                            assignments,
+                        } => {
+                            // Process assignments before word expansion
+                            let _ = process_assignments(state, assignments, Some(&exec_fn));
+
+                            if words.is_empty() {
+                                last_result = RunResult::empty();
+                                stdin_data = last_result.stdout.clone();
+                                if pipefail && last_result.exit_code != 0 {
+                                    pipefail_code = last_result.exit_code;
+                                }
+                                continue;
+                            }
+
+                            let expanded =
+                                expand_words_with_splitting(state, words, Some(&exec_fn));
+                            if expanded.is_empty() {
+                                last_result = RunResult::empty();
+                                stdin_data = last_result.stdout.clone();
+                                if pipefail && last_result.exit_code != 0 {
+                                    pipefail_code = last_result.exit_code;
+                                }
+                                continue;
+                            }
+
+                            let braced = expand_braces(&expanded);
+                            let restored = restore_brace_sentinels(&braced);
+                            let globbed = expand_globs(host, &restored, &state.cwd);
+                            let globbed = restore_glob_sentinels(&globbed);
+
+                            if globbed.is_empty() {
+                                last_result = RunResult::empty();
+                                stdin_data = last_result.stdout.clone();
+                                if pipefail && last_result.exit_code != 0 {
+                                    pipefail_code = last_result.exit_code;
+                                }
+                                continue;
+                            }
+
+                            let cmd_name = &globbed[0];
+                            let args: Vec<&str> = globbed[1..].iter().map(|s| s.as_str()).collect();
+
+                            // Process input redirects — they override pipeline stdin
+                            let mut effective_stdin = stdin_data.clone();
+                            for redir in redirects {
+                                match &redir.redirect_type {
+                                    RedirectType::StdinFrom(path) => {
+                                        let resolved = state.resolve_path(path);
+                                        effective_stdin = host
+                                            .read_file(&resolved)
+                                            .map_err(|e| ShellError::HostError(e.to_string()))?;
+                                    }
+                                    RedirectType::Heredoc(content) => {
+                                        effective_stdin =
+                                            expand_raw_string(state, content, Some(&exec_fn));
+                                    }
+                                    RedirectType::HeredocQuoted(content) => {
+                                        effective_stdin = content.clone();
+                                    }
+                                    RedirectType::HeredocStrip(content) => {
+                                        let expanded =
+                                            expand_raw_string(state, content, Some(&exec_fn));
+                                        effective_stdin = expanded
+                                            .lines()
+                                            .map(|l| l.trim_start_matches('\t'))
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        if expanded.ends_with('\n') {
+                                            effective_stdin.push('\n');
+                                        }
+                                    }
+                                    RedirectType::HeredocStripQuoted(content) => {
+                                        effective_stdin = content
+                                            .lines()
+                                            .map(|l| l.trim_start_matches('\t'))
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        if content.ends_with('\n') {
+                                            effective_stdin.push('\n');
+                                        }
+                                    }
+                                    RedirectType::HereString(word) => {
+                                        effective_stdin = format!(
+                                            "{}\n",
+                                            expand_raw_string(state, word, Some(&exec_fn))
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            // Check for builtin in pipeline
+                            let pipe_func_args: Vec<String> =
+                                globbed[1..].iter().map(|s| s.to_string()).collect();
+                            let pipe_run_fn =
+                                |state: &mut ShellState, cmd_str: &str| -> RunResult {
+                                    let inner_cmd = codepod_shell::parser::parse(cmd_str);
+                                    match exec_command(state, host, &inner_cmd) {
+                                        Ok(ControlFlow::Normal(r)) => r,
+                                        Ok(ControlFlow::Exit(code, stdout, stderr)) => RunResult {
+                                            exit_code: code,
+                                            stdout,
+                                            stderr,
+                                            execution_time_ms: 0,
+                                        },
+                                        _ => RunResult::empty(),
+                                    }
+                                };
+                            if let Some(builtin_result) = crate::builtins::try_builtin(
+                                state,
+                                host,
+                                cmd_name,
+                                &pipe_func_args,
+                                &effective_stdin,
+                                Some(&pipe_run_fn),
+                            ) {
+                                match builtin_result {
+                                    crate::builtins::BuiltinResult::Result(r) => {
+                                        let mut bstdout = r.stdout;
+                                        let mut bstderr = r.stderr;
+
+                                        // Handle output redirects
+                                        apply_output_redirects(
+                                            state,
+                                            host,
+                                            redirects,
+                                            &mut bstdout,
+                                            &mut bstderr,
+                                        )?;
+
+                                        state.last_exit_code = r.exit_code;
+                                        last_result = RunResult {
+                                            exit_code: r.exit_code,
+                                            stdout: bstdout,
+                                            stderr: bstderr,
+                                            execution_time_ms: 0,
+                                        };
+                                    }
+                                    crate::builtins::BuiltinResult::Exit(code) => {
+                                        return Ok(ControlFlow::Exit(
+                                            code,
+                                            String::new(),
+                                            String::new(),
+                                        ));
+                                    }
+                                    crate::builtins::BuiltinResult::Return(code) => {
+                                        return Ok(ControlFlow::Return(code));
+                                    }
+                                }
+                                // Track pipefail
+                                if pipefail && last_result.exit_code != 0 {
+                                    pipefail_code = last_result.exit_code;
+                                }
+                                stdin_data = last_result.stdout.clone();
+                                continue;
+                            }
+
+                            // ── Virtual commands in pipeline ──
+                            if let Some(result) = crate::virtual_commands::try_virtual_command(
+                                state,
+                                host,
+                                cmd_name,
+                                &pipe_func_args,
+                                &effective_stdin,
+                            ) {
+                                state.last_exit_code = result.exit_code;
+                                let mut bstdout = result.stdout;
+                                let mut bstderr = result.stderr;
+                                apply_output_redirects(
+                                    state,
+                                    host,
+                                    redirects,
+                                    &mut bstdout,
+                                    &mut bstderr,
+                                )?;
+                                last_result = RunResult {
+                                    exit_code: result.exit_code,
+                                    stdout: bstdout,
+                                    stderr: bstderr,
+                                    execution_time_ms: 0,
+                                };
+                                if pipefail && last_result.exit_code != 0 {
+                                    pipefail_code = last_result.exit_code;
+                                }
+                                stdin_data = last_result.stdout.clone();
+                                continue;
+                            }
+
+                            // ── Extensions in pipeline ──
+                            if host.is_extension(cmd_name) {
+                                let args_refs: Vec<&str> =
+                                    pipe_func_args.iter().map(|s| s.as_str()).collect();
+                                let env_pairs: Vec<(&str, &str)> = state
+                                    .env
+                                    .iter()
+                                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                                    .collect();
+                                match host.extension_invoke(
+                                    cmd_name,
+                                    &args_refs,
+                                    &effective_stdin,
+                                    &env_pairs,
+                                    &state.cwd,
+                                ) {
+                                    Ok(r) => {
+                                        state.last_exit_code = r.exit_code;
+                                        let mut bstdout = r.stdout;
+                                        let mut bstderr = r.stderr;
+                                        apply_output_redirects(
+                                            state,
+                                            host,
+                                            redirects,
+                                            &mut bstdout,
+                                            &mut bstderr,
+                                        )?;
+                                        last_result = RunResult {
+                                            exit_code: r.exit_code,
+                                            stdout: bstdout,
+                                            stderr: bstderr,
+                                            execution_time_ms: 0,
+                                        };
+                                    }
+                                    Err(e) => {
+                                        state.last_exit_code = 1;
+                                        last_result =
+                                            RunResult::error(1, format!("{cmd_name}: {e}\n"));
+                                    }
+                                }
+                                if pipefail && last_result.exit_code != 0 {
+                                    pipefail_code = last_result.exit_code;
+                                }
+                                stdin_data = last_result.stdout.clone();
+                                continue;
+                            }
+
+                            // ── Path resolution and command dispatch (pipeline) ──
+                            let dispatch_result = dispatch_external_command(
+                                state,
+                                host,
+                                cmd_name,
+                                &args,
+                                &effective_stdin,
+                            );
+
+                            match dispatch_result {
+                                Err(flow) => {
+                                    // Command was handled by dispatch (shebang, sh/bash)
+                                    match flow {
+                                        ControlFlow::Normal(r) => {
+                                            state.last_exit_code = r.exit_code;
+                                            last_result = r;
+                                        }
+                                        ControlFlow::Exit(code, stdout, stderr) => {
+                                            return Ok(ControlFlow::Exit(code, stdout, stderr));
+                                        }
+                                        other => return Ok(other),
+                                    }
+                                    if pipefail && last_result.exit_code != 0 {
+                                        pipefail_code = last_result.exit_code;
+                                    }
+                                    stdin_data = last_result.stdout.clone();
+                                    continue;
+                                }
+                                Ok((prog, resolved_args)) => {
+                                    let env_pairs: Vec<(&str, &str)> = state
+                                        .env
+                                        .iter()
+                                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                                        .collect();
+
+                                    let spawn_args_refs: Vec<&str> =
+                                        resolved_args.iter().map(|s| s.as_str()).collect();
+
+                                    match host.spawn(
+                                        &prog,
+                                        &spawn_args_refs,
+                                        &env_pairs,
+                                        &state.cwd,
+                                        &effective_stdin,
+                                    ) {
+                                        Ok(spawn_result) => {
+                                            let mut stdout = spawn_result.stdout;
+                                            let mut stderr = spawn_result.stderr;
+
+                                            // Handle output redirects in pipeline stages
+                                            apply_output_redirects(
+                                                state,
+                                                host,
+                                                redirects,
+                                                &mut stdout,
+                                                &mut stderr,
+                                            )?;
+
+                                            state.last_exit_code = spawn_result.exit_code;
+                                            last_result = RunResult {
+                                                exit_code: spawn_result.exit_code,
+                                                stdout,
+                                                stderr,
+                                                execution_time_ms: 0,
+                                            };
+                                        }
+                                        Err(e) => {
+                                            state.last_exit_code = 127;
+                                            last_result = RunResult::error(
+                                                127,
+                                                format!("{}: {}\n", cmd_name, e),
+                                            );
+                                        }
+                                    }
+                                } // close Ok(dispatch_info)
+                            } // close match dispatch_result
+                        }
+                        _ => {
+                            // Non-simple commands: pass pipeline stdin through state.
+                            let prev_stdin = state.pipeline_stdin.take();
+                            if !stdin_data.is_empty() {
+                                state.pipeline_stdin = Some(stdin_data.clone());
+                            }
+                            let result = exec_command(state, host, cmd);
+                            state.pipeline_stdin = prev_stdin;
+                            match result {
+                                Ok(ControlFlow::Normal(r)) => {
+                                    state.last_exit_code = r.exit_code;
+                                    last_result = r;
+                                }
+                                Ok(ControlFlow::Exit(code, stdout, stderr)) => {
+                                    last_result = RunResult {
+                                        exit_code: code,
+                                        stdout,
+                                        stderr,
+                                        execution_time_ms: 0,
+                                    };
+                                    state.last_exit_code = code;
+                                }
+                                Err(e) => {
+                                    return Err(e);
+                                }
+                                Ok(flow) => {
+                                    // Break, Continue, Return, Cancelled — propagate
+                                    return Ok(flow);
+                                }
+                            }
+                        }
+                    }
+
+                    // Track pipefail
+                    if pipefail && last_result.exit_code != 0 {
+                        pipefail_code = last_result.exit_code;
+                    }
+
+                    // Stdout of this stage becomes stdin of next
+                    stdin_data = last_result.stdout.clone();
+                }
+
+                // Restore env state: pipeline stages ran in subshells.
+                state.env = saved_env;
+                state.arrays = saved_arrays;
+                state.assoc_arrays = saved_assoc;
+                state.stdout_fd = saved_stdout_fd;
+                state.stdin_fd = saved_stdin_fd;
+
+                // Apply pipefail: use last non-zero exit code
+                if pipefail && pipefail_code != 0 && last_result.exit_code == 0 {
+                    last_result.exit_code = pipefail_code;
+                }
+
+                state.last_exit_code = last_result.exit_code;
+                return Ok(ControlFlow::Normal(last_result));
+            }
+
+            // ── Streaming pipeline (pipe/spawn/waitpid) ──
+            // Pipes have been created successfully. Wire each stage's
+            // stdin_fd / stdout_fd through the pipes. Builtins, virtual
+            // commands, extensions, and compound commands run inline with
+            // redirected fds. External commands are spawned asynchronously
+            // via host.spawn_async() and waited on afterwards.
+            let mut pids: Vec<(i32, usize)> = Vec::new(); // (pid, stage_index)
+            let mut last_result = RunResult::empty();
+            let mut last_stage_was_spawned = false;
+
+            for (i, cmd) in commands.iter().enumerate() {
+                // Set up fds for this pipeline stage:
+                // - stdin_fd:  read end of pipe from previous stage (or saved stdin for first)
+                // - stdout_fd: write end of pipe to next stage (or saved stdout for last)
+                let stage_stdin_fd = if i == 0 {
+                    saved_stdin_fd
+                } else {
+                    pipes[i - 1].0
+                };
+                let stage_stdout_fd = if i == stage_count - 1 {
+                    saved_stdout_fd
+                } else {
+                    pipes[i].1
+                };
+
+                state.stdin_fd = stage_stdin_fd;
+                state.stdout_fd = stage_stdout_fd;
+
                 match cmd {
                     Command::Simple {
                         words,
@@ -838,7 +1273,7 @@ pub fn exec_command(
 
                         if words.is_empty() {
                             last_result = RunResult::empty();
-                            stdin_data = last_result.stdout.clone();
+                            last_stage_was_spawned = false;
                             if pipefail && last_result.exit_code != 0 {
                                 pipefail_code = last_result.exit_code;
                             }
@@ -848,7 +1283,7 @@ pub fn exec_command(
                         let expanded = expand_words_with_splitting(state, words, Some(&exec_fn));
                         if expanded.is_empty() {
                             last_result = RunResult::empty();
-                            stdin_data = last_result.stdout.clone();
+                            last_stage_was_spawned = false;
                             if pipefail && last_result.exit_code != 0 {
                                 pipefail_code = last_result.exit_code;
                             }
@@ -862,7 +1297,7 @@ pub fn exec_command(
 
                         if globbed.is_empty() {
                             last_result = RunResult::empty();
-                            stdin_data = last_result.stdout.clone();
+                            last_stage_was_spawned = false;
                             if pipefail && last_result.exit_code != 0 {
                                 pipefail_code = last_result.exit_code;
                             }
@@ -870,60 +1305,13 @@ pub fn exec_command(
                         }
 
                         let cmd_name = &globbed[0];
-                        let args: Vec<&str> = globbed[1..].iter().map(|s| s.as_str()).collect();
-
-                        // Process input redirects — they override pipeline stdin
-                        let mut effective_stdin = stdin_data.clone();
-                        for redir in redirects {
-                            match &redir.redirect_type {
-                                RedirectType::StdinFrom(path) => {
-                                    let resolved = state.resolve_path(path);
-                                    effective_stdin = host
-                                        .read_file(&resolved)
-                                        .map_err(|e| ShellError::HostError(e.to_string()))?;
-                                }
-                                RedirectType::Heredoc(content) => {
-                                    effective_stdin =
-                                        expand_raw_string(state, content, Some(&exec_fn));
-                                }
-                                RedirectType::HeredocQuoted(content) => {
-                                    effective_stdin = content.clone();
-                                }
-                                RedirectType::HeredocStrip(content) => {
-                                    let expanded =
-                                        expand_raw_string(state, content, Some(&exec_fn));
-                                    effective_stdin = expanded
-                                        .lines()
-                                        .map(|l| l.trim_start_matches('\t'))
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    if expanded.ends_with('\n') {
-                                        effective_stdin.push('\n');
-                                    }
-                                }
-                                RedirectType::HeredocStripQuoted(content) => {
-                                    effective_stdin = content
-                                        .lines()
-                                        .map(|l| l.trim_start_matches('\t'))
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    if content.ends_with('\n') {
-                                        effective_stdin.push('\n');
-                                    }
-                                }
-                                RedirectType::HereString(word) => {
-                                    effective_stdin = format!(
-                                        "{}\n",
-                                        expand_raw_string(state, word, Some(&exec_fn))
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        // Check for builtin in pipeline
                         let pipe_func_args: Vec<String> =
                             globbed[1..].iter().map(|s| s.to_string()).collect();
+
+                        // ── Builtin check ──
+                        // Builtins run inline. Task 6 ensures they also
+                        // write to stdout_fd via write_to_fd, so the pipe
+                        // gets data even in streaming mode.
                         let pipe_run_fn = |state: &mut ShellState, cmd_str: &str| -> RunResult {
                             let inner_cmd = codepod_shell::parser::parse(cmd_str);
                             match exec_command(state, host, &inner_cmd) {
@@ -942,15 +1330,13 @@ pub fn exec_command(
                             host,
                             cmd_name,
                             &pipe_func_args,
-                            &effective_stdin,
+                            "", // no string stdin in streaming mode
                             Some(&pipe_run_fn),
                         ) {
                             match builtin_result {
                                 crate::builtins::BuiltinResult::Result(r) => {
                                     let mut bstdout = r.stdout;
                                     let mut bstderr = r.stderr;
-
-                                    // Handle output redirects
                                     apply_output_redirects(
                                         state,
                                         host,
@@ -958,7 +1344,6 @@ pub fn exec_command(
                                         &mut bstdout,
                                         &mut bstderr,
                                     )?;
-
                                     state.last_exit_code = r.exit_code;
                                     last_result = RunResult {
                                         exit_code: r.exit_code,
@@ -968,6 +1353,13 @@ pub fn exec_command(
                                     };
                                 }
                                 crate::builtins::BuiltinResult::Exit(code) => {
+                                    // Close all pipe fds before returning
+                                    for (read_fd, write_fd) in &pipes {
+                                        let _ = host.close_fd(*read_fd);
+                                        let _ = host.close_fd(*write_fd);
+                                    }
+                                    state.stdout_fd = saved_stdout_fd;
+                                    state.stdin_fd = saved_stdin_fd;
                                     return Ok(ControlFlow::Exit(
                                         code,
                                         String::new(),
@@ -975,24 +1367,30 @@ pub fn exec_command(
                                     ));
                                 }
                                 crate::builtins::BuiltinResult::Return(code) => {
+                                    // Close all pipe fds before returning
+                                    for (read_fd, write_fd) in &pipes {
+                                        let _ = host.close_fd(*read_fd);
+                                        let _ = host.close_fd(*write_fd);
+                                    }
+                                    state.stdout_fd = saved_stdout_fd;
+                                    state.stdin_fd = saved_stdin_fd;
                                     return Ok(ControlFlow::Return(code));
                                 }
                             }
-                            // Track pipefail
                             if pipefail && last_result.exit_code != 0 {
                                 pipefail_code = last_result.exit_code;
                             }
-                            stdin_data = last_result.stdout.clone();
+                            last_stage_was_spawned = false;
                             continue;
                         }
 
-                        // ── Virtual commands in pipeline ──
+                        // ── Virtual commands in streaming pipeline ──
                         if let Some(result) = crate::virtual_commands::try_virtual_command(
                             state,
                             host,
                             cmd_name,
                             &pipe_func_args,
-                            &effective_stdin,
+                            "", // no string stdin in streaming mode
                         ) {
                             state.last_exit_code = result.exit_code;
                             let mut bstdout = result.stdout;
@@ -1013,11 +1411,11 @@ pub fn exec_command(
                             if pipefail && last_result.exit_code != 0 {
                                 pipefail_code = last_result.exit_code;
                             }
-                            stdin_data = last_result.stdout.clone();
+                            last_stage_was_spawned = false;
                             continue;
                         }
 
-                        // ── Extensions in pipeline ──
+                        // ── Extensions in streaming pipeline ──
                         if host.is_extension(cmd_name) {
                             let args_refs: Vec<&str> =
                                 pipe_func_args.iter().map(|s| s.as_str()).collect();
@@ -1027,11 +1425,8 @@ pub fn exec_command(
                                 .map(|(k, v)| (k.as_str(), v.as_str()))
                                 .collect();
                             match host.extension_invoke(
-                                cmd_name,
-                                &args_refs,
-                                &effective_stdin,
-                                &env_pairs,
-                                &state.cwd,
+                                cmd_name, &args_refs, "", // no string stdin in streaming mode
+                                &env_pairs, &state.cwd,
                             ) {
                                 Ok(r) => {
                                     state.last_exit_code = r.exit_code;
@@ -1059,37 +1454,49 @@ pub fn exec_command(
                             if pipefail && last_result.exit_code != 0 {
                                 pipefail_code = last_result.exit_code;
                             }
-                            stdin_data = last_result.stdout.clone();
+                            last_stage_was_spawned = false;
                             continue;
                         }
 
-                        // ── Path resolution and command dispatch (pipeline) ──
+                        // ── External command — dispatch and spawn async ──
+                        let args: Vec<&str> = globbed[1..].iter().map(|s| s.as_str()).collect();
                         let dispatch_result = dispatch_external_command(
-                            state,
-                            host,
-                            cmd_name,
-                            &args,
-                            &effective_stdin,
+                            state, host, cmd_name, &args,
+                            "", // stdin comes from pipe fd, not string
                         );
 
                         match dispatch_result {
                             Err(flow) => {
                                 // Command was handled by dispatch (shebang, sh/bash)
+                                // These run inline — they already completed.
                                 match flow {
                                     ControlFlow::Normal(r) => {
                                         state.last_exit_code = r.exit_code;
                                         last_result = r;
                                     }
                                     ControlFlow::Exit(code, stdout, stderr) => {
+                                        for (read_fd, write_fd) in &pipes {
+                                            let _ = host.close_fd(*read_fd);
+                                            let _ = host.close_fd(*write_fd);
+                                        }
+                                        state.stdout_fd = saved_stdout_fd;
+                                        state.stdin_fd = saved_stdin_fd;
                                         return Ok(ControlFlow::Exit(code, stdout, stderr));
                                     }
-                                    other => return Ok(other),
+                                    other => {
+                                        for (read_fd, write_fd) in &pipes {
+                                            let _ = host.close_fd(*read_fd);
+                                            let _ = host.close_fd(*write_fd);
+                                        }
+                                        state.stdout_fd = saved_stdout_fd;
+                                        state.stdin_fd = saved_stdin_fd;
+                                        return Ok(other);
+                                    }
                                 }
                                 if pipefail && last_result.exit_code != 0 {
                                     pipefail_code = last_result.exit_code;
                                 }
-                                stdin_data = last_result.stdout.clone();
-                                continue;
+                                last_stage_was_spawned = false;
                             }
                             Ok((prog, resolved_args)) => {
                                 let env_pairs: Vec<(&str, &str)> = state
@@ -1097,55 +1504,39 @@ pub fn exec_command(
                                     .iter()
                                     .map(|(k, v)| (k.as_str(), v.as_str()))
                                     .collect();
-
                                 let spawn_args_refs: Vec<&str> =
                                     resolved_args.iter().map(|s| s.as_str()).collect();
 
-                                match host.spawn(
+                                match host.spawn_async(
                                     &prog,
                                     &spawn_args_refs,
                                     &env_pairs,
                                     &state.cwd,
-                                    &effective_stdin,
+                                    stage_stdin_fd,
+                                    stage_stdout_fd,
+                                    2, // stderr_fd = 2
                                 ) {
-                                    Ok(spawn_result) => {
-                                        let mut stdout = spawn_result.stdout;
-                                        let mut stderr = spawn_result.stderr;
-
-                                        // Handle output redirects in pipeline stages
-                                        apply_output_redirects(
-                                            state,
-                                            host,
-                                            redirects,
-                                            &mut stdout,
-                                            &mut stderr,
-                                        )?;
-
-                                        state.last_exit_code = spawn_result.exit_code;
-                                        last_result = RunResult {
-                                            exit_code: spawn_result.exit_code,
-                                            stdout,
-                                            stderr,
-                                            execution_time_ms: 0,
-                                        };
+                                    Ok(pid) => {
+                                        pids.push((pid, i));
+                                        last_stage_was_spawned = true;
                                     }
                                     Err(e) => {
                                         state.last_exit_code = 127;
                                         last_result =
                                             RunResult::error(127, format!("{}: {}\n", cmd_name, e));
+                                        if pipefail {
+                                            pipefail_code = 127;
+                                        }
+                                        last_stage_was_spawned = false;
                                     }
                                 }
-                            } // close Ok(dispatch_info)
-                        } // close match dispatch_result
+                            }
+                        }
                     }
                     _ => {
-                        // Non-simple commands: pass pipeline stdin through state.
-                        let prev_stdin = state.pipeline_stdin.take();
-                        if !stdin_data.is_empty() {
-                            state.pipeline_stdin = Some(stdin_data.clone());
-                        }
+                        // Compound command — run inline with redirected fds.
+                        // The stdout_fd/stdin_fd are already set on state.
                         let result = exec_command(state, host, cmd);
-                        state.pipeline_stdin = prev_stdin;
                         match result {
                             Ok(ControlFlow::Normal(r)) => {
                                 state.last_exit_code = r.exit_code;
@@ -1161,37 +1552,98 @@ pub fn exec_command(
                                 state.last_exit_code = code;
                             }
                             Err(e) => {
+                                // Close pipes before propagating error
+                                for (read_fd, write_fd) in &pipes {
+                                    let _ = host.close_fd(*read_fd);
+                                    let _ = host.close_fd(*write_fd);
+                                }
+                                state.stdout_fd = saved_stdout_fd;
+                                state.stdin_fd = saved_stdin_fd;
                                 return Err(e);
                             }
                             Ok(flow) => {
                                 // Break, Continue, Return, Cancelled — propagate
+                                for (read_fd, write_fd) in &pipes {
+                                    let _ = host.close_fd(*read_fd);
+                                    let _ = host.close_fd(*write_fd);
+                                }
+                                state.stdout_fd = saved_stdout_fd;
+                                state.stdin_fd = saved_stdin_fd;
                                 return Ok(flow);
                             }
                         }
+                        if pipefail && last_result.exit_code != 0 {
+                            pipefail_code = last_result.exit_code;
+                        }
+                        last_stage_was_spawned = false;
                     }
                 }
 
-                // Track pipefail
-                if pipefail && last_result.exit_code != 0 {
-                    pipefail_code = last_result.exit_code;
+                // Close parent copies of pipe fds for this stage.
+                // After spawning or running the stage inline, the parent
+                // must close its copies so the child's reads see EOF.
+                if i > 0 {
+                    // Close the read end we passed to this stage's stdin
+                    let _ = host.close_fd(pipes[i - 1].0);
                 }
-
-                // Stdout of this stage becomes stdin of next
-                stdin_data = last_result.stdout.clone();
+                if i < stage_count - 1 {
+                    // Close the write end we passed to this stage's stdout
+                    let _ = host.close_fd(pipes[i].1);
+                }
             }
 
-            // Restore env state: pipeline stages ran in subshells.
+            // ── Wait for all spawned processes ──
+            let mut last_spawned_exit_code = 0;
+            for (idx, (pid, _stage_idx)) in pids.iter().enumerate() {
+                match host.waitpid(*pid) {
+                    Ok(exit_code) => {
+                        if idx == pids.len() - 1 {
+                            last_spawned_exit_code = exit_code;
+                        }
+                        if pipefail && exit_code != 0 {
+                            pipefail_code = exit_code;
+                        }
+                    }
+                    Err(_) => {
+                        // waitpid failed — treat as error
+                        if pipefail {
+                            pipefail_code = 1;
+                        }
+                    }
+                }
+            }
+
+            // Restore state
+            state.stdout_fd = saved_stdout_fd;
+            state.stdin_fd = saved_stdin_fd;
             state.env = saved_env;
             state.arrays = saved_arrays;
             state.assoc_arrays = saved_assoc;
 
-            // Apply pipefail: use last non-zero exit code
-            if pipefail && pipefail_code != 0 && last_result.exit_code == 0 {
-                last_result.exit_code = pipefail_code;
-            }
+            // Determine final exit code:
+            // - If the last stage was a spawned process, use its exit code
+            // - Otherwise use the last inline result's exit code
+            // - With pipefail, use the first non-zero exit code from any stage
+            let base_exit_code = if last_stage_was_spawned {
+                last_spawned_exit_code
+            } else {
+                last_result.exit_code
+            };
 
-            state.last_exit_code = last_result.exit_code;
-            Ok(ControlFlow::Normal(last_result))
+            let final_code = if pipefail && pipefail_code != 0 {
+                pipefail_code
+            } else {
+                base_exit_code
+            };
+
+            state.last_exit_code = final_code;
+
+            Ok(ControlFlow::Normal(RunResult {
+                exit_code: final_code,
+                stdout: last_result.stdout,
+                stderr: last_result.stderr,
+                execution_time_ms: 0,
+            }))
         }
 
         // ── List: ;, &&, || ────────────────────────────────────────────
