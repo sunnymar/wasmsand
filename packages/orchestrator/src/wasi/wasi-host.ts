@@ -12,10 +12,13 @@ import { VfsError } from '../vfs/inode.js';
 import type { InodeType } from '../vfs/inode.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
 import { fdErrorToWasi, vfsErrnoToWasi } from './errors.js';
+import type { FdTarget } from './fd-target.js';
+import { createBufferTarget, createStaticTarget, createNullTarget, bufferToString } from './fd-target.js';
 import {
   WASI_EBADF,
   WASI_EINVAL,
   WASI_ENOSYS,
+  WASI_EPIPE,
   WASI_ESUCCESS,
   WASI_FDFLAGS_APPEND,
   WASI_FILETYPE_CHARACTER_DEVICE,
@@ -51,6 +54,8 @@ export interface WasiHostOptions {
   stdoutLimit?: number;
   stderrLimit?: number;
   deadlineMs?: number;
+  /** Per-fd I/O targets. If provided, overrides stdin/stdoutLimit/stderrLimit. */
+  ioFds?: Map<number, FdTarget>;
 }
 
 interface PreopenEntry {
@@ -111,10 +116,6 @@ export class WasiHost {
   private envPairs: string[];
   private preopens: PreopenEntry[];
   private memory: WebAssembly.Memory | null = null;
-  private stdoutBuf: Uint8Array[] = [];
-  private stderrBuf: Uint8Array[] = [];
-  private stdinData: Uint8Array | undefined;
-  private stdinOffset = 0;
   private exitCode: number | null = null;
   private encoder = new TextEncoder();
   private decoder = new TextDecoder();
@@ -122,12 +123,9 @@ export class WasiHost {
   /** Map from fd number to the directory path it represents (for preopens + opened dirs). */
   private dirFds: Map<number, string> = new Map();
 
-  private stdoutTotal = 0;
-  private stderrTotal = 0;
-  private stdoutTruncated = false;
-  private stderrTruncated = false;
-  private stdoutLimit: number;
-  private stderrLimit: number;
+  /** Per-fd I/O targets (stdin=0, stdout=1, stderr=2, or any custom fd). */
+  private ioFds: Map<number, FdTarget>;
+
   private cancelled = false;
   private deadlineMs: number = Infinity;
 
@@ -138,11 +136,25 @@ export class WasiHost {
     this.envPairs = Object.entries(options.env).map(
       ([k, v]) => `${k}=${v}`,
     );
-    this.stdinData = options.stdin;
-    this.stdoutLimit = options.stdoutLimit ?? Infinity;
-    this.stderrLimit = options.stderrLimit ?? Infinity;
     this.deadlineMs = options.deadlineMs ?? Infinity;
     this.preopens = [];
+
+    // Build I/O fd table: use provided ioFds or build from legacy options.
+    if (options.ioFds) {
+      this.ioFds = options.ioFds;
+    } else {
+      this.ioFds = new Map<number, FdTarget>();
+      // fd 0 — stdin
+      if (options.stdin) {
+        this.ioFds.set(0, createStaticTarget(options.stdin));
+      } else {
+        this.ioFds.set(0, createNullTarget());
+      }
+      // fd 1 — stdout
+      this.ioFds.set(1, createBufferTarget(options.stdoutLimit ?? Infinity));
+      // fd 2 — stderr
+      this.ioFds.set(2, createBufferTarget(options.stderrLimit ?? Infinity));
+    }
 
     // Set up preopened directories starting at fd 3.
     // We must also reserve these fd numbers in the FdTable so it
@@ -168,19 +180,48 @@ export class WasiHost {
   }
 
   getStdout(): string {
-    return this.decoder.decode(concatBuffers(this.stdoutBuf));
+    const target = this.ioFds.get(1);
+    if (target?.type === 'buffer') return bufferToString(target);
+    return '';
   }
 
   getStderr(): string {
-    return this.decoder.decode(concatBuffers(this.stderrBuf));
+    const target = this.ioFds.get(2);
+    if (target?.type === 'buffer') return bufferToString(target);
+    return '';
   }
 
   isStdoutTruncated(): boolean {
-    return this.stdoutTruncated;
+    const target = this.ioFds.get(1);
+    if (target?.type === 'buffer') return target.truncated;
+    return false;
   }
 
   isStderrTruncated(): boolean {
-    return this.stderrTruncated;
+    const target = this.ioFds.get(2);
+    if (target?.type === 'buffer') return target.truncated;
+    return false;
+  }
+
+  /** Reset stdout and stderr buffer targets for per-command output capture. */
+  resetOutputBuffers(): void {
+    const stdout = this.ioFds.get(1);
+    if (stdout?.type === 'buffer') {
+      stdout.buf.length = 0;
+      stdout.total = 0;
+      stdout.truncated = false;
+    }
+    const stderr = this.ioFds.get(2);
+    if (stderr?.type === 'buffer') {
+      stderr.buf.length = 0;
+      stderr.total = 0;
+      stderr.truncated = false;
+    }
+  }
+
+  /** Expose the I/O fd table for external inspection / manipulation. */
+  getIoFds(): Map<number, FdTarget> {
+    return this.ioFds;
   }
 
   /** Signal cancellation — next syscall check will throw WasiExitError. */
@@ -387,33 +428,50 @@ export class WasiHost {
     const iovecs = readIovecs(view, iovsPtr, iovsLen);
 
     let totalWritten = 0;
+    const target = this.ioFds.get(fd);
 
     for (const iov of iovecs) {
       const data = bytes.slice(iov.buf, iov.buf + iov.len);
 
-      if (fd === 1) {
-        if (this.stdoutTotal < this.stdoutLimit) {
-          const remaining = this.stdoutLimit - this.stdoutTotal;
-          const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
-          this.stdoutBuf.push(slice);
-          if (data.byteLength > remaining) this.stdoutTruncated = true;
-        } else {
-          this.stdoutTruncated = true;
+      if (target) {
+        switch (target.type) {
+          case 'buffer': {
+            if (target.total < target.limit) {
+              const remaining = target.limit - target.total;
+              const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
+              target.buf.push(slice);
+              if (data.byteLength > remaining) target.truncated = true;
+            } else {
+              target.truncated = true;
+            }
+            target.total += data.byteLength;
+            totalWritten += data.byteLength;
+            break;
+          }
+          case 'pipe_write': {
+            const n = target.pipe.write(data);
+            if (n === -1) {
+              // EPIPE — read end closed
+              const viewAfter = this.getView();
+              viewAfter.setUint32(nwrittenPtr, totalWritten, true);
+              return WASI_EPIPE;
+            }
+            totalWritten += n;
+            break;
+          }
+          case 'null': {
+            // Discard data, report full write
+            totalWritten += data.byteLength;
+            break;
+          }
+          case 'static':
+          case 'pipe_read': {
+            // Cannot write to a read-only target
+            return WASI_EBADF;
+          }
         }
-        this.stdoutTotal += data.byteLength;
-        totalWritten += data.byteLength;
-      } else if (fd === 2) {
-        if (this.stderrTotal < this.stderrLimit) {
-          const remaining = this.stderrLimit - this.stderrTotal;
-          const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
-          this.stderrBuf.push(slice);
-          if (data.byteLength > remaining) this.stderrTruncated = true;
-        } else {
-          this.stderrTruncated = true;
-        }
-        this.stderrTotal += data.byteLength;
-        totalWritten += data.byteLength;
       } else {
+        // No I/O target — fall through to VFS file write
         try {
           totalWritten += this.fdTable.write(fd, data);
         } catch (err) {
@@ -439,38 +497,70 @@ export class WasiHost {
     const iovecs = readIovecs(view, iovsPtr, iovsLen);
 
     let totalRead = 0;
+    const target = this.ioFds.get(fd);
 
     for (const iov of iovecs) {
-      if (fd === 0) {
-        if (this.stdinData === undefined || this.stdinOffset >= this.stdinData.byteLength) {
-          // No stdin data or all consumed: return EOF
-          break;
+      if (target) {
+        switch (target.type) {
+          case 'static': {
+            if (target.offset >= target.data.byteLength) {
+              // EOF
+              break;
+            }
+            const remaining = target.data.byteLength - target.offset;
+            const toRead = Math.min(iov.len, remaining);
+            const bytes = this.getBytes();
+            bytes.set(target.data.subarray(target.offset, target.offset + toRead), iov.buf);
+            target.offset += toRead;
+            totalRead += toRead;
+            if (toRead < iov.len) {
+              // EOF reached mid-iovec — stop processing further iovecs
+              const viewAfter = this.getView();
+              viewAfter.setUint32(nreadPtr, totalRead, true);
+              return WASI_ESUCCESS;
+            }
+            continue;
+          }
+          case 'pipe_read': {
+            // Synchronous attempt: try to drain what's available now.
+            // (Will be overridden with JSPI-based async read in Task 8.)
+            const buf = new Uint8Array(iov.len);
+            // pipe_read.read is async but we do a sync fallback for now:
+            // just return 0 (EOF) since we can't await in a sync context.
+            // Real async pipe reading will be enabled with JSPI in Task 8.
+            totalRead += 0;
+            const viewAfter = this.getView();
+            viewAfter.setUint32(nreadPtr, totalRead, true);
+            return WASI_ESUCCESS;
+          }
+          case 'null': {
+            // /dev/null reads return EOF immediately
+            break;
+          }
+          case 'buffer':
+          case 'pipe_write': {
+            // Cannot read from a write-only target
+            return WASI_EBADF;
+          }
         }
-        const remaining = this.stdinData.byteLength - this.stdinOffset;
-        const toRead = Math.min(iov.len, remaining);
-        const bytes = this.getBytes();
-        bytes.set(this.stdinData.subarray(this.stdinOffset, this.stdinOffset + toRead), iov.buf);
-        this.stdinOffset += toRead;
-        totalRead += toRead;
-        if (toRead < iov.len) {
-          break; // EOF reached mid-iovec
+        // If we got here via break (EOF from static or null), stop iovecs
+        break;
+      } else {
+        // No I/O target — fall through to VFS file read
+        try {
+          const buf = new Uint8Array(iov.len);
+          const n = this.fdTable.read(fd, buf);
+          if (n > 0) {
+            const bytes = this.getBytes();
+            bytes.set(buf.subarray(0, n), iov.buf);
+            totalRead += n;
+          }
+          if (n < iov.len) {
+            break; // EOF or short read
+          }
+        } catch (err) {
+          return fdErrorToWasi(err);
         }
-        continue;
-      }
-
-      try {
-        const buf = new Uint8Array(iov.len);
-        const n = this.fdTable.read(fd, buf);
-        if (n > 0) {
-          const bytes = this.getBytes();
-          bytes.set(buf.subarray(0, n), iov.buf);
-          totalRead += n;
-        }
-        if (n < iov.len) {
-          break; // EOF or short read
-        }
-      } catch (err) {
-        return fdErrorToWasi(err);
       }
     }
 
@@ -480,8 +570,8 @@ export class WasiHost {
   }
 
   private fdClose(fd: number): number {
-    // Cannot close stdio
-    if (fd <= 2) {
+    // Cannot close I/O target fds (stdio or custom)
+    if (this.ioFds.has(fd)) {
       return WASI_EBADF;
     }
 
@@ -563,8 +653,8 @@ export class WasiHost {
 
     let filetype: number;
 
-    // stdio fds are character devices
-    if (fd <= 2) {
+    // I/O target fds (stdio or custom) are character devices
+    if (this.ioFds.has(fd)) {
       filetype = WASI_FILETYPE_CHARACTER_DEVICE;
     } else if (this.dirFds.has(fd)) {
       filetype = WASI_FILETYPE_DIRECTORY;
@@ -592,8 +682,8 @@ export class WasiHost {
       return this.writeFilestat(bufPtr, dirPath);
     }
 
-    // For stdio fds, return a minimal character device stat
-    if (fd <= 2) {
+    // For I/O target fds (stdio or custom), return a minimal character device stat
+    if (this.ioFds.has(fd)) {
       return this.writeCharDeviceStat(bufPtr);
     }
 
@@ -1050,27 +1140,4 @@ export class WasiHost {
     view.setUint8(bufPtr + 16, WASI_FILETYPE_CHARACTER_DEVICE);
     return WASI_ESUCCESS;
   }
-}
-
-/** Concatenate an array of Uint8Arrays into one. */
-function concatBuffers(buffers: Uint8Array[]): Uint8Array {
-  if (buffers.length === 0) {
-    return new Uint8Array(0);
-  }
-  if (buffers.length === 1) {
-    return buffers[0];
-  }
-
-  let totalLen = 0;
-  for (const buf of buffers) {
-    totalLen += buf.byteLength;
-  }
-
-  const result = new Uint8Array(totalLen);
-  let offset = 0;
-  for (const buf of buffers) {
-    result.set(buf, offset);
-    offset += buf.byteLength;
-  }
-  return result;
 }
