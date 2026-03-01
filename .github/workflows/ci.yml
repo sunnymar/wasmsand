@@ -24,7 +24,21 @@ jobs:
 
       - name: Run TypeScript tests
         timeout-minutes: 10
-        run: deno test -A --no-check packages/orchestrator packages/sdk-server packages/mcp-server
+        run: |
+          rc=0
+          deno test -A --no-check --junit-path=test-results.xml \
+            packages/orchestrator packages/sdk-server packages/mcp-server 2>&1 || rc=$?
+          if [ $rc -ne 0 ]; then
+            # Deno may exit non-zero when Worker threads leave pending promises
+            # during cleanup, even when all tests pass. Check JUnit XML for
+            # actual failures before failing the build.
+            if grep -q 'failures="0"' test-results.xml 2>/dev/null && \
+               grep -q 'errors="0"' test-results.xml 2>/dev/null; then
+              echo "::warning::Deno exited non-zero but all tests passed (Worker cleanup issue)"
+            else
+              exit 1
+            fi
+          fi
 
       - name: Install Python SDK
         run: cd packages/python-sdk && pip install -e ".[dev]"

@@ -109,8 +109,17 @@ export class WorkerExecutor {
       clearTimeout(this.timeoutTimer);
       this.timeoutTimer = null;
     }
+    // Resolve any pending run() promise before terminating the worker.
+    if (this.pendingResolve) {
+      const resolve = this.pendingResolve;
+      this.pendingResolve = null;
+      resolve({
+        exitCode: 1, stdout: '', stderr: 'disposed\n', executionTimeMs: 0,
+      });
+    }
     if (this.worker) {
-      this.worker.terminate();
+      this.worker.removeAllListeners();
+      this.worker.terminate().catch(() => {});
       this.worker = null;
     }
     this.running = false;
@@ -390,7 +399,7 @@ export class WorkerExecutor {
       this.timeoutTimer = null;
     }
     if (this.worker) {
-      this.worker.terminate();
+      this.worker.terminate().catch(() => {});
       this.worker = null;
     }
     this.running = false;

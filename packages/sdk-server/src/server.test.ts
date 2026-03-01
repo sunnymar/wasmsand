@@ -30,12 +30,18 @@ function startServer() {
     throw new Error('Timed out waiting for response');
   }
 
-  return { proc, send, recv };
+  function destroy(): void {
+    rl.close();
+    proc.stdin!.end();
+    proc.kill();
+  }
+
+  return { proc, send, recv, destroy };
 }
 
 describe('SDK Server (integration)', () => {
   it('create -> run -> kill lifecycle', async () => {
-    const { proc, send, recv } = startServer();
+    const { send, recv, destroy } = startServer();
     try {
       send({ jsonrpc: '2.0', id: 1, method: 'create', params: { wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM } });
       const createResp = await recv();
@@ -50,7 +56,7 @@ describe('SDK Server (integration)', () => {
       const killResp = await recv();
       expect(killResp).toMatchObject({ jsonrpc: '2.0', id: 3, result: { ok: true } });
     } finally {
-      proc.kill();
+      destroy();
     }
   }, 30_000);
 });
