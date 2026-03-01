@@ -1,4 +1,5 @@
-import { describe, it, expect, mock } from 'bun:test';
+import { describe, it, beforeEach, afterEach } from '@std/testing/bdd';
+import { expect, fn as mock } from '@std/expect';
 import { NetworkGateway, NetworkAccessDenied } from '../gateway.js';
 import type { NetworkPolicy } from '../gateway.js';
 import { matchesHostList, HOST_MATCH_SOURCE } from '../host-match.js';
@@ -93,6 +94,157 @@ describe('NetworkGateway', () => {
       } finally {
         globalThis.fetch = originalFetch;
       }
+    });
+  });
+
+  describe('redirect handling', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('follows redirect within allowed hosts', async () => {
+      let callCount = 0;
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        callCount++;
+        if (callCount === 1) {
+          return new Response(null, {
+            status: 302,
+            headers: { Location: 'https://example.com/final' },
+          });
+        }
+        return new Response('final');
+      }) as typeof fetch;
+
+      const gw = new NetworkGateway({ allowedHosts: ['example.com'] });
+      const resp = await gw.fetch('https://example.com/start');
+      expect(await resp.text()).toBe('final');
+      expect(callCount).toBe(2);
+    });
+
+    it('blocks redirect to disallowed host', async () => {
+      globalThis.fetch = mock(async () => {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://evil.com/steal' },
+        });
+      }) as typeof fetch;
+
+      const gw = new NetworkGateway({ allowedHosts: ['example.com'] });
+      try {
+        await gw.fetch('https://example.com/start');
+        expect(true).toBe(false); // should not reach
+      } catch (err) {
+        expect(err).toBeInstanceOf(NetworkAccessDenied);
+        expect((err as NetworkAccessDenied).message).toContain('evil.com');
+      }
+    });
+
+    it('enforces max redirect limit', async () => {
+      let callCount = 0;
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        callCount++;
+        return new Response(null, {
+          status: 302,
+          headers: { Location: String(url) + '/next' },
+        });
+      }) as typeof fetch;
+
+      const gw = new NetworkGateway({ allowedHosts: ['example.com'] });
+      try {
+        await gw.fetch('https://example.com/start');
+        expect(true).toBe(false);
+      } catch (err) {
+        expect(err).toBeInstanceOf(NetworkAccessDenied);
+        expect((err as NetworkAccessDenied).message).toContain('too many redirects');
+      }
+      expect(callCount).toBe(6);
+    });
+
+    it('303 changes method to GET', async () => {
+      const calls: { url: string; method: string }[] = [];
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method ?? 'GET' });
+        if (calls.length === 1) {
+          return new Response(null, {
+            status: 303,
+            headers: { Location: 'https://example.com/result' },
+          });
+        }
+        return new Response('ok');
+      }) as typeof fetch;
+
+      const gw = new NetworkGateway({ allowedHosts: ['example.com'] });
+      await gw.fetch('https://example.com/submit', { method: 'POST', body: 'data' });
+      expect(calls[0].method).toBe('POST');
+      expect(calls[1].method).toBe('GET');
+    });
+
+    it('307 preserves method', async () => {
+      const calls: { url: string; method: string }[] = [];
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method ?? 'GET' });
+        if (calls.length === 1) {
+          return new Response(null, {
+            status: 307,
+            headers: { Location: 'https://example.com/new-endpoint' },
+          });
+        }
+        return new Response('ok');
+      }) as typeof fetch;
+
+      const gw = new NetworkGateway({ allowedHosts: ['example.com'] });
+      await gw.fetch('https://example.com/api', { method: 'POST', body: 'data' });
+      expect(calls[0].method).toBe('POST');
+      expect(calls[1].method).toBe('POST');
+    });
+
+    it('308 preserves method', async () => {
+      const calls: { url: string; method: string }[] = [];
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method ?? 'GET' });
+        if (calls.length === 1) {
+          return new Response(null, {
+            status: 308,
+            headers: { Location: 'https://example.com/new-endpoint' },
+          });
+        }
+        return new Response('ok');
+      }) as typeof fetch;
+
+      const gw = new NetworkGateway({ allowedHosts: ['example.com'] });
+      await gw.fetch('https://example.com/api', { method: 'POST', body: 'data' });
+      expect(calls[0].method).toBe('POST');
+      expect(calls[1].method).toBe('POST');
+    });
+
+    it('calls onRequest callback for redirect targets', async () => {
+      const onRequestUrls: string[] = [];
+      const onRequest = mock(async (req: { url: string }) => {
+        onRequestUrls.push(req.url);
+        return true;
+      });
+      let fetchCallCount = 0;
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        fetchCallCount++;
+        if (fetchCallCount === 1) {
+          return new Response(null, {
+            status: 302,
+            headers: { Location: 'https://example.com/redirected' },
+          });
+        }
+        return new Response('ok');
+      }) as typeof fetch;
+
+      const gw = new NetworkGateway({ allowedHosts: ['example.com'], onRequest });
+      await gw.fetch('https://example.com/start');
+      expect(onRequestUrls).toContain('https://example.com/start');
+      expect(onRequestUrls).toContain('https://example.com/redirected');
     });
   });
 });

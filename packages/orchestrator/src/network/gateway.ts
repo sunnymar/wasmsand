@@ -28,6 +28,12 @@ export class NetworkAccessDenied extends Error {
   }
 }
 
+/** Maximum number of HTTP redirects to follow before aborting. */
+const MAX_REDIRECTS = 5;
+
+/** HTTP status codes that indicate a redirect. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
 export class NetworkGateway {
   private policy: NetworkPolicy;
 
@@ -76,38 +82,69 @@ export class NetworkGateway {
 
   /** Fetch with policy enforcement. Throws NetworkAccessDenied on denial. */
   async fetch(url: string, options?: RequestInit): Promise<Response> {
-    const method = options?.method ?? 'GET';
-    const headers: Record<string, string> = {};
-    if (options?.headers) {
-      const h = options.headers;
-      if (h instanceof Headers) {
-        h.forEach((v, k) => {
-          headers[k] = v;
-        });
-      } else if (Array.isArray(h)) {
-        for (const [k, v] of h) {
-          headers[k] = v;
+    let currentUrl = url;
+    let currentMethod = options?.method ?? 'GET';
+    let currentBody: BodyInit | null | undefined = options?.body;
+
+    let redirectCount = 0;
+
+    for (;;) {
+      const headers: Record<string, string> = {};
+      if (options?.headers) {
+        const h = options.headers;
+        if (h instanceof Headers) {
+          h.forEach((v, k) => { headers[k] = v; });
+        } else if (Array.isArray(h)) {
+          for (const [k, v] of h) { headers[k] = v; }
+        } else {
+          Object.assign(headers, h);
         }
-      } else {
-        Object.assign(headers, h);
+      }
+
+      // Static check
+      const access = this.checkAccess(currentUrl, currentMethod);
+      if (!access.allowed) {
+        throw new NetworkAccessDenied(currentUrl, access.reason!);
+      }
+
+      // Dynamic callback check
+      if (this.policy.onRequest) {
+        const allowed = await this.policy.onRequest({ url: currentUrl, method: currentMethod, headers });
+        if (!allowed) {
+          throw new NetworkAccessDenied(currentUrl, 'denied by onRequest callback');
+        }
+      }
+
+      const resp = await globalThis.fetch(currentUrl, {
+        ...options,
+        method: currentMethod,
+        body: currentBody,
+        redirect: 'manual',
+      });
+
+      if (!REDIRECT_STATUSES.has(resp.status)) {
+        return resp;
+      }
+
+      const location = resp.headers.get('Location');
+      if (!location) {
+        return resp; // No Location header — return as-is
+      }
+
+      // Resolve relative redirects against current URL
+      currentUrl = new URL(location, currentUrl).href;
+
+      // 303: change method to GET and drop body (RFC 7231)
+      if (resp.status === 303) {
+        currentMethod = 'GET';
+        currentBody = undefined;
+      }
+
+      redirectCount++;
+      if (redirectCount > MAX_REDIRECTS) {
+        throw new NetworkAccessDenied(currentUrl, 'too many redirects');
       }
     }
-
-    // Static check
-    const access = this.checkAccess(url, method);
-    if (!access.allowed) {
-      throw new NetworkAccessDenied(url, access.reason!);
-    }
-
-    // Dynamic callback check
-    if (this.policy.onRequest) {
-      const allowed = await this.policy.onRequest({ url, method, headers });
-      if (!allowed) {
-        throw new NetworkAccessDenied(url, 'denied by onRequest callback');
-      }
-    }
-
-    return globalThis.fetch(url, options);
   }
 
   /**
