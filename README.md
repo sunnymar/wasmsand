@@ -1,6 +1,6 @@
 # codepod
 
-A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 95+ commands, and a Python runtime — no containers, no kernel, no hardware emulation. Ships with an [MCP server](#mcp-server) so Claude can use it directly as a tool.
+A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 95+ commands, and a Python runtime — no containers, no kernel, no hardware emulation. Ships with an [MCP server](docs/guides/mcp-server.md) so Claude can use it directly as a tool.
 
 **[Try it in your browser](https://codepod-sandbox.github.io/codepod/)**
 
@@ -8,36 +8,30 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 
 ## What it does
 
-- **Shell execution** — pipes, redirects, variables, globbing, control flow (`if`/`for`/`while`/`case`), functions, `source`, command substitution, arithmetic, subshells
-- **95+ commands** — cat, grep, rg, sed, awk, find, sort, jq, tar, gzip, curl, sqlite3, bc, and more — coreutils compiled to WebAssembly plus shell builtins
-- **Python 3** via RustPython compiled to WASI — standard library available
-- **Virtual filesystem** — in-memory POSIX VFS with optional persistence to IndexedDB (browser) or filesystem (Node)
-- **Virtual `/dev` and `/proc`** — `/dev/null`, `/dev/zero`, `/dev/random`, `/proc/uptime`, `/proc/cpuinfo`, and more
-- **Host mounts** — inject files into the VFS at arbitrary paths (tools, uploads, Python libraries) with a pluggable `VirtualFileSystem` interface
-- **Extensions** — register custom shell commands and Python packages backed by host-side handlers (LLM inference, vector search, database queries, etc.)
-- **Package manager** — install WASI binaries into the sandbox at runtime with `pkg install`
-- **State persistence** — ephemeral, session (manual save/load), or persistent (debounced autosave) modes for long-running agent workflows
-- **Command history** — `history list` and `history clear` for agent session tracking
-- **MCP server** — plug into Claude Code, Claude Desktop, or any MCP client with zero integration code — just point it at the server
-- **Runs everywhere** — same code works server-side ([Bun](https://bun.sh) or Node.js) and in the browser
+- **Shell execution** — pipes, redirects, variables, globbing, control flow, functions, subshells
+- **95+ commands** — cat, grep, sed, awk, find, sort, jq, tar, curl, sqlite3, and more
+- **Python 3** via RustPython compiled to WASI
+- **Virtual filesystem** — in-memory POSIX VFS with optional persistence
+- **Host mounts** — inject files into the VFS at arbitrary paths
+- **Extensions** — register custom shell commands backed by host-side handlers
+- **MCP server** — plug into Claude Code, Claude Desktop, or any MCP client
+- **Runs everywhere** — same code works server-side (Deno/Node.js) and in the browser
 
 ## Install
 
-**TypeScript (npm):**
+**TypeScript:**
 
 ```bash
 npm install @codepod/sandbox
 ```
 
-**Python (PyPI):**
+**Python:**
 
 ```bash
 pip install codepod
 ```
 
-The Python wheel is self-contained — it bundles the Bun runtime, the RPC server, and all WASM binaries. No extra dependencies needed.
-
-## Usage
+## Quick start
 
 ### TypeScript
 
@@ -56,592 +50,33 @@ console.log(result.stdout); // "3\n"
 sandbox.destroy();
 ```
 
-In the browser, use `BrowserAdapter` instead:
-
-```typescript
-import { Sandbox } from '@codepod/sandbox';
-import { BrowserAdapter } from '@codepod/sandbox/browser';
-
-const sandbox = await Sandbox.create({
-  adapter: new BrowserAdapter(),
-  wasmDir: '/wasm',
-});
-```
-
 ### Python
 
 ```python
 from codepod import Sandbox
 
 with Sandbox() as sb:
-    result = sb.commands.run("ls -la /home/user")
+    result = sb.commands.run("echo hello world | wc -w")
+    print(result.stdout)  # "3\n"
+
+    sb.files.write("/tmp/data.csv", b"name,score\nalice,95\nbob,87\n")
+    result = sb.commands.run("cat /tmp/data.csv | sort -t, -k2 -rn")
     print(result.stdout)
-
-    sb.files.write("/home/user/data.csv", b"name,score\nalice,95\nbob,87\n")
-    result = sb.commands.run("cat /home/user/data.csv | sort -t, -k2 -rn")
-    print(result.stdout)
 ```
 
-Constructor options:
-
-```python
-sb = Sandbox(
-    timeout_ms=60_000,               # per-command timeout (default 30s)
-    fs_limit_bytes=512 * 1024 * 1024, # VFS size limit (default 256 MB)
-    mounts=[("/mnt/data", {"f.txt": b"hello"})],
-    python_path=["/mnt/libs"],
-    extensions=[Extension(name="mytool", command=my_handler)],
-)
-```
-
-The `run()` method returns a `CommandResult` with:
-
-```python
-result = sb.commands.run("echo hello")
-result.stdout        # "hello\n"
-result.stderr        # ""
-result.exit_code     # 0
-result.execution_time_ms  # e.g. 12.5
-```
-
-#### File operations
-
-```python
-# Write (bytes or str)
-sb.files.write("/tmp/msg.txt", "hello world")
-sb.files.write("/tmp/data.bin", b"\x00\x01\x02")
-
-# Read (always returns bytes)
-data = sb.files.read("/tmp/msg.txt")  # b"hello world"
-
-# List directory
-entries = sb.files.list("/tmp")
-for entry in entries:
-    print(entry.name, entry.type, entry.size)  # "msg.txt" "file" 11
-
-# Stat
-info = sb.files.stat("/tmp/msg.txt")
-info.name   # "msg.txt"
-info.type   # "file"
-info.size   # 11
-
-# Create directory
-sb.files.mkdir("/tmp/subdir")
-
-# Remove file
-sb.files.rm("/tmp/msg.txt")
-```
-
-#### Error handling
-
-File operations raise `RpcError` on failure:
-
-```python
-from codepod._rpc import RpcError
-
-try:
-    sb.files.read("/nonexistent")
-except RpcError as e:
-    print(e.code)     # 1
-    print(e.message)  # "ENOENT: ..."
-```
-
-### MCP Server
-
-codepod includes an MCP (Model Context Protocol) server, so AI assistants like Claude can use the sandbox directly as a tool.
-
-**Claude Code** (`~/.claude/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "sandbox": {
-      "command": "bun",
-      "args": ["run", "/path/to/codepod/packages/mcp-server/src/index.ts"]
-    }
-  }
-}
-```
-
-**Claude Desktop** (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "sandbox": {
-      "command": "bun",
-      "args": ["run", "/path/to/codepod/packages/mcp-server/src/index.ts"]
-    }
-  }
-}
-```
-
-The server exposes 4 tools over stdio:
-
-| Tool | Description |
-|------|-------------|
-| `run_command` | Execute a shell command (95+ coreutils, pipes, redirects, variables) |
-| `read_file` | Read a file from the sandbox filesystem |
-| `write_file` | Write a file to the sandbox filesystem |
-| `list_directory` | List files and directories |
-
-Configuration via environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CODEPOD_TIMEOUT_MS` | 30000 | Per-command timeout |
-| `CODEPOD_FS_LIMIT_BYTES` | 268435456 | VFS size limit (256 MB) |
-| `CODEPOD_WASM_DIR` | auto | Path to WASM binaries |
-
-## Available tools
-
-| Category | Tools |
-|----------|-------|
-| File operations | cat, cp, mv, rm, mkdir, rmdir, ls, touch, ln, chmod, truncate, split, cmp, patch |
-| Text processing | grep, sort, uniq, wc, head, tail, cut, tr, tac, tee, rev |
-| Text formatting | fmt, fold, nl, expand, unexpand, paste, column, numfmt |
-| Advanced text | sed, awk, diff, comm, join, csplit |
-| Search & inspection | find, rg, xargs, strings, file, tree, stat |
-| Data formats | jq |
-| Archiving | tar, gzip, gunzip, zip, unzip |
-| Disk usage | du, df |
-| Path utilities | basename, dirname, readlink, realpath |
-| Environment | env, printenv, export, unset, uname, whoami, id, hostname, nproc |
-| Math & data | bc, dc, sqlite3 (in-memory) |
-| Encoding & hashing | base64, md5sum, sha256sum, cksum, xxd, od |
-| Scripting | echo, printf, test, expr, seq, sleep, yes, true, false, mktemp, timeout |
-| Shell builtins | cd, pwd, which, date, source/`.`, exit, history, eval, getopts, set, read |
-| Shell commands | sh, bash (execute scripts and `sh -c` one-liners) |
-| Package management | pkg (install/list/remove WASI binaries), pip (list/show/install for extensions) |
-| Networking | curl, wget (requires network access to be enabled) |
-| Python | python3 (RustPython, standard library) |
-
-## Shell features
-
-**Operators and I/O:** pipes (`|`), redirects (`>`, `>>`, `<`, `2>`, `2>&1`), here-documents (`<<EOF`), boolean operators (`&&`, `||`), semicolons, subshells (`(...)`)
-
-**Quoting and expansion:** single/double quotes, escape sequences, tilde expansion (`~`), variable expansion (`$VAR`, `${VAR:-default}`, `${VAR:+alt}`, `${VAR:=val}`, `${VAR:?err}`), string manipulation (`${VAR#prefix}`, `${VAR%suffix}`, `${VAR/old/new}`), command substitution (`$(...)`), arithmetic expansion (`$(( ))`), brace expansion (`{a,b,c}`, `{1..5}`), globbing (`*`, `?`)
-
-**Control flow:** `if`/`elif`/`else`/`fi`, `for`/`do`/`done`, `while`/`do`/`done`, `case`/`esac`, `break`, `continue`, `set -e` (errexit), `set -u` (nounset)
-
-**Functions and sourcing:** function definitions (`name() { ...; }`), `source`/`.` for loading files, `read` for stdin parsing
-
-**Special variables:** `$?` (last exit code), `$@` and `$*` (all positional parameters), `$#` (argument count), `$1`–`$9` (positional parameters)
-
-## Virtual filesystems
-
-The sandbox provides virtual `/dev` and `/proc` filesystems:
-
-| Path | Behavior |
-|------|----------|
-| `/dev/null` | Discards writes, returns empty on read |
-| `/dev/zero` | Returns zero-filled bytes |
-| `/dev/random`, `/dev/urandom` | Cryptographically random bytes |
-| `/proc/uptime` | Seconds since sandbox creation |
-| `/proc/version` | Sandbox version string |
-| `/proc/cpuinfo` | Processor information |
-| `/proc/meminfo` | Memory information |
-| `/proc/diskstats` | VFS storage statistics (JSON) |
-
-These work transparently with coreutils: `cat /dev/null`, `head -c 16 /dev/random | xxd`, `cat /proc/uptime`.
-
-## Host mounts
-
-Mount host-provided files into the sandbox at arbitrary paths. Use cases include injecting tools, uploading user files, and providing Python libraries.
-
-**TypeScript:**
-
-```typescript
-// At creation time
-const sandbox = await Sandbox.create({
-  wasmDir: './wasm',
-  mounts: [
-    { path: '/mnt/tools', files: { 'hello.sh': encode('#!/bin/sh\necho hi') } },
-    { path: '/mnt/libs', files: { 'mymod.py': encode('GREETING = "hello"') } },
-  ],
-  pythonPath: ['/mnt/libs'],  // adds to PYTHONPATH
-});
-
-// Or at runtime
-sandbox.mount('/mnt/uploads', { 'data.csv': encode('a,b,c\n1,2,3\n') });
-
-await sandbox.run('cat /mnt/uploads/data.csv');
-await sandbox.run('ls /mnt/tools');
-```
-
-Mount points are visible in parent directory listings (`ls /mnt` shows `tools`). Mounted files are automatically excluded from `exportState()` — they are host-provided, not sandbox state.
-
-**Python:**
-
-```python
-from codepod import Sandbox, MemoryFS
-
-# At creation time
-with Sandbox(
-    mounts=[("/mnt/tools", {"hello.sh": b"#!/bin/sh\necho hi"})],
-    python_path=["/mnt/libs"],
-) as sb:
-    sb.commands.run("cat /mnt/tools/hello.sh")
-
-# At runtime
-sb.mount("/mnt/uploads", {"data.csv": b"a,b,c\n1,2,3\n"})
-```
-
-For structured file trees, use `MemoryFS` — a `VirtualFileSystem` implementation with the standard FS interface (read, write, stat, readdir, exists):
-
-```python
-from codepod import Sandbox, MemoryFS
-
-fs = MemoryFS({
-    "mylib/__init__.py": b"",
-    "mylib/utils.py": b"def greet(): return 'hello'",
-})
-
-with Sandbox(mounts=[("/mnt/pkg", fs)], python_path=["/mnt/pkg"]) as sb:
-    sb.commands.run("ls /mnt/pkg/mylib")
-```
-
-You can also subclass `VirtualFileSystem` to implement custom file sources (local disk, database, HTTP):
-
-```python
-from codepod import VirtualFileSystem, FileStat, DirEntry
-
-class LocalDirFS(VirtualFileSystem):
-    def __init__(self, root: str):
-        self.root = root
-
-    def read_file(self, path: str) -> bytes:
-        return open(f"{self.root}/{path}", "rb").read()
-
-    def exists(self, path: str) -> bool:
-        return os.path.exists(f"{self.root}/{path}")
-
-    def stat(self, path: str) -> FileStat:
-        p = f"{self.root}/{path}"
-        return FileStat(
-            type="dir" if os.path.isdir(p) else "file",
-            size=os.path.getsize(p) if os.path.isfile(p) else 0,
-        )
-
-    def readdir(self, path: str) -> list[DirEntry]:
-        p = f"{self.root}/{path}" if path else self.root
-        return [
-            DirEntry(name=e, type="dir" if os.path.isdir(f"{p}/{e}") else "file")
-            for e in os.listdir(p)
-        ]
-
-    def write_file(self, path: str, data: bytes) -> None:
-        raise PermissionError("read-only")
-```
-
-When mounted, the VFS is walked and serialized to the sandbox. Files are snapshotted at mount time — changes to the source after mounting are not reflected.
-
-## Extensions
-
-Extensions let hosts expose custom capabilities to sandbox code — shell commands that participate in pipes and redirects, and Python packages importable from sandbox scripts.
-
-**TypeScript:**
-
-```typescript
-const sandbox = await Sandbox.create({
-  adapter: new NodeAdapter(),
-  wasmDir: './wasm',
-  extensions: [
-    {
-      name: 'llm',
-      description: 'Query an LLM. Usage: llm <prompt>',
-      command: async ({ args, stdin }) => {
-        const prompt = args.join(' ') || stdin;
-        const answer = await myLlmApi(prompt);
-        return { stdout: answer + '\n', exitCode: 0 };
-      },
-    },
-    {
-      name: 'vecdb',
-      description: 'Search a vector database. Usage: vecdb <query>',
-      command: async ({ args }) => {
-        const results = await myVecSearch(args.join(' '));
-        return { stdout: JSON.stringify(results) + '\n', exitCode: 0 };
-      },
-      pythonPackage: {
-        version: '1.0.0',
-        summary: 'Vector database client',
-        files: {
-          '__init__.py': 'from codepod_ext import call as _call\n\ndef search(q): return _call("vecdb", "search", query=q)\n',
-        },
-      },
-    },
-  ],
-});
-
-// Extension commands work like any other command
-await sandbox.run('echo "summarize this" | llm');
-await sandbox.run('vecdb "similar documents" | jq .results');
-
-// Extension Python packages are importable
-await sandbox.run('python3 -c "import vecdb; print(vecdb.search(\'test\'))"');
-
-// Discoverable via standard tools
-await sandbox.run('which llm');        // /bin/llm
-await sandbox.run('pip list');         // shows vecdb 1.0.0
-await sandbox.run('pip show vecdb');   // metadata + file list
-```
-
-**Python:**
-
-```python
-from codepod import Sandbox, Extension, PythonPackage
-
-def my_llm_handler(args, stdin, env, cwd):
-    prompt = " ".join(args) or stdin
-    answer = call_my_llm(prompt)
-    return {"stdout": answer + "\n", "exitCode": 0}
-
-with Sandbox(extensions=[
-    Extension(
-        name="llm",
-        description="Query an LLM",
-        command=my_llm_handler,
-    ),
-    Extension(
-        name="vecdb",
-        description="Vector database search",
-        command=lambda args, **_: {"stdout": do_search(args), "exitCode": 0},
-        python_package=PythonPackage(
-            version="1.0.0",
-            summary="Vector database client",
-            files={
-                "__init__.py": (
-                    "from codepod_ext import call as _call\n"
-                    "def search(q): return _call('vecdb', 'search', query=q)\n"
-                ),
-            },
-        ),
-    ),
-]) as sb:
-    sb.commands.run("echo hello | llm")
-    sb.commands.run("pip list")
-```
-
-Extension commands receive `args`, `stdin`, `env`, and `cwd`. They return `stdout`, optional `stderr`, and `exitCode`. Commands support `--help` (returns the description), piped input, output redirection, and chaining with `&&`/`||`/`;`.
-
-Python packages are installed in the VFS at `/usr/lib/python/<name>/` and use the `codepod_ext` bridge module to call back to the host. Python package extensions require worker execution mode (`security.hardKill: true` in TypeScript) since the synchronous WASI fd bridge needs the main thread free to run async handlers.
-
-## Package manager
-
-Install WASI binaries into the sandbox at runtime. Packages run inside the WASM sandbox with the same security boundary as built-in coreutils.
-
-```typescript
-const sandbox = await Sandbox.create({
-  wasmDir: './wasm',
-  security: {
-    packagePolicy: {
-      enabled: true,
-      allowedHosts: ['trusted-registry.example.com'],
-      maxPackageBytes: 5 * 1024 * 1024,
-      maxInstalledPackages: 50,
-    },
-  },
-});
-
-await sandbox.run('pkg install https://trusted-registry.example.com/mytool.wasm');
-await sandbox.run('mytool --help');  // immediately available
-await sandbox.run('pkg list');        // show installed packages
-await sandbox.run('pkg remove mytool');
-```
-
-The package manager is disabled by default. Enable it with `packagePolicy.enabled: true`.
-
-**Python:**
-
-```python
-with Sandbox() as sb:
-    sb.commands.run("pkg install https://trusted-registry.example.com/mytool.wasm")
-    sb.commands.run("mytool --help")
-    sb.commands.run("pkg list")
-    sb.commands.run("pkg remove mytool")
-```
-
-Note: package policy configuration is set at the TypeScript orchestrator level. The Python SDK inherits the default policy (disabled).
-
-## State persistence
-
-Export and import the full sandbox state (filesystem + environment variables) as an opaque binary blob. Useful for long-running agent workflows that need to survive restarts.
-
-**Manual export/import:**
-
-```typescript
-// Save state
-const blob = sandbox.exportState();
-
-// Later, restore into a new sandbox
-const sandbox2 = await Sandbox.create({ wasmDir: './wasm' });
-sandbox2.importState(blob);
-```
-
-**Automatic persistence (persistent mode):**
-
-State is automatically saved to IndexedDB (browser) or filesystem (Node) with debounced writes:
-
-```typescript
-const sandbox = await Sandbox.create({
-  wasmDir: './wasm',
-  persistence: { mode: 'persistent', namespace: 'my-agent' },
-});
-
-// All VFS changes are auto-saved after a 1s debounce.
-// On next create() with the same namespace, state is auto-loaded.
-sandbox.writeFile('/tmp/work.txt', new TextEncoder().encode('progress'));
-
-// Clean up persisted state when done
-await sandbox.clearPersistedState();
-```
-
-**Session mode (manual save/load with backend):**
-
-```typescript
-const sandbox = await Sandbox.create({
-  wasmDir: './wasm',
-  persistence: { mode: 'session', namespace: 'my-session' },
-});
-
-// Explicitly save and load — no autosave
-await sandbox.saveState();
-await sandbox.loadState();
-```
-
-Persistence modes:
-- `ephemeral` (default) — no persistence, zero overhead
-- `session` — manual `saveState()`/`loadState()` with auto-detected backend
-- `persistent` — auto-load on create, debounced auto-save on VFS changes
-
-**Python:**
-
-```python
-# Export/import full state as an opaque binary blob
-blob = sb.export_state()
-
-sb2 = Sandbox()
-sb2.import_state(blob)
-# sb2 now has the same filesystem and environment as sb
-```
-
-Snapshots provide lightweight in-session save points (no serialization overhead):
-
-```python
-with Sandbox() as sb:
-    sb.files.write("/tmp/original.txt", b"hello")
-    snap_id = sb.snapshot()
-
-    sb.files.write("/tmp/original.txt", b"modified")
-    sb.restore(snap_id)
-    # /tmp/original.txt is back to "hello"
-```
-
-Fork creates an independent copy of the sandbox (shared RPC server, independent state):
-
-```python
-with Sandbox() as sb:
-    sb.files.write("/tmp/shared.txt", b"base state")
-
-    fork = sb.fork()
-    fork.commands.run("echo fork-only > /tmp/fork.txt")
-
-    # Original sandbox is unaffected
-    result = sb.commands.run("cat /tmp/fork.txt")
-    assert result.exit_code != 0  # file doesn't exist in parent
-
-    fork.destroy()  # clean up the forked sandbox
-```
-
-Virtual filesystems (`/dev`, `/proc`) are excluded from exports — they are regenerated automatically.
-
-## Command history
-
-The shell tracks command history for agent session introspection:
-
-```bash
-echo hello
-echo world
-history list    # shows all executed commands with indices
-history clear   # resets history
-```
-
-**Python:**
-
-```python
-with Sandbox() as sb:
-    sb.commands.run("echo hello")
-    sb.commands.run("echo world")
-    result = sb.commands.run("history list")
-    print(result.stdout)  # numbered list of executed commands
-
-    sb.commands.run("history clear")
-```
-
-Also available via the RPC API: `shell.history.list`, `shell.history.clear`.
-
-## Python API reference
-
-### `Sandbox`
-
-| Method / Property | Description |
-|---|---|
-| `Sandbox(*, timeout_ms, fs_limit_bytes, mounts, python_path, extensions)` | Create a new sandbox. Use as a context manager. |
-| `sb.commands.run(command) -> CommandResult` | Execute a shell command. |
-| `sb.files.read(path) -> bytes` | Read file contents. |
-| `sb.files.write(path, data)` | Write `bytes` or `str` to a file. |
-| `sb.files.list(path) -> list[FileInfo]` | List directory entries. |
-| `sb.files.stat(path) -> FileInfo` | Get file/directory metadata. |
-| `sb.files.mkdir(path)` | Create a directory. |
-| `sb.files.rm(path)` | Remove a file. |
-| `sb.mount(path, files)` | Mount host files at runtime. Accepts `dict` or `VirtualFileSystem`. |
-| `sb.snapshot() -> str` | Save VFS + env state. Returns snapshot ID. |
-| `sb.restore(snapshot_id)` | Restore to a previous snapshot. |
-| `sb.export_state() -> bytes` | Export full state as a binary blob. |
-| `sb.import_state(blob)` | Import a previously exported state. |
-| `sb.fork() -> Sandbox` | Create an independent forked sandbox. |
-| `sb.destroy()` | Destroy a forked sandbox. |
-| `sb.kill()` | Shut down the RPC server (root sandbox only). |
-
-### Data types
-
-```python
-from codepod import CommandResult, FileInfo, MemoryFS, VirtualFileSystem, FileStat, DirEntry, Extension, PythonPackage
-
-# CommandResult (returned by commands.run)
-result.stdout: str
-result.stderr: str
-result.exit_code: int
-result.execution_time_ms: float
-
-# FileInfo (returned by files.list, files.stat)
-info.name: str       # filename
-info.type: str       # "file" or "dir"
-info.size: int       # bytes (files) or entry count (dirs)
-
-# FileStat (used by VirtualFileSystem.stat)
-stat.type: str       # "file" or "dir"
-stat.size: int
-
-# DirEntry (used by VirtualFileSystem.readdir)
-entry.name: str
-entry.type: str      # "file" or "dir"
-```
-
-### `VirtualFileSystem`
-
-Subclass to implement custom file sources. All paths are relative to the mount point.
-
-| Method | Description |
-|---|---|
-| `read_file(path) -> bytes` | Read file. Raise `FileNotFoundError` if missing. |
-| `write_file(path, data)` | Write file. Raise `PermissionError` if read-only. |
-| `exists(path) -> bool` | Check existence. |
-| `stat(path) -> FileStat` | Return type and size. |
-| `readdir(path) -> list[DirEntry]` | List directory entries. |
-
-`MemoryFS` is a built-in implementation backed by a flat dict — see [Host mounts](#host-mounts) for examples.
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [TypeScript SDK](docs/guides/typescript-sdk.md) | Full TypeScript API, browser/Node setup, configuration |
+| [Python SDK](docs/guides/python-sdk.md) | Python API, file operations, error handling, VirtualFileSystem |
+| [Shell & Commands Reference](docs/guides/shell-reference.md) | All 95+ commands, shell features, virtual `/dev` and `/proc` |
+| [MCP Server](docs/guides/mcp-server.md) | Claude Code/Desktop setup, tools, configuration |
+| [Mounting Files](docs/guides/mounting-files.md) | Host mounts, MemoryFS, custom VirtualFileSystem implementations |
+| [Extensions](docs/guides/extensions.md) | Custom shell commands and Python packages backed by host handlers |
+| [Package Manager](docs/guides/package-manager.md) | Installing WASI binaries at runtime |
+| [State & Persistence](docs/guides/state-persistence.md) | Export/import, snapshots, fork, auto-persistence, command history |
+| [Security Architecture](docs/guides/security.md) | Threat model, sandbox boundaries, isolation guarantees, trust model |
 
 ## Architecture
 
@@ -662,38 +97,29 @@ Claude / MCP Client          Host Application
                               WebAssembly
 ```
 
-The MCP server (`packages/mcp-server`) wraps the orchestrator and exposes it over the [Model Context Protocol](https://modelcontextprotocol.io), so AI assistants like Claude can run shell commands, read/write files, and list directories in the sandbox with no integration code.
-
 The shell parser is written in Rust and compiled to WASI. It emits a JSON AST that the TypeScript orchestrator executes, managing the virtual filesystem, process lifecycle, and I/O plumbing. Coreutils are individual Rust binaries compiled to WASM. Python runs via RustPython (also compiled to WASI) sharing the same VFS.
+
+All command execution runs inside the WASM sandbox — no host process spawning. File I/O is in-memory VFS only. Networking is default-deny. See [Security Architecture](docs/guides/security.md) for the full threat model and isolation guarantees.
 
 ## Limitations
 
-- **No networking by default.** Network access is off and must be explicitly enabled with a domain allowlist.
-- **In-memory filesystem.** The VFS is in-memory (256 MB default, configurable). Use persistence modes or `exportState`/`importState` to persist across sessions.
-- **Sequential pipeline execution.** Pipeline stages run one at a time with buffered I/O rather than in parallel. This is correct but slower than a real shell for streaming workloads.
-- **Bash-compatible, not full POSIX.** Covers most scripting needs — control flow, functions, parameter expansion, here-docs, subshells, arithmetic. Missing: aliases, `trap`, job control (`&`, `fg`, `bg`), arrays, process substitution (`<(...)`), advanced file descriptor manipulation (`>&3`).
-- **No runtime pip install from PyPI.** `pip install` only works for host-registered extensions. There is no PyPI access — Python packages are either standard library or provided via extensions.
-- **Security is defense-in-depth, not formally audited.** Hard-kill timeout via `Worker.terminate()`, tool allowlist, output/memory limits, VFS isolation (no host filesystem access), network default-deny with domain allowlist, file count limits, command length limits, and session isolation are all implemented. Not yet pen-tested against adversarial untrusted input in production.
+- **No networking by default.** Must be explicitly enabled with a domain allowlist.
+- **In-memory filesystem.** Default 256 MB, configurable. Use persistence modes to survive restarts.
+- **Sequential pipeline execution.** Pipeline stages run one at a time with buffered I/O.
+- **Bash-compatible, not full POSIX.** Covers most scripting needs. Missing: aliases, `trap`, job control, arrays, process substitution.
+- **No runtime pip install from PyPI.** Python packages are standard library or provided via extensions.
+- **Not formally audited.** Defense-in-depth security is implemented but not yet pen-tested.
 
 ## Development
 
-Requires [Bun](https://bun.sh) (runtime, bundler, and test runner) and a Rust toolchain with the `wasm32-wasip1` target.
+Requires [Deno](https://deno.com) (runtime + test runner) and a Rust toolchain with the `wasm32-wasip1` target. Deno is required because codepod uses [JSPI](https://v8.dev/blog/jspi) (`WebAssembly.Suspending`/`WebAssembly.promising`) to let WASM code call async host functions — Bun does not support JSPI.
 
 ```bash
-# Install dependencies
-bun install
-
-# Build everything (Rust WASM + TypeScript)
-make build
-
-# Run tests
-make test
-
-# Package for npm
-make npm
-
-# Package Python wheel (for current platform)
-make wheel
+deno install       # install dependencies
+make build         # build everything (Rust WASM + TypeScript)
+deno test -A --no-check packages/orchestrator packages/sdk-server packages/mcp-server
+make npm           # package for npm
+make wheel         # package Python wheel (current platform)
 ```
 
 ## Related projects
@@ -725,7 +151,7 @@ The key architectural difference: lifo implements commands in JavaScript against
 | **Execution model** | WASM binaries under WASI host | JS functions against browser APIs |
 | **Process isolation** | Each command is an isolated WASM instance with its own linear memory | Shared JS thread, no memory isolation between commands |
 | **Security boundary** | WASM sandbox + WASI syscall interception + configurable policies (tool allowlist, output limits, memory limits, hard-kill) | Browser sandbox only — "not for high-security sandboxing" per their docs |
-| **Server-side** | Yes (Bun/Node.js with Worker-based hard-kill) | Browser-only |
+| **Server-side** | Yes (Deno/Node.js with Worker-based hard-kill) | Browser-only |
 | **Python** | Full Python 3 via RustPython WASI | None |
 | **Persistence** | In-memory VFS with snapshot/restore/fork, export/import, and auto-persist to IndexedDB or filesystem | IndexedDB-backed VFS |
 | **Networking** | Opt-in with domain allowlist, sync bridge for WASI | Browser fetch (no policy layer) |
