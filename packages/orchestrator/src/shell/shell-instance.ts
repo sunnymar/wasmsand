@@ -197,12 +197,114 @@ export class ShellInstance implements ShellLike {
         view.setUint32(sizePtr, 0, true);
         return 0;
       },
-      fd_write: (_fd: number, _iovPtr: number, _iovLen: number, nwrittenPtr: number) => {
-        const view = new DataView(getMemory().buffer);
-        view.setUint32(nwrittenPtr, 0, true);
+      fd_write: (fd: number, iovPtr: number, iovLen: number, nwrittenPtr: number): number => {
+        const mem = getMemory();
+        const view = new DataView(mem.buffer);
+        const bytes = new Uint8Array(mem.buffer);
+        const target = kernel.getFdTarget(0, fd);
+        if (!target) {
+          // Unknown fd — return 0 bytes written (backward-compat for fds 0-2)
+          view.setUint32(nwrittenPtr, 0, true);
+          return 0;
+        }
+        let totalWritten = 0;
+        for (let i = 0; i < iovLen; i++) {
+          const buf = view.getUint32(iovPtr + i * 8, true);
+          const len = view.getUint32(iovPtr + i * 8 + 4, true);
+          const data = bytes.slice(buf, buf + len);
+          switch (target.type) {
+            case 'pipe_write': {
+              const n = target.pipe.write(data);
+              if (n === -1) {
+                // EPIPE
+                const v2 = new DataView(getMemory().buffer);
+                v2.setUint32(nwrittenPtr, totalWritten, true);
+                return 76; // WASI_EPIPE
+              }
+              totalWritten += n;
+              break;
+            }
+            case 'buffer': {
+              if (target.total < target.limit) {
+                const remaining = target.limit - target.total;
+                const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
+                target.buf.push(slice);
+                if (data.byteLength > remaining) target.truncated = true;
+              } else {
+                target.truncated = true;
+              }
+              target.total += data.byteLength;
+              totalWritten += data.byteLength;
+              break;
+            }
+            case 'null':
+              totalWritten += data.byteLength;
+              break;
+            default:
+              // pipe_read, static — can't write
+              view.setUint32(nwrittenPtr, totalWritten, true);
+              return 8; // WASI_EBADF
+          }
+        }
+        const v2 = new DataView(getMemory().buffer);
+        v2.setUint32(nwrittenPtr, totalWritten, true);
         return 0;
       },
-      fd_read: () => 0,
+      fd_read: async (fd: number, iovPtr: number, iovLen: number, nreadPtr: number): Promise<number> => {
+        const mem = getMemory();
+        const view = new DataView(mem.buffer);
+        const target = kernel.getFdTarget(0, fd);
+        if (!target) {
+          view.setUint32(nreadPtr, 0, true);
+          return 0;
+        }
+        let totalRead = 0;
+        for (let i = 0; i < iovLen; i++) {
+          const buf = view.getUint32(iovPtr + i * 8, true);
+          const len = view.getUint32(iovPtr + i * 8 + 4, true);
+          switch (target.type) {
+            case 'pipe_read': {
+              const readBuf = new Uint8Array(len);
+              const n = await target.pipe.read(readBuf);
+              if (n > 0) {
+                const bytes = new Uint8Array(getMemory().buffer);
+                bytes.set(readBuf.subarray(0, n), buf);
+                totalRead += n;
+              }
+              if (n < len) {
+                // EOF or short read — stop
+                const v2 = new DataView(getMemory().buffer);
+                v2.setUint32(nreadPtr, totalRead, true);
+                return 0;
+              }
+              continue;
+            }
+            case 'static': {
+              if (target.offset >= target.data.byteLength) break;
+              const remaining = target.data.byteLength - target.offset;
+              const toRead = Math.min(len, remaining);
+              const bytes = new Uint8Array(getMemory().buffer);
+              bytes.set(target.data.subarray(target.offset, target.offset + toRead), buf);
+              target.offset += toRead;
+              totalRead += toRead;
+              if (toRead < len) {
+                const v2 = new DataView(getMemory().buffer);
+                v2.setUint32(nreadPtr, totalRead, true);
+                return 0;
+              }
+              continue;
+            }
+            case 'null':
+              break;
+            default:
+              return 8; // WASI_EBADF
+          }
+          break; // EOF from null/static
+        }
+        const v2 = new DataView(getMemory().buffer);
+        v2.setUint32(nreadPtr, totalRead, true);
+        return 0;
+      },
       fd_close: () => 0,
       fd_seek: () => 0,
       fd_prestat_get: () => 8, // EBADF - no preopens
@@ -566,6 +668,7 @@ function spawnAsyncProcess(
 ): number {
   const pid = kernel.allocPid();
   kernel.initProcess(pid);
+  kernel.registerPending(pid);
 
   const module = mgr.getModule(req.prog);
   if (!module) return -1;
@@ -635,10 +738,10 @@ function spawnAsyncProcess(
       }
 
       const promise = Promise.resolve().then(() => startFn()).catch(() => {});
-      kernel.registerProcess(pid, promise, host);
+      kernel.attachProcess(pid, promise, host);
     }).catch(() => {
-      // If instantiation fails, register as immediately exited
-      kernel.registerProcess(pid, Promise.resolve(), host);
+      // If instantiation fails, attach as immediately exited
+      kernel.attachProcess(pid, Promise.resolve(), host);
     });
   } else {
     // Module doesn't need codepod imports — simpler path
@@ -651,9 +754,9 @@ function spawnAsyncProcess(
       }
 
       const promise = Promise.resolve().then(() => startFn()).catch(() => {});
-      kernel.registerProcess(pid, promise, host);
+      kernel.attachProcess(pid, promise, host);
     }).catch(() => {
-      kernel.registerProcess(pid, Promise.resolve(), host);
+      kernel.attachProcess(pid, Promise.resolve(), host);
     });
   }
 

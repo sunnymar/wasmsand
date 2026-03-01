@@ -493,13 +493,18 @@ export class WasiHost {
     iovsPtr: number,
     iovsLen: number,
     nreadPtr: number,
-  ): number {
+  ): number | Promise<number> {
     this.checkDeadline();
     const view = this.getView();
     const iovecs = readIovecs(view, iovsPtr, iovsLen);
 
     let totalRead = 0;
     const target = this.ioFds.get(fd);
+
+    // If the target is a pipe_read, use the async path (JSPI suspends WASM).
+    if (target && target.type === 'pipe_read') {
+      return this.fdReadPipe(target, iovecs, nreadPtr);
+    }
 
     for (const iov of iovecs) {
       if (target) {
@@ -523,12 +528,6 @@ export class WasiHost {
             }
             continue;
           }
-          case 'pipe_read': {
-            // Sync stub — returns EOF. Real async pipe reading via JSPI in Task 8.
-            const viewAfter = this.getView();
-            viewAfter.setUint32(nreadPtr, totalRead, true);
-            return WASI_ESUCCESS;
-          }
           case 'null': {
             // /dev/null reads return EOF immediately
             break;
@@ -538,6 +537,8 @@ export class WasiHost {
             // Cannot read from a write-only target
             return WASI_EBADF;
           }
+          default:
+            break;
         }
         // If we got here via break (EOF from static or null), stop iovecs
         break;
@@ -560,6 +561,31 @@ export class WasiHost {
       }
     }
 
+    const viewAfter = this.getView();
+    viewAfter.setUint32(nreadPtr, totalRead, true);
+    return WASI_ESUCCESS;
+  }
+
+  /** Async pipe read — returns a Promise so JSPI can suspend the WASM stack. */
+  private async fdReadPipe(
+    target: Extract<import('./fd-target.js').FdTarget, { type: 'pipe_read' }>,
+    iovecs: Array<{ buf: number; len: number }>,
+    nreadPtr: number,
+  ): Promise<number> {
+    let totalRead = 0;
+    for (const iov of iovecs) {
+      const readBuf = new Uint8Array(iov.len);
+      const n = await target.pipe.read(readBuf);
+      if (n > 0) {
+        const bytes = this.getBytes();
+        bytes.set(readBuf.subarray(0, n), iov.buf);
+        totalRead += n;
+      }
+      if (n < iov.len) {
+        // EOF or short read — stop
+        break;
+      }
+    }
     const viewAfter = this.getView();
     viewAfter.setUint32(nreadPtr, totalRead, true);
     return WASI_ESUCCESS;

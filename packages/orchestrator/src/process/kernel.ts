@@ -7,9 +7,10 @@ export interface SpawnRequest {
   args: string[];
   env: [string, string][];
   cwd: string;
-  stdinFd: number;
-  stdoutFd: number;
-  stderrFd: number;
+  // snake_case to match JSON from Rust's serde_json
+  stdin_fd: number;
+  stdout_fd: number;
+  stderr_fd: number;
 }
 
 export interface ProcessEntry {
@@ -63,13 +64,37 @@ export class ProcessKernel {
     const callerFdTable = this.fdTables.get(callerPid);
     if (!callerFdTable) throw new Error(`No fd table for caller pid ${callerPid}`);
     const newFdTable = new Map<number, FdTarget>();
-    const stdinTarget = callerFdTable.get(req.stdinFd);
+    const stdinTarget = callerFdTable.get(req.stdin_fd);
     if (stdinTarget) newFdTable.set(0, stdinTarget);
-    const stdoutTarget = callerFdTable.get(req.stdoutFd);
+    const stdoutTarget = callerFdTable.get(req.stdout_fd);
     if (stdoutTarget) newFdTable.set(1, stdoutTarget);
-    const stderrTarget = callerFdTable.get(req.stderrFd);
+    const stderrTarget = callerFdTable.get(req.stderr_fd);
     if (stderrTarget) newFdTable.set(2, stderrTarget);
     return newFdTable;
+  }
+
+  /** Pre-register a process entry so waitpid can find it before async instantiation completes. */
+  registerPending(pid: number): void {
+    if (!this.processTable.has(pid)) {
+      this.processTable.set(pid, {
+        pid, promise: null, exitCode: -1, state: 'running', wasiHost: null, waiters: [],
+      });
+    }
+  }
+
+  /** Attach a running promise and WasiHost to a previously registered pending process. */
+  attachProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost): void {
+    const entry = this.processTable.get(pid);
+    if (!entry) return;
+    entry.promise = promise;
+    entry.wasiHost = wasiHost;
+    const onExit = () => {
+      entry.state = 'exited';
+      entry.exitCode = wasiHost.getExitCode() ?? 0;
+      for (const waiter of entry.waiters) waiter(entry.exitCode);
+      entry.waiters.length = 0;
+    };
+    promise.then(onExit, onExit);
   }
 
   registerProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost): void {
@@ -101,9 +126,12 @@ export class ProcessKernel {
     const fdTable = this.fdTables.get(pid);
     if (!fdTable) return;
     const target = fdTable.get(fd);
-    if (!target) return;
-    if (target.type === 'pipe_read') target.pipe.close();
-    else if (target.type === 'pipe_write') target.pipe.close();
+    if (!target) { fdTable.delete(fd); return; }
+    // Only close pipe_write ends (signals EOF to readers).
+    // Pipe_read ends are shared with child processes and must not be
+    // closed from the parent — the child still needs them. They are
+    // cleaned up when all referencing processes exit (dispose).
+    if (target.type === 'pipe_write') target.pipe.close();
     fdTable.delete(fd);
   }
 
