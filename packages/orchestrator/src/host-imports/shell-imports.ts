@@ -313,7 +313,11 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
       try {
         vfs.chmod(path, mode);
         return 0;
-      } catch {
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : '';
+        if (msg.includes('ENOENT') || msg.includes('no such file')) {
+          return ERR_NOT_FOUND;
+        }
         return ERR_IO;
       }
     },

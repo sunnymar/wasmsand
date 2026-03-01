@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, beforeEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 
 import { ProcessManager } from '../manager.js';

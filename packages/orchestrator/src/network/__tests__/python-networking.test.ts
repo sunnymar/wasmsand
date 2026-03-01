@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, beforeAll, afterAll } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { Sandbox } from '../../sandbox.js';
 import { NodeAdapter } from '../../platform/node-adapter.js';
@@ -12,13 +13,14 @@ const PYTHON_WASM = resolve(WASM_DIR, 'python3.wasm');
 // Skip all tests if python3.wasm is not available
 const hasPython = existsSync(PYTHON_WASM);
 
-let serverProcess: ChildProcess;
-let serverPort: number;
+describe('Python networking via socket shim', { sanitizeOps: false, sanitizeResources: false }, () => {
+  let serverProcess: ChildProcess;
+  let serverPort: number;
 
-beforeAll(async () => {
-  if (!hasPython) return;
+  beforeAll(async () => {
+    if (!hasPython) return;
 
-  const serverScript = `
+    const serverScript = `
     const http = require('node:http');
     const server = http.createServer((req, res) => {
       let body = '';
@@ -43,34 +45,33 @@ beforeAll(async () => {
     });
   `;
 
-  serverProcess = spawn(process.execPath, ['-e', serverScript], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-
-  serverPort = await new Promise<number>((resolve, reject) => {
-    let output = '';
-    serverProcess.stdout!.on('data', (chunk: Buffer) => {
-      output += chunk.toString();
-      for (const line of output.split('\n')) {
-        if (line.trim()) {
-          try {
-            const info = JSON.parse(line.trim());
-            if (info.port) { resolve(info.port); return; }
-          } catch {}
-        }
-      }
+    serverProcess = spawn(process.execPath, ['-e', serverScript], {
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    serverProcess.on('error', reject);
-    setTimeout(() => reject(new Error('Timeout waiting for test server')), 5000);
+
+    serverPort = await new Promise<number>((resolve, reject) => {
+      let output = '';
+      serverProcess.stdout!.on('data', (chunk: Buffer) => {
+        output += chunk.toString();
+        for (const line of output.split('\n')) {
+          if (line.trim()) {
+            try {
+              const info = JSON.parse(line.trim());
+              if (info.port) { resolve(info.port); return; }
+            } catch {}
+          }
+        }
+      });
+      serverProcess.on('error', reject);
+      setTimeout(() => reject(new Error('Timeout waiting for test server')), 5000);
+    });
   });
-});
 
-afterAll(() => {
-  serverProcess?.kill();
-});
+  afterAll(() => {
+    serverProcess?.kill();
+  });
 
-describe('Python networking via socket shim', () => {
-  it.skipIf(!hasPython)('GET request via urllib', async () => {
+  it('GET request via urllib', { ignore: !hasPython }, async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
@@ -94,7 +95,7 @@ print(resp.read().decode())
     }
   }, 60_000);
 
-  it.skipIf(!hasPython)('GET request via http.client', async () => {
+  it('GET request via http.client', { ignore: !hasPython }, async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
@@ -121,7 +122,7 @@ conn.close()
     }
   }, 60_000);
 
-  it.skipIf(!hasPython)('POST request with body', async () => {
+  it('POST request with body', { ignore: !hasPython }, async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
@@ -151,7 +152,7 @@ print(data['body'])
     }
   }, 60_000);
 
-  it.skipIf(!hasPython)('blocked host returns error', async () => {
+  it('blocked host returns error', { ignore: !hasPython }, async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
@@ -177,7 +178,7 @@ except Exception as e:
     }
   }, 60_000);
 
-  it.skipIf(!hasPython)('no networking without network config', async () => {
+  it('no networking without network config', { ignore: !hasPython }, async () => {
     const sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),

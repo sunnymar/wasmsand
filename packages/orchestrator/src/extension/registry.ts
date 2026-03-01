@@ -36,6 +36,10 @@ export class ExtensionRegistry {
     if (!ext?.command) {
       throw new Error(`Extension "${name}" not found or has no command handler`);
     }
+    // Intercept --help: return the extension's description if available
+    if (input.args.includes('--help') && ext.description) {
+      return { stdout: ext.description + '\n', exitCode: 0 };
+    }
     return ext.command(input);
   }
 }

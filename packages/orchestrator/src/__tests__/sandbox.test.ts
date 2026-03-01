@@ -4,7 +4,8 @@
  * Exercises the full public API: create, run, file operations, env,
  * destroy, timeout, and VFS size limits.
  */
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
@@ -342,11 +343,12 @@ describe('Sandbox', () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
         adapter: new NodeAdapter(),
-        security: { limits: { fileCount: 30 } },
+        security: { limits: { fileCount: 200 } },
       });
-      // Default layout creates some inodes; try to fill up to limit
+      // Default layout creates ~103 inodes (9 dirs + 89 tools + config);
+      // try to fill up the remaining allocation
       let threw = false;
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 200; i++) {
         try {
           sandbox.writeFile(`/tmp/f${i}.txt`, new TextEncoder().encode('x'));
         } catch {

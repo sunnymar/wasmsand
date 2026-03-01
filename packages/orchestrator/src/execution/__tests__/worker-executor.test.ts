@@ -1,4 +1,5 @@
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { WorkerExecutor } from '../worker-executor.js';
 import { VFS } from '../../vfs/vfs.js';

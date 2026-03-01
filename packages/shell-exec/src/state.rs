@@ -30,6 +30,16 @@ pub struct ShellState {
     pub rng_seed: u64,
     /// Set by ${var:?msg} expansion to signal an error to the executor.
     pub param_error: Option<String>,
+    /// Stdin data for compound commands in a pipeline.
+    pub pipeline_stdin: Option<String>,
+    /// Set of variable names marked as readonly.
+    pub readonly_vars: HashSet<String>,
+    /// Directory stack for pushd/popd.
+    pub dir_stack: Vec<String>,
+    /// Captured groups from last `[[ ... =~ ... ]]` regex match.
+    pub bash_rematch: Vec<String>,
+    /// Counter for generating unique process substitution temp file paths.
+    pub proc_sub_counter: u32,
 }
 
 impl ShellState {
@@ -58,6 +68,11 @@ impl ShellState {
             cwd: "/home/user".into(),
             rng_seed: 12345, // deterministic default; host can override
             param_error: None,
+            pipeline_stdin: None,
+            readonly_vars: HashSet::new(),
+            dir_stack: Vec::new(),
+            bash_rematch: Vec::new(),
+            proc_sub_counter: 0,
         }
     }
 

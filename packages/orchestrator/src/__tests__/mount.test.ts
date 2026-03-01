@@ -1,7 +1,8 @@
 /**
  * Integration tests for the VFS mount system and PYTHONPATH configuration.
  */
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
@@ -163,7 +164,7 @@ describe('mounts', () => {
   });
 });
 
-describe('pythonPath', () => {
+describe('pythonPath', { sanitizeOps: false, sanitizeResources: false }, () => {
   let sandbox: Sandbox;
 
   afterEach(() => {

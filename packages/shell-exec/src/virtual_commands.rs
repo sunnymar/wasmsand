@@ -704,14 +704,14 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                 // Extension-provided package — already available
                 continue;
             }
-            let available: Vec<&str> = registry.iter().map(|p| p.name.as_str()).collect();
-            return RunResult::error(
-                1,
-                format!(
-                    "pip install: package '{name}' not found in registry\nAvailable: {}\n",
-                    available.join(", ")
+            return RunResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: format!(
+                    "ERROR: Could not find a version that satisfies the requirement {name}\n"
                 ),
-            );
+                execution_time_ms: 0,
+            };
         }
 
         let deps = resolve_deps(&registry, name);
@@ -875,15 +875,26 @@ fn pip_show(host: &dyn HostInterface, args: &[String]) -> RunResult {
         ));
     }
 
-    // Check extensions
+    // Check extensions — also try listing files from VFS
     if let Some(ext) = extensions.iter().find(|e| e.name == *name) {
         if let Some(ref py) = ext.python_package {
-            return RunResult::success(format!(
+            let mut out = format!(
                 "Name: {}\nVersion: {}\nSummary: {}\nStatus: available\n",
                 ext.name,
                 py.version,
                 py.summary.as_deref().unwrap_or("")
-            ));
+            );
+            // List files in the package directory
+            let pkg_dir = format!("/usr/lib/python/{}", ext.name);
+            if let Ok(files) = host.readdir(&pkg_dir) {
+                if !files.is_empty() {
+                    out.push_str("Files:\n");
+                    for f in &files {
+                        out.push_str(&format!("  {f}\n"));
+                    }
+                }
+            }
+            return RunResult::success(out);
         }
     }
 

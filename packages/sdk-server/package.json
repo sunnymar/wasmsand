@@ -7,7 +7,7 @@
     "codepod-server": "dist/server.js"
   },
   "scripts": {
-    "test": "bun test",
+    "test": "deno test -A --no-check",
     "build": "tsup src/server.ts --format esm --dts"
   },
   "dependencies": {

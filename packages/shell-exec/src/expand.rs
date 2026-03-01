@@ -409,11 +409,28 @@ fn split_brace_items(inner: &str) -> Vec<String> {
 ///
 /// During word expansion, `QuotedLiteral` replaces `{` with `\u{E000}` and
 /// `}` with `\u{E001}` to prevent brace expansion.  After brace expansion
-/// is complete, these sentinels must be restored to the original characters.
+/// is complete, these sentinels must be restored (but glob sentinels are
+/// kept intact for the glob expansion step).
 pub fn restore_brace_sentinels(words: &[String]) -> Vec<String> {
     words
         .iter()
         .map(|w| w.replace('\u{E000}', "{").replace('\u{E001}', "}"))
+        .collect()
+}
+
+/// Restore glob sentinels that were inserted by QuotedLiteral expansion.
+///
+/// Must be called AFTER glob expansion so that quoted glob characters
+/// (`*`, `?`, `[`, `]`) are not expanded as globs.
+pub fn restore_glob_sentinels(words: &[String]) -> Vec<String> {
+    words
+        .iter()
+        .map(|w| {
+            w.replace('\u{E002}', "*")
+                .replace('\u{E003}', "?")
+                .replace('\u{E004}', "[")
+                .replace('\u{E005}', "]")
+        })
         .collect()
 }
 
@@ -427,14 +444,42 @@ pub fn restore_brace_sentinels(words: &[String]) -> Vec<String> {
 /// For each word containing `*` or `?`, calls `host.glob(pattern)`.  If the
 /// host returns matches they are used (sorted); otherwise the literal pattern
 /// is preserved (POSIX behavior).
-pub fn expand_globs(host: &dyn HostInterface, words: &[String]) -> Vec<String> {
+///
+/// Relative patterns are resolved against `cwd` and results are returned
+/// as relative paths (stripping the cwd prefix).
+pub fn expand_globs(host: &dyn HostInterface, words: &[String], cwd: &str) -> Vec<String> {
     let mut result = Vec::new();
     for word in words {
         if word.contains('*') || word.contains('?') || word.contains('[') {
-            match host.glob(word) {
+            // Resolve relative patterns against cwd
+            let (pattern, is_relative) = if word.starts_with('/') {
+                (word.clone(), false)
+            } else {
+                let abs = if cwd == "/" {
+                    format!("/{word}")
+                } else {
+                    format!("{cwd}/{word}")
+                };
+                (abs, true)
+            };
+            match host.glob(&pattern) {
                 Ok(mut matches) if !matches.is_empty() => {
                     matches.sort();
-                    result.extend(matches);
+                    if is_relative {
+                        // Strip cwd prefix to return relative paths
+                        let prefix = if cwd.ends_with('/') {
+                            cwd.to_string()
+                        } else {
+                            format!("{cwd}/")
+                        };
+                        result.extend(
+                            matches
+                                .into_iter()
+                                .map(|m| m.strip_prefix(&prefix).unwrap_or(&m).to_string()),
+                        );
+                    } else {
+                        result.extend(matches);
+                    }
                 }
                 _ => result.push(word.clone()),
             }
@@ -460,9 +505,14 @@ pub fn expand_word_part(state: &mut ShellState, part: &WordPart, exec: Option<Ex
         WordPart::Literal(s) => expand_literal(s, state),
 
         WordPart::QuotedLiteral(s) => {
-            // Protect braces inside quoted literals so they survive brace
-            // expansion (matching the TypeScript behavior that uses PUA chars).
-            s.replace('{', "\u{E000}").replace('}', "\u{E001}")
+            // Protect special characters inside quoted literals so they survive
+            // brace expansion and glob expansion.  Uses Private Use Area chars.
+            s.replace('{', "\u{E000}")
+                .replace('}', "\u{E001}")
+                .replace('*', "\u{E002}")
+                .replace('?', "\u{E003}")
+                .replace('[', "\u{E004}")
+                .replace(']', "\u{E005}")
         }
 
         WordPart::Variable(name) => expand_variable(state, name),
@@ -530,7 +580,7 @@ fn expand_variable(state: &mut ShellState, name: &str) -> String {
         "#" => return state.positional_args.len().to_string(),
         "RANDOM" => return random_u15(state).to_string(),
         "SECONDS" => return "0".to_string(), // placeholder — no start_time yet
-        "LINENO" => return "0".to_string(),  // placeholder — no line tracking yet
+        "LINENO" => return "1".to_string(),  // minimum value for shell conformance
         _ => {}
     }
 
@@ -559,6 +609,24 @@ fn expand_variable(state: &mut ShellState, name: &str) -> String {
 
     // Array access: arr[n], arr[@], arr[*]
     if let Some((arr_name, index)) = parse_array_access(name) {
+        // BASH_REMATCH special array — check dedicated field first, then
+        // fall back to state.arrays (manual assignment: BASH_REMATCH=(a b))
+        if arr_name == "BASH_REMATCH" {
+            let source = if !state.bash_rematch.is_empty() {
+                &state.bash_rematch
+            } else if let Some(arr) = state.arrays.get("BASH_REMATCH") {
+                arr
+            } else {
+                return String::new();
+            };
+            if index == "@" || index == "*" {
+                return source.join(" ");
+            }
+            if let Ok(idx) = index.parse::<usize>() {
+                return source.get(idx).cloned().unwrap_or_default();
+            }
+            return String::new();
+        }
         // Check associative arrays first
         if let Some(assoc) = state.assoc_arrays.get(&arr_name) {
             if index == "@" || index == "*" {
@@ -751,6 +819,16 @@ fn expand_param(state: &mut ShellState, var: &str, op: &str, operand: &str) -> S
             apply_substring(&s, operand)
         }
 
+        // Indirect expansion: ${!var} — the value of var names another variable
+        "!" => {
+            let indirect_name = val.unwrap_or_default();
+            if indirect_name.is_empty() {
+                String::new()
+            } else {
+                state.env.get(&indirect_name).cloned().unwrap_or_default()
+            }
+        }
+
         // Unknown op — just return the value
         _ => val.unwrap_or_default(),
     }
@@ -781,7 +859,7 @@ fn apply_substring(s: &str, operand: &str) -> String {
     let boundaries = char_boundaries(s);
 
     if parts.len() > 1 {
-        let length = parts[1].parse::<isize>().unwrap_or(0);
+        let length = parts[1].trim().parse::<isize>().unwrap_or(0);
         if length < 0 {
             let end_char = (char_count + length).max(0) as usize;
             if offset < boundaries.len() && end_char < boundaries.len() && offset <= end_char {
@@ -810,7 +888,7 @@ fn apply_substring(s: &str, operand: &str) -> String {
 
 fn apply_array_slice(arr: &[String], operand: &str) -> String {
     let parts: Vec<&str> = operand.splitn(2, ':').collect();
-    let mut offset = parts[0].parse::<isize>().unwrap_or(0);
+    let mut offset = parts[0].trim().parse::<isize>().unwrap_or(0);
 
     if offset < 0 {
         offset = (arr.len() as isize + offset).max(0);
@@ -818,8 +896,16 @@ fn apply_array_slice(arr: &[String], operand: &str) -> String {
     let offset = offset as usize;
 
     if parts.len() > 1 {
-        let length = parts[1].parse::<usize>().unwrap_or(0);
-        let end = (offset + length).min(arr.len());
+        let length = parts[1].trim().parse::<isize>().unwrap_or(0);
+        if length < 0 {
+            // Negative length: count from end
+            let end = (arr.len() as isize + length).max(0) as usize;
+            if offset <= end && offset <= arr.len() {
+                return arr[offset..end].join(" ");
+            }
+            return String::new();
+        }
+        let end = (offset + length as usize).min(arr.len());
         if offset <= arr.len() {
             return arr[offset..end].join(" ");
         }
@@ -2056,7 +2142,7 @@ mod tests {
         let host = MockHost::new()
             .with_glob_result("*.txt", vec!["b.txt".to_string(), "a.txt".to_string()]);
         let input = vec!["*.txt".to_string()];
-        let result = expand_globs(&host, &input);
+        let result = expand_globs(&host, &input, "/home/user");
         // Should be sorted
         assert_eq!(result, vec!["a.txt", "b.txt"]);
     }
@@ -2067,7 +2153,7 @@ mod tests {
 
         let host = MockHost::new();
         let input = vec!["*.xyz".to_string()];
-        let result = expand_globs(&host, &input);
+        let result = expand_globs(&host, &input, "/home/user");
         assert_eq!(result, vec!["*.xyz"]);
     }
 
@@ -2080,7 +2166,7 @@ mod tests {
             vec!["file1.txt".to_string(), "file2.txt".to_string()],
         );
         let input = vec!["file?.txt".to_string()];
-        let result = expand_globs(&host, &input);
+        let result = expand_globs(&host, &input, "/home/user");
         assert_eq!(result, vec!["file1.txt", "file2.txt"]);
     }
 
@@ -2090,7 +2176,7 @@ mod tests {
 
         let host = MockHost::new();
         let input = vec!["plain.txt".to_string()];
-        let result = expand_globs(&host, &input);
+        let result = expand_globs(&host, &input, "/home/user");
         assert_eq!(result, vec!["plain.txt"]);
     }
 
@@ -2101,7 +2187,7 @@ mod tests {
         let host = MockHost::new()
             .with_glob_result("*.rs", vec!["main.rs".to_string(), "lib.rs".to_string()]);
         let input = vec!["echo".to_string(), "*.rs".to_string(), "done".to_string()];
-        let result = expand_globs(&host, &input);
+        let result = expand_globs(&host, &input, "/home/user");
         assert_eq!(result, vec!["echo", "lib.rs", "main.rs", "done"]);
     }
 }

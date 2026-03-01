@@ -75,8 +75,11 @@ pub fn try_builtin(
         "mapfile" | "readarray" => Some(builtin_mapfile(state, args, stdin_data)),
         "chmod" => Some(builtin_chmod(state, host, args)),
         "date" => Some(builtin_date(host, args)),
-        "exec" => builtin_exec(args),
+        "exec" => Some(builtin_exec_cmd(state, host, args, stdin_data, run)),
         "readonly" => Some(builtin_readonly(state, args)),
+        "pushd" => Some(builtin_pushd(state, host, args)),
+        "popd" => Some(builtin_popd(state)),
+        "dirs" => Some(builtin_dirs(state)),
         _ => None,
     }
 }
@@ -119,6 +122,9 @@ pub fn is_builtin(cmd_name: &str) -> bool {
             | "date"
             | "exec"
             | "readonly"
+            | "pushd"
+            | "popd"
+            | "dirs"
     )
 }
 
@@ -405,7 +411,12 @@ fn format_printf(format: &str, args: &[String]) -> String {
 // -- pwd ------------------------------------------------------------------
 
 fn builtin_pwd(state: &ShellState) -> BuiltinResult {
-    BuiltinResult::Result(RunResult::success(format!("{}\n", state.cwd)))
+    let cwd = state
+        .env
+        .get("PWD")
+        .map(|s| s.as_str())
+        .unwrap_or(&state.cwd);
+    BuiltinResult::Result(RunResult::success(format!("{}\n", cwd)))
 }
 
 // -- cd -------------------------------------------------------------------
@@ -677,6 +688,8 @@ fn builtin_declare(state: &mut ShellState, args: &[String]) -> BuiltinResult {
 
     if is_print {
         let mut output = String::new();
+        let mut stderr = String::new();
+        let mut exit_code = 0;
         for arg in &assignments {
             if let Some(val) = state.env.get(*arg) {
                 output.push_str(&format!("declare -- {}=\"{}\"\n", arg, val));
@@ -694,6 +707,9 @@ fn builtin_declare(state: &mut ShellState, args: &[String]) -> BuiltinResult {
                     .collect();
                 items.sort();
                 output.push_str(&format!("declare -A {}=({})\n", arg, items.join(" ")));
+            } else {
+                stderr.push_str(&format!("declare: {}: not found\n", arg));
+                exit_code = 1;
             }
         }
         if assignments.is_empty() {
@@ -704,7 +720,12 @@ fn builtin_declare(state: &mut ShellState, args: &[String]) -> BuiltinResult {
                 output.push_str(&format!("declare -- {}=\"{}\"\n", k, v));
             }
         }
-        return BuiltinResult::Result(RunResult::success(output));
+        return BuiltinResult::Result(RunResult {
+            exit_code,
+            stdout: output,
+            stderr,
+            execution_time_ms: 0,
+        });
     }
 
     for arg in assignments {
@@ -956,11 +977,14 @@ fn builtin_read(state: &mut ShellState, args: &[String], stdin_data: &str) -> Bu
     let mut array_mode = false;
     let mut array_name = String::new();
     let mut var_names: Vec<String> = Vec::new();
-
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-r" => raw = true,
+            "-p" => {
+                // -p prompt: skip the prompt string (no tty output)
+                i += 1; // skip the prompt string
+            }
             "-d" => {
                 i += 1;
                 if i < args.len() && !args[i].is_empty() {
@@ -987,21 +1011,46 @@ fn builtin_read(state: &mut ShellState, args: &[String], stdin_data: &str) -> Bu
         i += 1;
     }
 
+    // Determine effective stdin: use pipeline_stdin if available, else use redirect stdin
+    let use_pipeline = stdin_data.is_empty() && state.pipeline_stdin.is_some();
+    let effective_stdin: String = if use_pipeline {
+        state.pipeline_stdin.clone().unwrap_or_default()
+    } else {
+        stdin_data.to_string()
+    };
+
     // Read input
     let input = if let Some(n) = nchars {
-        let byte_end = stdin_data
+        let byte_end = effective_stdin
             .char_indices()
             .nth(n)
             .map(|(i, _)| i)
-            .unwrap_or(stdin_data.len());
-        &stdin_data[..byte_end]
+            .unwrap_or(effective_stdin.len());
+        &effective_stdin[..byte_end]
     } else {
         // Read up to delimiter
-        match stdin_data.find(delimiter) {
-            Some(pos) => &stdin_data[..pos],
-            None => stdin_data,
+        match effective_stdin.find(delimiter) {
+            Some(pos) => &effective_stdin[..pos],
+            None => &effective_stdin,
         }
     };
+
+    // Advance pipeline_stdin past consumed data
+    if use_pipeline {
+        let consumed = input.len();
+        let remaining = &effective_stdin[consumed..];
+        // Skip the delimiter too
+        let remaining = if remaining.starts_with(delimiter) {
+            &remaining[delimiter.len_utf8()..]
+        } else {
+            remaining
+        };
+        if remaining.is_empty() {
+            state.pipeline_stdin = None;
+        } else {
+            state.pipeline_stdin = Some(remaining.to_string());
+        }
+    }
 
     let input = if !raw {
         // Process backslash continuations (simplistic)
@@ -1028,7 +1077,7 @@ fn builtin_read(state: &mut ShellState, args: &[String], stdin_data: &str) -> Bu
     }
 
     // Exit code: 0 unless input was empty (EOF)
-    let code = if stdin_data.is_empty() { 1 } else { 0 };
+    let code = if effective_stdin.is_empty() { 1 } else { 0 };
     BuiltinResult::Result(RunResult {
         exit_code: code,
         stdout: String::new(),
@@ -1072,7 +1121,7 @@ fn builtin_type(state: &ShellState, host: &dyn HostInterface, args: &[String]) -
             || host.is_extension(arg)
             || host.has_tool(arg)
         {
-            output.push_str(&format!("{} is /bin/{}\n", arg, arg));
+            output.push_str(&format!("{} is /usr/bin/{}\n", arg, arg));
         } else {
             output.push_str(&format!("{}: not found\n", arg));
             code = 1;
@@ -1100,13 +1149,18 @@ fn builtin_command(host: &dyn HostInterface, args: &[String]) -> Option<BuiltinR
             return Some(BuiltinResult::Result(RunResult::error(1, String::new())));
         }
         let name = &args[1];
-        if is_builtin(name)
-            || crate::virtual_commands::is_virtual_command(name)
+        if is_builtin(name) {
+            return Some(BuiltinResult::Result(RunResult::success(format!(
+                "{}\n",
+                name
+            ))));
+        }
+        if crate::virtual_commands::is_virtual_command(name)
             || host.is_extension(name)
             || host.has_tool(name)
         {
             return Some(BuiltinResult::Result(RunResult::success(format!(
-                "{}\n",
+                "/usr/bin/{}\n",
                 name
             ))));
         }
@@ -1145,7 +1199,8 @@ fn builtin_which(host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
     let mut code = 0;
 
     for arg in args {
-        if crate::virtual_commands::is_virtual_command(arg)
+        if is_builtin(arg)
+            || crate::virtual_commands::is_virtual_command(arg)
             || host.is_extension(arg)
             || host.has_tool(arg)
         {
@@ -1250,18 +1305,25 @@ fn builtin_return(state: &ShellState, args: &[String]) -> BuiltinResult {
 // -- history --------------------------------------------------------------
 
 fn builtin_history(state: &mut ShellState, args: &[String]) -> BuiltinResult {
-    if args.first().map(|s| s.as_str()) == Some("clear") {
-        state.history.clear();
-        return BuiltinResult::Result(RunResult::empty());
-    }
+    let subcmd = args.first().map(|s| s.as_str()).unwrap_or("list");
 
-    // Show history entries
-    let mut output = String::new();
-    for (i, entry) in state.history.iter().enumerate() {
-        output.push_str(&format!("  {}  {}\n", i + 1, entry));
+    match subcmd {
+        "clear" => {
+            state.history.clear();
+            BuiltinResult::Result(RunResult::empty())
+        }
+        "list" | "" => {
+            let mut output = String::new();
+            for (i, entry) in state.history.iter().enumerate() {
+                output.push_str(&format!("  {}  {}\n", i + 1, entry));
+            }
+            BuiltinResult::Result(RunResult::success(output))
+        }
+        other => BuiltinResult::Result(RunResult::error(
+            1,
+            format!("history: unknown subcommand: {other}\n"),
+        )),
     }
-
-    BuiltinResult::Result(RunResult::success(output))
 }
 
 // -- trap -----------------------------------------------------------------
@@ -1455,23 +1517,39 @@ fn builtin_mapfile(state: &mut ShellState, args: &[String], stdin_data: &str) ->
 // -- chmod ----------------------------------------------------------------
 
 fn builtin_chmod(state: &ShellState, host: &dyn HostInterface, args: &[String]) -> BuiltinResult {
+    if args.is_empty() {
+        return BuiltinResult::Result(RunResult::error(1, "chmod: missing operand\n".into()));
+    }
     if args.len() < 2 {
         return BuiltinResult::Result(RunResult::error(
             1,
-            "chmod: usage: chmod MODE FILE...\n".into(),
+            format!("chmod: missing operand after '{}'\n", args[0]),
         ));
     }
 
     let mode_str = &args[0];
-    let mode = u32::from_str_radix(mode_str, 8).unwrap_or(0o644);
 
     let mut stderr = String::new();
     let mut code = 0;
 
     for file in &args[1..] {
         let path = state.resolve_path(file);
-        if let Err(e) = host.chmod(&path, mode) {
-            stderr.push_str(&format!("chmod: {}: {}\n", file, e));
+
+        // Get current file mode for symbolic changes
+        let current_mode = host.stat(&path).map(|s| s.mode).unwrap_or(0o644);
+
+        let new_mode = if let Ok(m) = u32::from_str_radix(mode_str, 8) {
+            m
+        } else if let Some(m) = parse_symbolic_mode(mode_str, current_mode) {
+            m
+        } else {
+            stderr.push_str(&format!("chmod: invalid mode: '{}'\n", mode_str));
+            code = 1;
+            continue;
+        };
+
+        if let Err(e) = host.chmod(&path, new_mode) {
+            stderr.push_str(&format!("chmod: cannot access '{}': {}\n", file, e));
             code = 1;
         }
     }
@@ -1482,6 +1560,87 @@ fn builtin_chmod(state: &ShellState, host: &dyn HostInterface, args: &[String]) 
         stderr,
         execution_time_ms: 0,
     })
+}
+
+/// Parse symbolic mode string like "+x", "u+x", "go-w", "a+r"
+fn parse_symbolic_mode(s: &str, current: u32) -> Option<u32> {
+    let mut mode = current;
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+
+    // Parse who: u, g, o, a (default: a)
+    let mut who_u = false;
+    let mut who_g = false;
+    let mut who_o = false;
+    while i < chars.len() && "ugoa".contains(chars[i]) {
+        match chars[i] {
+            'u' => who_u = true,
+            'g' => who_g = true,
+            'o' => who_o = true,
+            'a' => {
+                who_u = true;
+                who_g = true;
+                who_o = true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // Default to all if no who specified
+    if !who_u && !who_g && !who_o {
+        who_u = true;
+        who_g = true;
+        who_o = true;
+    }
+
+    if i >= chars.len() {
+        return None;
+    }
+
+    // Parse operator: +, -, =
+    let op = chars[i];
+    if op != '+' && op != '-' && op != '=' {
+        return None;
+    }
+    i += 1;
+
+    // Parse permissions: r, w, x
+    let mut bits: u32 = 0;
+    while i < chars.len() {
+        match chars[i] {
+            'r' => bits |= 4,
+            'w' => bits |= 2,
+            'x' => bits |= 1,
+            _ => return None,
+        }
+        i += 1;
+    }
+
+    // Apply to appropriate positions
+    let mut mask: u32 = 0;
+    if who_u {
+        mask |= bits << 6;
+    }
+    if who_g {
+        mask |= bits << 3;
+    }
+    if who_o {
+        mask |= bits;
+    }
+
+    match op {
+        '+' => mode |= mask,
+        '-' => mode &= !mask,
+        '=' => {
+            let clear = if who_u { 0o700 } else { 0 }
+                | if who_g { 0o070 } else { 0 }
+                | if who_o { 0o007 } else { 0 };
+            mode = (mode & !clear) | mask;
+        }
+        _ => {}
+    }
+
+    Some(mode)
 }
 
 // -- date -----------------------------------------------------------------
@@ -1593,21 +1752,167 @@ fn is_leap(y: u64) -> bool {
 
 // -- exec -----------------------------------------------------------------
 
-fn builtin_exec(args: &[String]) -> Option<BuiltinResult> {
+fn builtin_exec_cmd(
+    state: &mut ShellState,
+    host: &dyn HostInterface,
+    args: &[String],
+    stdin_data: &str,
+    run: Option<RunFn>,
+) -> BuiltinResult {
     if args.is_empty() {
-        // No args: no-op
-        return Some(BuiltinResult::Result(RunResult::empty()));
+        return BuiltinResult::Result(RunResult::empty());
     }
-    // With args: fall through to spawn to re-dispatch
-    None
+    // Re-dispatch: build a command string from args and run it
+    let cmd_str = args
+        .iter()
+        .map(|a| {
+            if a.contains(' ') || a.contains('"') || a.contains('\'') {
+                format!("\"{}\"", a.replace('\\', "\\\\").replace('"', "\\\""))
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Try as builtin first
+    if let Some(result) = try_builtin(state, host, &args[0], &args[1..], stdin_data, run) {
+        return result;
+    }
+    // Fall through to external command via run callback
+    if let Some(run_fn) = run {
+        let r = run_fn(state, &cmd_str);
+        state.last_exit_code = r.exit_code;
+        return BuiltinResult::Result(r);
+    }
+    BuiltinResult::Result(RunResult::error(
+        127,
+        format!("{}: command not found\n", args[0]),
+    ))
+}
+
+// -- pushd/popd/dirs -------------------------------------------------------
+
+fn builtin_pushd(
+    state: &mut ShellState,
+    host: &dyn HostInterface,
+    args: &[String],
+) -> BuiltinResult {
+    let dir = if args.is_empty() {
+        // pushd with no args swaps top two
+        if let Some(top) = state.dir_stack.last().cloned() {
+            let prev = state.cwd.clone();
+            state.cwd = top;
+            state.env.insert("PWD".to_string(), state.cwd.clone());
+            state.env.insert("OLDPWD".to_string(), prev.clone());
+            *state.dir_stack.last_mut().unwrap() = prev;
+            let stack = format_dir_stack(state);
+            return BuiltinResult::Result(RunResult {
+                exit_code: 0,
+                stdout: format!("{stack}\n"),
+                stderr: String::new(),
+                execution_time_ms: 0,
+            });
+        } else {
+            return BuiltinResult::Result(RunResult::error(
+                1,
+                "pushd: no other directory\n".to_string(),
+            ));
+        }
+    } else {
+        state.resolve_path(&args[0])
+    };
+
+    // Verify the directory exists
+    if let Ok(stat) = host.stat(&dir) {
+        if stat.is_dir {
+            state.dir_stack.push(state.cwd.clone());
+            state.env.insert("OLDPWD".to_string(), state.cwd.clone());
+            state.cwd = dir;
+            state.env.insert("PWD".to_string(), state.cwd.clone());
+            let stack = format_dir_stack(state);
+            BuiltinResult::Result(RunResult {
+                exit_code: 0,
+                stdout: format!("{stack}\n"),
+                stderr: String::new(),
+                execution_time_ms: 0,
+            })
+        } else {
+            BuiltinResult::Result(RunResult::error(
+                1,
+                format!("pushd: {}: Not a directory\n", args[0]),
+            ))
+        }
+    } else {
+        BuiltinResult::Result(RunResult::error(
+            1,
+            format!("pushd: {}: No such file or directory\n", args[0]),
+        ))
+    }
+}
+
+fn builtin_popd(state: &mut ShellState) -> BuiltinResult {
+    if let Some(prev) = state.dir_stack.pop() {
+        state.env.insert("OLDPWD".to_string(), state.cwd.clone());
+        state.cwd = prev;
+        state.env.insert("PWD".to_string(), state.cwd.clone());
+        let stack = format_dir_stack(state);
+        BuiltinResult::Result(RunResult {
+            exit_code: 0,
+            stdout: format!("{stack}\n"),
+            stderr: String::new(),
+            execution_time_ms: 0,
+        })
+    } else {
+        BuiltinResult::Result(RunResult::error(
+            1,
+            "popd: directory stack empty\n".to_string(),
+        ))
+    }
+}
+
+fn builtin_dirs(state: &mut ShellState) -> BuiltinResult {
+    let stack = format_dir_stack(state);
+    BuiltinResult::Result(RunResult {
+        exit_code: 0,
+        stdout: format!("{stack}\n"),
+        stderr: String::new(),
+        execution_time_ms: 0,
+    })
+}
+
+fn format_dir_stack(state: &ShellState) -> String {
+    let mut dirs = vec![state.cwd.clone()];
+    for d in state.dir_stack.iter().rev() {
+        dirs.push(d.clone());
+    }
+    dirs.join(" ")
 }
 
 // -- readonly --------------------------------------------------------------
 
 fn builtin_readonly(state: &mut ShellState, args: &[String]) -> BuiltinResult {
     if args.is_empty() || (args.len() == 1 && args[0] == "-p") {
-        // Print readonly vars (we do not track them yet, so empty)
-        return BuiltinResult::Result(RunResult::empty());
+        // Print all readonly variables
+        let mut lines: Vec<String> = state
+            .readonly_vars
+            .iter()
+            .map(|name| {
+                let val = state.env.get(name).cloned().unwrap_or_default();
+                format!("declare -r {name}=\"{val}\"")
+            })
+            .collect();
+        lines.sort();
+        let stdout = if lines.is_empty() {
+            String::new()
+        } else {
+            lines.join("\n") + "\n"
+        };
+        return BuiltinResult::Result(RunResult {
+            exit_code: 0,
+            stdout,
+            stderr: String::new(),
+            execution_time_ms: 0,
+        });
     }
 
     for arg in args {
@@ -1617,9 +1922,18 @@ fn builtin_readonly(state: &mut ShellState, args: &[String]) -> BuiltinResult {
         if let Some(eq_pos) = arg.find('=') {
             let name = &arg[..eq_pos];
             let value = &arg[eq_pos + 1..];
+            if state.readonly_vars.contains(name) {
+                return BuiltinResult::Result(RunResult::error(
+                    1,
+                    format!("readonly: {name}: readonly variable\n"),
+                ));
+            }
             state.env.insert(name.to_string(), value.to_string());
+            state.readonly_vars.insert(name.to_string());
+        } else {
+            // Mark existing var as readonly
+            state.readonly_vars.insert(arg.to_string());
         }
-        // We do not enforce readonly since ShellState lacks the field.
     }
 
     BuiltinResult::Result(RunResult::empty())

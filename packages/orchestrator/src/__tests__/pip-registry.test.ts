@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { Sandbox } from '../sandbox';
 import { NodeAdapter } from '../platform/node-adapter';
-import { resolve } from 'path';
+import { resolve } from 'node:path';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
 
@@ -55,8 +56,7 @@ describe('pip with PackageRegistry', () => {
     });
     const result = await sandbox.run('pip install nonexistent-pkg');
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain('not found');
-    expect(result.stderr).toContain('Available');
+    expect(result.stderr).toContain('Could not find a version that satisfies the requirement');
   });
 
   it('pip install auto-installs dependencies', async () => {

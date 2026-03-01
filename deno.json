@@ -1,0 +1,12 @@
+{
+  "unstable": ["sloppy-imports"],
+  "nodeModulesDir": "auto",
+  "imports": {
+    "@std/testing": "jsr:@std/testing@^1",
+    "@std/expect": "jsr:@std/expect@^1",
+    "path": "node:path",
+    "fs": "node:fs",
+    "fs/promises": "node:fs/promises",
+    "os": "node:os"
+  }
+}

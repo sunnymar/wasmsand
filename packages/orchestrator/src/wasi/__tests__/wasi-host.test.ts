@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, beforeEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { WasiHost } from '../wasi-host.js';
 import { VFS } from '../../vfs/vfs.js';
 import {

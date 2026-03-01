@@ -220,6 +220,12 @@ class socket:
         status = resp.get("status", 200)
         resp_headers = resp.get("headers", {})
         resp_body = resp.get("body", "")
+        # Strip transfer encoding — the shim already has the full body
+        for hdr in ("transfer-encoding", "Transfer-Encoding"):
+            resp_headers.pop(hdr, None)
+        # Strip content-length — we recalculate it from the actual body
+        for hdr in ("content-length", "Content-Length"):
+            resp_headers.pop(hdr, None)
         status_line = "HTTP/1.1 {} OK\\r\\n".format(status)
         header_lines = "".join("{}: {}\\r\\n".format(k, v) for k, v in resp_headers.items())
         body_bytes = resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body

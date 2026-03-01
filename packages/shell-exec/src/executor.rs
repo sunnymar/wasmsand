@@ -1,13 +1,28 @@
-use codepod_shell::ast::{Command, ListOp, Word};
+use codepod_shell::ast::{Command, ListOp, Word, WordPart};
+use codepod_shell::lexer::parse_string_expansion;
 use codepod_shell::token::RedirectType;
 
 use crate::control::{ControlFlow, RunResult, ShellError};
 use crate::expand::{
     expand_braces, expand_globs, expand_word, expand_words_with_splitting, glob_matches,
-    restore_brace_sentinels, ExecFn,
+    restore_brace_sentinels, restore_glob_sentinels, ExecFn,
 };
 use crate::host::{HostInterface, WriteMode};
 use crate::state::ShellState;
+
+// ---------------------------------------------------------------------------
+// Heredoc / herestring expansion helper
+// ---------------------------------------------------------------------------
+
+/// Expand variable references and command substitutions in a raw string.
+///
+/// Used for heredoc and herestring content, which is stored as a plain String
+/// in the AST but may contain `$VAR`, `${VAR}`, `$(cmd)`, etc.
+fn expand_raw_string(state: &mut ShellState, content: &str, exec: Option<ExecFn>) -> String {
+    let parts = parse_string_expansion(content);
+    let word = Word { parts };
+    expand_word(state, &word, exec)
+}
 
 // ---------------------------------------------------------------------------
 // Path resolution and command dispatch constants/helpers
@@ -331,7 +346,14 @@ fn dispatch_external_command(
         }
     }
 
-    // 3. Python — falls through to host.spawn with resolved args.
+    // 3. Python — if invoked with stdin but no script file, use -c to pass
+    //    the code directly (avoids interactive mode prompts).
+    if is_python_interpreter(cmd_name) && !stdin_data.is_empty() && args.is_empty() {
+        return Ok((
+            cmd_name.to_string(),
+            vec!["-c".to_string(), stdin_data.to_string()],
+        ));
+    }
 
     // 4. needs_default_dir check — append cwd if needed
     let mut final_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -412,6 +434,47 @@ fn apply_output_redirects(
     Ok(())
 }
 
+/// Resolve process substitution `<(cmd)` parts in words.
+///
+/// Each `ProcessSub(cmd_str)` is executed, its stdout is written to a unique
+/// temp file, and the part is replaced with a `Literal` containing the file path.
+fn resolve_process_subs(
+    state: &mut ShellState,
+    host: &dyn HostInterface,
+    words: &[Word],
+    exec_fn: &dyn Fn(&mut ShellState, &str) -> String,
+) -> Vec<Word> {
+    words
+        .iter()
+        .map(|word| {
+            let has_proc_sub = word
+                .parts
+                .iter()
+                .any(|p| matches!(p, WordPart::ProcessSub(_)));
+            if !has_proc_sub {
+                return word.clone();
+            }
+            let new_parts = word
+                .parts
+                .iter()
+                .map(|part| match part {
+                    WordPart::ProcessSub(cmd_str) => {
+                        state.substitution_depth += 1;
+                        let stdout = exec_fn(state, cmd_str);
+                        state.substitution_depth -= 1;
+                        let path = format!("/tmp/.proc_sub_{}", state.proc_sub_counter);
+                        state.proc_sub_counter += 1;
+                        let _ = host.write_file(&path, &stdout, WriteMode::Truncate);
+                        WordPart::Literal(path)
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            Word { parts: new_parts }
+        })
+        .collect()
+}
+
 /// Execute a parsed `Command` AST node.
 pub fn exec_command(
     state: &mut ShellState,
@@ -437,14 +500,27 @@ pub fn exec_command(
             assignments,
         } => {
             // Process assignments before word expansion
-            process_assignments(state, assignments, Some(&exec_fn));
+            let assign_err = process_assignments(state, assignments, Some(&exec_fn));
 
             if words.is_empty() {
                 // Assignment-only command; nothing to spawn.
+                if let Some(err) = assign_err {
+                    state.last_exit_code = 1;
+                    return Ok(ControlFlow::Normal(RunResult {
+                        exit_code: 1,
+                        stdout: String::new(),
+                        stderr: err,
+                        execution_time_ms: 0,
+                    }));
+                }
                 return Ok(ControlFlow::Normal(RunResult::empty()));
             }
 
-            let expanded = expand_words_with_splitting(state, words, Some(&exec_fn));
+            // Resolve process substitutions <(cmd) before word expansion.
+            // Each ProcessSub part is replaced with a Literal containing a
+            // temp file path whose contents are the command's stdout.
+            let resolved_words = resolve_process_subs(state, host, words, &exec_fn);
+            let expanded = expand_words_with_splitting(state, &resolved_words, Some(&exec_fn));
 
             // Check for ${var:?msg} error during expansion
             if let Some(err_msg) = state.param_error.take() {
@@ -459,10 +535,11 @@ pub fn exec_command(
                 return Ok(ControlFlow::Normal(RunResult::empty()));
             }
 
-            // Brace expansion → sentinel restoration → glob expansion
+            // Brace expansion → sentinel restoration → glob expansion → glob sentinel restoration
             let braced = expand_braces(&expanded);
             let restored = restore_brace_sentinels(&braced);
-            let globbed = expand_globs(host, &restored);
+            let globbed = expand_globs(host, &restored, &state.cwd);
+            let globbed = restore_glob_sentinels(&globbed);
 
             if globbed.is_empty() {
                 return Ok(ControlFlow::Normal(RunResult::empty()));
@@ -528,13 +605,35 @@ pub fn exec_command(
                             .map_err(|e| ShellError::HostError(e.to_string()))?;
                     }
                     RedirectType::Heredoc(content) => {
+                        stdin_data = expand_raw_string(state, content, Some(&exec_fn));
+                    }
+                    RedirectType::HeredocQuoted(content) => {
                         stdin_data = content.clone();
                     }
                     RedirectType::HeredocStrip(content) => {
-                        stdin_data = content.clone();
+                        let expanded = expand_raw_string(state, content, Some(&exec_fn));
+                        stdin_data = expanded
+                            .lines()
+                            .map(|l| l.trim_start_matches('\t'))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if expanded.ends_with('\n') {
+                            stdin_data.push('\n');
+                        }
+                    }
+                    RedirectType::HeredocStripQuoted(content) => {
+                        stdin_data = content
+                            .lines()
+                            .map(|l| l.trim_start_matches('\t'))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if content.ends_with('\n') {
+                            stdin_data.push('\n');
+                        }
                     }
                     RedirectType::HereString(word) => {
-                        stdin_data = format!("{word}\n");
+                        stdin_data =
+                            format!("{}\n", expand_raw_string(state, word, Some(&exec_fn)));
                     }
                     _ => {}
                 }
@@ -678,13 +777,19 @@ pub fn exec_command(
                 .collect();
 
             let spawn_args_refs: Vec<&str> = spawn_args.iter().map(|s| s.as_str()).collect();
+            // Use pipeline stdin if no explicit stdin redirect
+            let effective_stdin = if stdin_data.is_empty() {
+                state.pipeline_stdin.take().unwrap_or_default()
+            } else {
+                stdin_data.clone()
+            };
             let spawn_result = host
                 .spawn(
                     &spawn_program,
                     &spawn_args_refs,
                     &env_pairs,
                     &state.cwd,
-                    &stdin_data,
+                    &effective_stdin,
                 )
                 .map_err(|e| ShellError::HostError(e.to_string()))?;
 
@@ -710,6 +815,12 @@ pub fn exec_command(
                 return exec_command(state, host, &commands[0]);
             }
 
+            // Save env state: pipeline stages run in subshells and should not
+            // affect the parent scope's variables.
+            let saved_env = state.env.clone();
+            let saved_arrays = state.arrays.clone();
+            let saved_assoc = state.assoc_arrays.clone();
+
             let pipefail = state.flags.contains(&crate::state::ShellFlag::Pipefail);
             let mut pipefail_code = 0;
             let mut last_result = RunResult::empty();
@@ -723,7 +834,7 @@ pub fn exec_command(
                         assignments,
                     } => {
                         // Process assignments before word expansion
-                        process_assignments(state, assignments, Some(&exec_fn));
+                        let _ = process_assignments(state, assignments, Some(&exec_fn));
 
                         if words.is_empty() {
                             last_result = RunResult::empty();
@@ -746,7 +857,8 @@ pub fn exec_command(
 
                         let braced = expand_braces(&expanded);
                         let restored = restore_brace_sentinels(&braced);
-                        let globbed = expand_globs(host, &restored);
+                        let globbed = expand_globs(host, &restored, &state.cwd);
+                        let globbed = restore_glob_sentinels(&globbed);
 
                         if globbed.is_empty() {
                             last_result = RunResult::empty();
@@ -771,13 +883,39 @@ pub fn exec_command(
                                         .map_err(|e| ShellError::HostError(e.to_string()))?;
                                 }
                                 RedirectType::Heredoc(content) => {
+                                    effective_stdin =
+                                        expand_raw_string(state, content, Some(&exec_fn));
+                                }
+                                RedirectType::HeredocQuoted(content) => {
                                     effective_stdin = content.clone();
                                 }
                                 RedirectType::HeredocStrip(content) => {
-                                    effective_stdin = content.clone();
+                                    let expanded =
+                                        expand_raw_string(state, content, Some(&exec_fn));
+                                    effective_stdin = expanded
+                                        .lines()
+                                        .map(|l| l.trim_start_matches('\t'))
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    if expanded.ends_with('\n') {
+                                        effective_stdin.push('\n');
+                                    }
+                                }
+                                RedirectType::HeredocStripQuoted(content) => {
+                                    effective_stdin = content
+                                        .lines()
+                                        .map(|l| l.trim_start_matches('\t'))
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    if content.ends_with('\n') {
+                                        effective_stdin.push('\n');
+                                    }
                                 }
                                 RedirectType::HereString(word) => {
-                                    effective_stdin = format!("{word}\n");
+                                    effective_stdin = format!(
+                                        "{}\n",
+                                        expand_raw_string(state, word, Some(&exec_fn))
+                                    );
                                 }
                                 _ => {}
                             }
@@ -1001,9 +1139,14 @@ pub fn exec_command(
                         } // close match dispatch_result
                     }
                     _ => {
-                        // Non-simple commands: just execute them.
-                        // Stdin threading for compound commands comes later.
-                        match exec_command(state, host, cmd) {
+                        // Non-simple commands: pass pipeline stdin through state.
+                        let prev_stdin = state.pipeline_stdin.take();
+                        if !stdin_data.is_empty() {
+                            state.pipeline_stdin = Some(stdin_data.clone());
+                        }
+                        let result = exec_command(state, host, cmd);
+                        state.pipeline_stdin = prev_stdin;
+                        match result {
                             Ok(ControlFlow::Normal(r)) => {
                                 state.last_exit_code = r.exit_code;
                                 last_result = r;
@@ -1036,6 +1179,11 @@ pub fn exec_command(
                 // Stdout of this stage becomes stdin of next
                 stdin_data = last_result.stdout.clone();
             }
+
+            // Restore env state: pipeline stages ran in subshells.
+            state.env = saved_env;
+            state.arrays = saved_arrays;
+            state.assoc_arrays = saved_assoc;
 
             // Apply pipefail: use last non-zero exit code
             if pipefail && pipefail_code != 0 && last_result.exit_code == 0 {
@@ -1143,7 +1291,8 @@ pub fn exec_command(
             let expanded = expand_words_with_splitting(state, words, Some(&exec_fn));
             let braced = expand_braces(&expanded);
             let restored = restore_brace_sentinels(&braced);
-            let final_words = expand_globs(host, &restored);
+            let final_words = expand_globs(host, &restored, &state.cwd);
+            let final_words = restore_glob_sentinels(&final_words);
 
             let mut combined_stdout = String::new();
             let mut combined_stderr = String::new();
@@ -1369,11 +1518,13 @@ fn parse_array_subscript(name: &str) -> Option<(String, String)> {
 ///
 /// Handles: simple assignment, append (`+=`), array literal (`var=(a b c)`),
 /// array element (`arr[idx]=val`), and associative array element.
+/// Process assignments, returning any error messages (e.g. for readonly violations).
 fn process_assignments(
     state: &mut ShellState,
     assignments: &[codepod_shell::ast::Assignment],
     exec: Option<ExecFn>,
-) {
+) -> Option<String> {
+    let mut errors = Vec::new();
     for assignment in assignments {
         // Parse the raw assignment value into a Word with proper parts
         // (the parser stores values as raw strings, so $(...) etc. need re-parsing)
@@ -1426,8 +1577,17 @@ fn process_assignments(
             continue;
         }
 
-        // Simple assignment
+        // Simple assignment — check readonly
+        if state.readonly_vars.contains(&assignment.name) {
+            errors.push(format!("{}: readonly variable\n", assignment.name));
+            continue;
+        }
         state.env.insert(assignment.name.clone(), value.to_string());
+    }
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join(""))
     }
 }
 
@@ -1499,16 +1659,22 @@ fn tokenize_bracket_expr(
             continue;
         }
 
-        // ( and )
-        if chars[i] == '(' {
-            tokens.push(BracketToken::LParen);
-            i += 1;
-            continue;
-        }
-        if chars[i] == ')' {
-            tokens.push(BracketToken::RParen);
-            i += 1;
-            continue;
+        // ( and ) — but NOT after =~ where they're part of a regex pattern
+        let prev_is_regex_op = tokens
+            .last()
+            .map(|t| matches!(t, BracketToken::Word(w) if w == "=~"))
+            .unwrap_or(false);
+        if !prev_is_regex_op {
+            if chars[i] == '(' {
+                tokens.push(BracketToken::LParen);
+                i += 1;
+                continue;
+            }
+            if chars[i] == ')' {
+                tokens.push(BracketToken::RParen);
+                i += 1;
+                continue;
+            }
         }
 
         // Quoted string
@@ -1539,8 +1705,18 @@ fn tokenize_bracket_expr(
         }
 
         // Unquoted word (including operators like -z, -f, ==, !=, =~, etc.)
+        // After =~ operator, the next word is a regex pattern and may contain
+        // parens, so we don't break on ( or ) in that context.
+        let after_regex_op = tokens
+            .last()
+            .map(|t| matches!(t, BracketToken::Word(w) if w == "=~"))
+            .unwrap_or(false);
         let mut word = String::new();
-        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '(' && chars[i] != ')' {
+        while i < chars.len() && !chars[i].is_whitespace() {
+            // Stop at ( and ) unless we're reading a regex pattern
+            if !after_regex_op && (chars[i] == '(' || chars[i] == ')') {
+                break;
+            }
             // Stop at && or ||
             if i + 1 < chars.len()
                 && ((chars[i] == '&' && chars[i + 1] == '&')
@@ -1659,6 +1835,28 @@ fn parse_primary(
                 if let BracketToken::Word(right) = &tokens[*pos + 2] {
                     let right = right.clone();
                     *pos += 3;
+                    // Handle =~ specially to capture BASH_REMATCH
+                    if op == "=~" {
+                        match regex::Regex::new(&right) {
+                            Ok(re) => {
+                                if let Some(caps) = re.captures(&left) {
+                                    state.bash_rematch.clear();
+                                    for i in 0..caps.len() {
+                                        state.bash_rematch.push(
+                                            caps.get(i)
+                                                .map(|m| m.as_str().to_string())
+                                                .unwrap_or_default(),
+                                        );
+                                    }
+                                    return true;
+                                } else {
+                                    state.bash_rematch.clear();
+                                    return false;
+                                }
+                            }
+                            Err(_) => return false,
+                        }
+                    }
                     return eval_binary_test(&left, &op, &right);
                 }
             }

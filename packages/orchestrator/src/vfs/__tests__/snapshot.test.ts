@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { VFS } from '../vfs.js';
 
 describe('VFS Snapshot', () => {

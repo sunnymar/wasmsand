@@ -24,7 +24,7 @@
     "wasm"
   ],
   "scripts": {
-    "test": "bun test",
+    "test": "deno test -A --no-check",
     "build": "tsup"
   },
   "devDependencies": {

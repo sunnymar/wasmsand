@@ -78,10 +78,14 @@ pub enum RedirectType {
     StderrToStdout,
     /// &> file  (both stdout and stderr)
     BothOverwrite(String),
-    /// <<EOF ... content ... EOF
+    /// <<EOF ... content ... EOF (unquoted: expand variables)
     Heredoc(String),
-    /// <<-EOF (strip leading tabs)
+    /// <<'EOF' or <<"EOF" ... content ... EOF (quoted: no expansion)
+    HeredocQuoted(String),
+    /// <<-EOF (strip leading tabs, unquoted: expand)
     HeredocStrip(String),
+    /// <<-'EOF' (strip leading tabs, quoted: no expansion)
+    HeredocStripQuoted(String),
     /// <<< word (herestring)
     HereString(String),
 }

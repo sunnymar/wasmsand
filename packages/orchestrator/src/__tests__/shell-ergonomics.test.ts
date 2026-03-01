@@ -2,7 +2,8 @@
  * Tests for shell ergonomics features: command history builtin,
  * cross-feature integration (persistence + packages, /proc/uptime timing).
  */
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 import { resolve } from 'node:path';

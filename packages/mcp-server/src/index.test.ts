@@ -1,4 +1,5 @@
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -7,15 +8,15 @@ const SERVER_PATH = resolve(import.meta.dirname, 'index.ts');
 
 function createClient() {
   const transport = new StdioClientTransport({
-    command: 'bun',
-    args: ['run', SERVER_PATH],
+    command: 'deno',
+    args: ['run', '-A', '--no-check', '--unstable-sloppy-imports', SERVER_PATH],
     stderr: 'pipe',
   });
   const client = new Client({ name: 'test-client', version: '1.0.0' });
   return { client, transport };
 }
 
-describe('MCP Server (integration)', () => {
+describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: false }, () => {
   let transport: StdioClientTransport | undefined;
 
   afterEach(async () => {

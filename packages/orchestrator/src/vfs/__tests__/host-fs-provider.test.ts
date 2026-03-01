@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, beforeAll, afterAll } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

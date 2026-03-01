@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { describe, it, beforeEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
+import { mock } from './test-mock-compat.ts';
 import { Dispatcher } from './dispatcher.js';
 import type { SandboxLike } from './dispatcher.js';
 

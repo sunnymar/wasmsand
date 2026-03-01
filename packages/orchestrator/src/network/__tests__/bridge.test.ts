@@ -1,4 +1,5 @@
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'bun:test';
+import { describe, it, afterEach, beforeAll, afterAll } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { NetworkBridge } from '../bridge.js';
 import { NetworkGateway } from '../gateway.js';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -14,11 +15,13 @@ import { spawn, type ChildProcess } from 'node:child_process';
  * Running the server in a child process avoids this.
  */
 
-let serverProcess: ChildProcess;
-let baseUrl: string;
+describe('NetworkBridge', { sanitizeOps: false, sanitizeResources: false }, () => {
+  let serverProcess: ChildProcess;
+  let baseUrl: string;
+  let bridge: NetworkBridge;
 
-beforeAll(async () => {
-  const serverScript = `
+  beforeAll(async () => {
+    const serverScript = `
     const http = require('node:http');
     const server = http.createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -54,48 +57,45 @@ beforeAll(async () => {
     });
   `;
 
-  serverProcess = spawn(process.execPath, ['-e', serverScript], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+    serverProcess = spawn(process.execPath, ['-e', serverScript], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
 
-  // Wait for the server to print its port
-  const port = await new Promise<number>((resolve, reject) => {
-    let output = '';
-    serverProcess.stdout!.on('data', (chunk: Buffer) => {
-      output += chunk.toString();
-      const lines = output.split('\n');
-      for (const line of lines) {
-        if (line.trim()) {
-          try {
-            const info = JSON.parse(line.trim());
-            if (info.port) {
-              resolve(info.port);
-              return;
+    // Wait for the server to print its port
+    const port = await new Promise<number>((resolve, reject) => {
+      let output = '';
+      serverProcess.stdout!.on('data', (chunk: Buffer) => {
+        output += chunk.toString();
+        const lines = output.split('\n');
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const info = JSON.parse(line.trim());
+              if (info.port) {
+                resolve(info.port);
+                return;
+              }
+            } catch {
+              // not yet complete JSON
             }
-          } catch {
-            // not yet complete JSON
           }
         }
-      }
+      });
+      serverProcess.on('error', reject);
+      serverProcess.on('exit', (code) => {
+        reject(new Error(`Server process exited with code ${code}`));
+      });
+      setTimeout(() => reject(new Error('Timeout waiting for server')), 5000);
     });
-    serverProcess.on('error', reject);
-    serverProcess.on('exit', (code) => {
-      reject(new Error(`Server process exited with code ${code}`));
-    });
-    setTimeout(() => reject(new Error('Timeout waiting for server')), 5000);
+
+    baseUrl = `http://127.0.0.1:${port}`;
   });
 
-  baseUrl = `http://127.0.0.1:${port}`;
-});
-
-afterAll(() => {
-  if (serverProcess) {
-    serverProcess.kill();
-  }
-});
-
-describe('NetworkBridge', () => {
-  let bridge: NetworkBridge;
+  afterAll(() => {
+    if (serverProcess) {
+      serverProcess.kill();
+    }
+  });
 
   afterEach(() => {
     bridge?.dispose();

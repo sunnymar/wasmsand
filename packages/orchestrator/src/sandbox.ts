@@ -6,7 +6,6 @@
  */
 
 import { VFS } from './vfs/vfs.js';
-import type { VfsOptions } from './vfs/vfs.js';
 import { ProcessManager } from './process/manager.js';
 import { ShellInstance } from './shell/shell-instance.js';
 import type { ShellLike } from './shell/shell-like.js';
@@ -142,8 +141,6 @@ export class Sandbox {
     const vfs = new VFS({
       fsLimitBytes,
       fileCount: options.security?.limits?.fileCount,
-      // Allow writes to system paths needed by virtual commands (pip, pkg)
-      writablePaths: ['/home/user', '/tmp', '/usr/lib/python', '/etc/codepod', '/usr/share/pkg'],
     });
     const { gateway, bridge } = await Sandbox.createNetworkBridge(options.network);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
@@ -290,6 +287,11 @@ export class Sandbox {
             : null,
         }));
         vfs.writeFile('/etc/codepod/extensions.json', enc.encode(JSON.stringify(extMeta)));
+
+        // Lock down system config files — pip-installed.json stays 0o644 (pkg/pip update it)
+        vfs.chmod('/etc/codepod/pkg-policy.json', 0o444);
+        vfs.chmod('/etc/codepod/pip-registry.json', 0o444);
+        vfs.chmod('/etc/codepod/extensions.json', 0o444);
       });
     }
 
@@ -431,6 +433,17 @@ export class Sandbox {
 
     this.audit('command.start', { command });
 
+    // Emit pkg audit events before execution
+    const pkgMatch = command.match(/^pkg\s+install\s+(\S+)/);
+    let pkgHost: string | undefined;
+    if (pkgMatch) {
+      try {
+        const url = new URL(pkgMatch[1]);
+        pkgHost = url.hostname;
+      } catch { /* not a valid URL */ }
+      this.audit('package.install.start', { url: pkgMatch[1], host: pkgHost });
+    }
+
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
     const startTime = performance.now();
 
@@ -483,6 +496,14 @@ export class Sandbox {
       }
       if (result.stderr?.includes('not allowed by security policy')) {
         this.audit('capability.denied', { command, reason: result.stderr.trim() });
+      }
+      // Emit pkg audit events after execution
+      if (pkgMatch && pkgHost) {
+        if (result.exitCode !== 0 && result.stderr?.includes('not in the allowed hosts')) {
+          this.audit('package.install.denied', { url: pkgMatch[1], host: pkgHost });
+        } else if (result.exitCode === 0) {
+          this.audit('package.install.success', { url: pkgMatch[1], host: pkgHost });
+        }
       }
       this.audit('command.complete', { command, exitCode: result.exitCode, executionTimeMs });
     }

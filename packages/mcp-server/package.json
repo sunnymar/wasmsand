@@ -4,7 +4,7 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "test": "bun test"
+    "test": "deno test -A --no-check"
   },
   "dependencies": {
     "@codepod/sandbox": "*",

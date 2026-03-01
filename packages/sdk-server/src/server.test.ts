@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -8,7 +9,8 @@ const WASM_DIR = resolve(import.meta.dirname, '../../orchestrator/src/platform/_
 const SHELL_WASM = resolve(import.meta.dirname, '../../orchestrator/src/shell/__tests__/fixtures/codepod-shell.wasm');
 
 function startServer() {
-  const proc = spawn('bun', [SERVER_PATH], {
+  const denoPath = Deno.execPath();
+  const proc = spawn(denoPath, ['run', '-A', '--no-check', '--unstable-sloppy-imports', SERVER_PATH], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const rl = createInterface({ input: proc.stdout! });

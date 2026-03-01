@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { ExtensionRegistry } from '../registry.js';
 import type { ExtensionConfig, ExtensionInvokeArgs } from '../types.js';
 

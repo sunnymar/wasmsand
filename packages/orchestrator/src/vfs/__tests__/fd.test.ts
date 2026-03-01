@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { VFS } from '../vfs.js';
 import { FdTable } from '../fd-table.js';
 import { createPipe } from '../pipe.js';

@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { VFS } from '../vfs.js';
 
 describe('VFS', () => {
@@ -180,8 +181,8 @@ describe('VFS size limit', () => {
 });
 
 describe('file count limit', () => {
-  // Default layout creates 9 dirs: /home, /home/user, /tmp, /bin, /usr, /usr/bin, /usr/lib, /usr/lib/python, /mnt
-  const DEFAULT_INODES = 9;
+  // Default layout creates 13 dirs: /home, /home/user, /tmp, /bin, /usr, /usr/bin, /usr/lib, /usr/lib/python, /etc, /etc/codepod, /usr/share, /usr/share/pkg, /mnt
+  const DEFAULT_INODES = 13;
 
   it('rejects file creation when file count limit reached', () => {
     const vfs = new VFS({ fileCount: DEFAULT_INODES + 3 });
@@ -238,7 +239,7 @@ describe('cowClone option propagation', () => {
   });
 
   it('propagates fileCount to cloned VFS', () => {
-    const vfs = new VFS({ fileCount: 11 }); // 9 default dirs + 2 files
+    const vfs = new VFS({ fileCount: 15 }); // 13 default dirs + 2 files
     vfs.writeFile('/tmp/a.txt', new Uint8Array(1));
     vfs.writeFile('/tmp/b.txt', new Uint8Array(1));
     const child = vfs.cowClone();
@@ -247,12 +248,137 @@ describe('cowClone option propagation', () => {
     }).toThrow(/ENOSPC/);
   });
 
-  it('propagates writablePaths to cloned VFS', () => {
-    const vfs = new VFS({ writablePaths: ['/tmp'] });
+  it('COW clone inherits mode bits', () => {
+    const vfs = new VFS();
     const child = vfs.cowClone();
+    // /bin is 0o555 — writes should be denied
     expect(() => {
-      child.writeFile('/home/user/test.txt', new Uint8Array(1));
-    }).toThrow(/EROFS/);
-    child.writeFile('/tmp/test.txt', new Uint8Array(1)); // should succeed
+      child.writeFile('/bin/evil', new Uint8Array(1));
+    }).toThrow(/EACCES/);
+    // /tmp is 0o777 — writes should succeed
+    child.writeFile('/tmp/ok.txt', new Uint8Array(1));
+  });
+});
+
+describe('mode-bit enforcement', () => {
+  it('write to 0o755 dir succeeds', () => {
+    const vfs = new VFS();
+    vfs.writeFile('/home/user/test.txt', new Uint8Array(1));
+    expect(vfs.stat('/home/user/test.txt').type).toBe('file');
+  });
+
+  it('write to 0o555 dir → EACCES', () => {
+    const vfs = new VFS();
+    expect(() => {
+      vfs.writeFile('/bin/evil', new Uint8Array(1));
+    }).toThrow(/EACCES/);
+  });
+
+  it('overwrite 0o644 file succeeds', () => {
+    const vfs = new VFS();
+    vfs.writeFile('/home/user/f.txt', new Uint8Array([1]));
+    vfs.writeFile('/home/user/f.txt', new Uint8Array([2]));
+    expect(vfs.readFile('/home/user/f.txt')).toEqual(new Uint8Array([2]));
+  });
+
+  it('overwrite 0o444 file → EACCES', () => {
+    const vfs = new VFS();
+    vfs.writeFile('/home/user/f.txt', new Uint8Array([1]));
+    vfs.withWriteAccess(() => {
+      vfs.chmod('/home/user/f.txt', 0o444);
+    });
+    expect(() => {
+      vfs.writeFile('/home/user/f.txt', new Uint8Array([2]));
+    }).toThrow(/EACCES/);
+  });
+
+  it('chmod in 0o755 dir succeeds', () => {
+    const vfs = new VFS();
+    vfs.writeFile('/home/user/f.txt', new Uint8Array(1));
+    vfs.chmod('/home/user/f.txt', 0o444);
+    expect(vfs.stat('/home/user/f.txt').permissions).toBe(0o444);
+  });
+
+  it('chmod in 0o555 dir → EACCES', () => {
+    const vfs = new VFS();
+    // /bin is 0o555, so chmod on any child is denied
+    vfs.withWriteAccess(() => {
+      vfs.writeFile('/bin/tool', new Uint8Array(1));
+    });
+    expect(() => {
+      vfs.chmod('/bin/tool', 0o777);
+    }).toThrow(/EACCES/);
+  });
+
+  it('mkdir in 0o555 dir → EACCES', () => {
+    const vfs = new VFS();
+    expect(() => {
+      vfs.mkdir('/bin/subdir');
+    }).toThrow(/EACCES/);
+  });
+
+  it('unlink in 0o555 dir → EACCES', () => {
+    const vfs = new VFS();
+    vfs.withWriteAccess(() => {
+      vfs.writeFile('/bin/tool', new Uint8Array(1));
+    });
+    expect(() => {
+      vfs.unlink('/bin/tool');
+    }).toThrow(/EACCES/);
+  });
+
+  it('withWriteAccess bypasses mode checks', () => {
+    const vfs = new VFS();
+    // /bin is 0o555 — normally blocked
+    vfs.withWriteAccess(() => {
+      vfs.writeFile('/bin/tool', new Uint8Array(1));
+    });
+    expect(vfs.stat('/bin/tool').type).toBe('file');
+  });
+
+  it('creating top-level dirs → EACCES', () => {
+    const vfs = new VFS();
+    // Root is 0o555
+    expect(() => {
+      vfs.mkdir('/newdir');
+    }).toThrow(/EACCES/);
+  });
+
+  it('symlink from writable dir to system dir does not grant write access', () => {
+    const vfs = new VFS();
+    // Create symlink /tmp/escape → /bin (allowed: /tmp is 0o777)
+    vfs.symlink('/bin', '/tmp/escape');
+    // Write through symlink: resolveParent follows it to /bin (0o555) → EACCES
+    expect(() => {
+      vfs.writeFile('/tmp/escape/evil', new Uint8Array(1));
+    }).toThrow(/EACCES/);
+  });
+
+  it('rename through symlink to system dir is denied', () => {
+    const vfs = new VFS();
+    vfs.writeFile('/tmp/payload.txt', new Uint8Array(1));
+    vfs.symlink('/bin', '/tmp/sysdir');
+    // Destination parent resolves through symlink to /bin (0o555)
+    expect(() => {
+      vfs.rename('/tmp/payload.txt', '/tmp/sysdir/payload.txt');
+    }).toThrow(/EACCES/);
+    // Source file should still exist
+    expect(vfs.stat('/tmp/payload.txt').type).toBe('file');
+  });
+
+  it('mkdir through symlink to system dir is denied', () => {
+    const vfs = new VFS();
+    vfs.symlink('/usr', '/tmp/syslink');
+    expect(() => {
+      vfs.mkdir('/tmp/syslink/evil');
+    }).toThrow(/EACCES/);
+  });
+
+  it('unlink through symlink to system dir is denied', () => {
+    const vfs = new VFS();
+    vfs.symlink('/bin', '/tmp/syslink');
+    expect(() => {
+      vfs.unlink('/tmp/syslink/sh');
+    }).toThrow(/EACCES/);
   });
 });

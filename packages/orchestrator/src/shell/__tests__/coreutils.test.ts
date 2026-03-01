@@ -3,7 +3,8 @@
  *
  * These tests exercise the full stack: shell WASM executor → ProcessManager → WASI host → coreutils wasm.
  */
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, beforeEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 
 import { ShellInstance } from '../shell-instance.js';
@@ -727,7 +728,7 @@ describe('Coreutils Integration', () => {
     it('returns exit 127 for nonexistent path', async () => {
       const result = await runner.run('./nonexistent.sh');
       expect(result.exitCode).toBe(127);
-      expect(result.stderr).toContain('no such file or directory');
+      expect(result.stderr).toContain('No such file or directory');
     });
 
     it('runs a multi-line shell script', async () => {

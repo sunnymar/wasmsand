@@ -317,10 +317,11 @@ pub fn lex(input: &str) -> Vec<Token> {
                     }
                 }
 
-                let rtype = if strip_tabs {
-                    RedirectType::HeredocStrip(content)
-                } else {
-                    RedirectType::Heredoc(content)
+                let rtype = match (strip_tabs, _quoted) {
+                    (true, true) => RedirectType::HeredocStripQuoted(content),
+                    (true, false) => RedirectType::HeredocStrip(content),
+                    (false, true) => RedirectType::HeredocQuoted(content),
+                    (false, false) => RedirectType::Heredoc(content),
                 };
                 tokens.push(Token::Redirect(rtype));
 
@@ -732,6 +733,112 @@ fn lex_double_quoted(chars: &[char], pos: &mut usize) -> Vec<WordPart> {
     // If completely empty (e.g. ""), return a single empty quoted literal
     if parts.is_empty() {
         parts.push(WordPart::QuotedLiteral(String::new()));
+    }
+
+    parts
+}
+
+/// Parse a raw string for variable/command expansion (like double-quoted content).
+///
+/// This is used by the executor to expand heredoc/herestring content.
+/// It handles `$VAR`, `${VAR}`, `$(cmd)`, `$((expr))`, and backtick substitution.
+pub fn parse_string_expansion(input: &str) -> Vec<WordPart> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut pos = 0;
+    let mut parts: Vec<WordPart> = Vec::new();
+    let mut literal = String::new();
+
+    while pos < chars.len() {
+        // Backslash escape
+        if chars[pos] == '\\' && pos + 1 < chars.len() {
+            let next = chars[pos + 1];
+            if next == '$' || next == '\\' || next == '`' {
+                literal.push(next);
+                pos += 2;
+                continue;
+            }
+        }
+
+        // $ — variable or command substitution
+        if chars[pos] == '$' {
+            if !literal.is_empty() {
+                parts.push(WordPart::QuotedLiteral(std::mem::take(&mut literal)));
+            }
+            pos += 1;
+            if pos < chars.len() && chars[pos] == '(' {
+                if pos + 1 < chars.len() && chars[pos + 1] == '(' {
+                    // Arithmetic: $((...))
+                    pos += 2;
+                    let mut depth = 1;
+                    let mut expr = String::new();
+                    while pos < chars.len() && depth > 0 {
+                        if chars[pos] == '(' {
+                            depth += 1;
+                        }
+                        if chars[pos] == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        expr.push(chars[pos]);
+                        pos += 1;
+                    }
+                    if pos < chars.len() {
+                        pos += 1;
+                    }
+                    if pos < chars.len() && chars[pos] == ')' {
+                        pos += 1;
+                    }
+                    parts.push(WordPart::ArithmeticExpansion(expr));
+                    continue;
+                }
+                // Command substitution: $(...)
+                pos += 1;
+                let content = read_balanced_parens(&chars, &mut pos);
+                parts.push(WordPart::CommandSub(content));
+                continue;
+            }
+            if pos < chars.len() && chars[pos] == '{' {
+                pos += 1;
+                let var = read_until_char(&chars, &mut pos, '}');
+                parts.push(parse_braced_var(&var));
+                continue;
+            }
+            if pos < chars.len() && "?$!#@*".contains(chars[pos]) {
+                let var = chars[pos].to_string();
+                pos += 1;
+                parts.push(WordPart::Variable(var));
+                continue;
+            }
+            if pos < chars.len() && chars[pos].is_ascii_digit() {
+                let var = chars[pos].to_string();
+                pos += 1;
+                parts.push(WordPart::Variable(var));
+                continue;
+            }
+            let var = read_var_name(&chars, &mut pos);
+            parts.push(WordPart::Variable(var));
+            continue;
+        }
+
+        // Backtick command substitution
+        if chars[pos] == '`' {
+            if !literal.is_empty() {
+                parts.push(WordPart::QuotedLiteral(std::mem::take(&mut literal)));
+            }
+            pos += 1;
+            let content = read_until_char(&chars, &mut pos, '`');
+            parts.push(WordPart::CommandSub(content));
+            continue;
+        }
+
+        literal.push(chars[pos]);
+        pos += 1;
+    }
+
+    if !literal.is_empty() {
+        parts.push(WordPart::QuotedLiteral(literal));
     }
 
     parts

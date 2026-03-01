@@ -10,7 +10,8 @@
  *   AC6: Two concurrent sessions cannot read each other's file state
  *   AC7: Audit logs include timeout, deny, and limit events with stable schema
  */
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
@@ -293,10 +294,10 @@ describe('Security MVP acceptance', () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
-      security: { limits: { fileCount: 30 } },
+      security: { limits: { fileCount: 200 } },
     });
     let threw = false;
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 200; i++) {
       try {
         sb.writeFile(`/tmp/f${i}.txt`, new TextEncoder().encode('x'));
       } catch {

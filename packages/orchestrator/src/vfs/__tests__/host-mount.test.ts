@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { HostMount } from '../host-mount.js';
 
 const enc = (s: string) => new TextEncoder().encode(s);

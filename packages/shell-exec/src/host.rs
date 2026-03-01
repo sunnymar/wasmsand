@@ -74,7 +74,7 @@ pub enum HostError {
 impl std::fmt::Display for HostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound(msg) => write!(f, "not found: {msg}"),
+            Self::NotFound(msg) => write!(f, "{msg}: No such file or directory"),
             Self::PermissionDenied(msg) => write!(f, "permission denied: {msg}"),
             Self::IoError(msg) => write!(f, "I/O error: {msg}"),
             Self::Other(msg) => write!(f, "{msg}"),

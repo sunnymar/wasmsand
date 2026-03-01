@@ -4,7 +4,8 @@
  * Exercises the full extension lifecycle: registration, shell command execution,
  * piped stdin, --help, which discovery, pip builtin, and Python package VFS.
  */
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';

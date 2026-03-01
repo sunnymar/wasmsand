@@ -67,6 +67,10 @@ export class ShellInstance implements ShellLike {
   private stdoutLimitBytes: number | undefined;
   private stderrLimitBytes: number | undefined;
 
+  // JSPI-wrapped __run_command (or raw export if JSPI unavailable).
+  // Stored separately because V8 makes WASM exports read-only.
+  private runCommandFn: Function | undefined;
+
   private constructor(instance: WebAssembly.Instance) {
     this.instance = instance;
     this.memory = instance.exports.memory as WebAssembly.Memory;
@@ -208,12 +212,11 @@ export class ShellInstance implements ShellLike {
 
     // JSPI: Wrap the __run_command export so it returns a Promise when
     // the WASM stack is suspended (e.g. during async extension invocation).
-    if (options?.extensionRegistry && typeof WebAssembly.promising === 'function') {
-      const rawRunCommand = instance.exports.__run_command;
-      if (rawRunCommand) {
-        (instance.exports as Record<string, WebAssembly.ExportValue>).__run_command =
-          WebAssembly.promising(rawRunCommand as Function);
-      }
+    // Stored in a separate field because V8 makes WASM exports read-only.
+    const rawRunCommand = instance.exports.__run_command as Function | undefined;
+    let wrappedRunCommand: Function | undefined = rawRunCommand;
+    if (rawRunCommand && options?.extensionRegistry && typeof (WebAssembly as any).promising === 'function') {
+      wrappedRunCommand = (WebAssembly as any).promising(rawRunCommand);
     }
 
     // Call _start to initialize (runs main() which is a no-op for WASM).
@@ -229,7 +232,26 @@ export class ShellInstance implements ShellLike {
     }
 
     const shell = new ShellInstance(instance);
+    shell.runCommandFn = wrappedRunCommand;
     shellRef = shell;
+
+    // Populate /bin/ in VFS with entries for registered tools so that
+    // `ls /bin` and `stat /bin/<tool>` work correctly.
+    vfs.withWriteAccess(() => {
+      try {
+        vfs.mkdir('/bin');
+      } catch {
+        // already exists
+      }
+      for (const toolName of mgr.getRegisteredTools()) {
+        try {
+          vfs.writeFile(`/bin/${toolName}`, new Uint8Array(0));
+        } catch {
+          // ignore
+        }
+      }
+    });
+
     return shell;
   }
 
@@ -303,10 +325,10 @@ export class ShellInstance implements ShellLike {
    * operations, etc.), and returns a JSON-encoded RunResult.
    */
   async run(command: string): Promise<RunResult> {
-    // When JSPI is active, __run_command is wrapped with WebAssembly.promising()
+    // When JSPI is active, runCommandFn is wrapped with WebAssembly.promising()
     // and returns a Promise<number>. When JSPI is not active, it returns number.
     // Either way, `await` handles both correctly.
-    const runCommand = this.instance.exports.__run_command as (
+    const runCommand = this.runCommandFn as (
       cmdPtr: number,
       cmdLen: number,
       outPtr: number,
@@ -402,6 +424,19 @@ export class ShellInstance implements ShellLike {
     dealloc(outPtr, outCap);
 
     const result = JSON.parse(resultJson);
+
+    // Sync env from WASM back to TypeScript
+    if (result.env && typeof result.env === 'object') {
+      const wasmEnv = result.env as Record<string, string>;
+      // Update our env Map with WASM state
+      this.env.clear();
+      for (const [k, v] of Object.entries(wasmEnv)) {
+        this.env.set(k, v);
+      }
+      // Also sync the synced state so we don't re-export these next time
+      this.syncedEnv = new Map(this.env);
+    }
+
     let stdout: string = result.stdout ?? '';
     let stderr: string = result.stderr ?? '';
     let truncated: { stdout: boolean; stderr: boolean } | undefined;

@@ -1,7 +1,8 @@
 /**
  * Tests for PackageManager and pkg shell builtin integration.
  */
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { VFS } from '../vfs/vfs.js';
 import { PackageManager, PkgError } from '../pkg/manager.js';

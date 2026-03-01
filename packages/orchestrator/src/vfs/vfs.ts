@@ -25,11 +25,6 @@ export interface VfsOptions {
   fsLimitBytes?: number;
   /** Maximum number of files/directories. Undefined = no limit. */
   fileCount?: number;
-  /**
-   * Paths that are writable. Everything else is read-only.
-   * Defaults to ['/home/user', '/tmp']. Set to undefined to disable.
-   */
-  writablePaths?: string[] | undefined;
 }
 
 /**
@@ -65,9 +60,7 @@ export class VFS {
   private fsLimitBytes: number | undefined;
   private fileCountLimit: number | undefined;
   private currentFileCount = 0;
-  /** Writable path prefixes. Writes outside these paths are rejected with EROFS. */
-  private writablePaths: string[] | undefined;
-  /** When true, bypass writable-path checks (used during init). */
+  /** When true, bypass mode-bit permission checks (used during init and withWriteAccess). */
   private initializing = false;
   /** Mounted virtual providers keyed by mount path (e.g. '/dev', '/proc'). */
   private providers: Map<string, VirtualProvider> = new Map();
@@ -75,10 +68,9 @@ export class VFS {
   private onChangeCallback: (() => void) | null = null;
 
   constructor(options?: VfsOptions) {
-    this.root = createDirInode();
+    this.root = createDirInode(0o555);
     this.fsLimitBytes = options?.fsLimitBytes;
     this.fileCountLimit = options?.fileCount;
-    this.writablePaths = options?.writablePaths !== undefined ? options.writablePaths : ['/home/user', '/tmp'];
     this.initializing = true;
     this.initDefaultLayout();
     this.initializing = false;
@@ -92,7 +84,6 @@ export class VFS {
     totalBytes?: number;
     fileCountLimit?: number;
     currentFileCount?: number;
-    writablePaths?: string[];
     providers?: Map<string, VirtualProvider>;
   }): VFS {
     const vfs = Object.create(VFS.prototype) as VFS;
@@ -103,7 +94,6 @@ export class VFS {
     vfs.fsLimitBytes = options?.fsLimitBytes;
     vfs.fileCountLimit = options?.fileCountLimit;
     vfs.currentFileCount = options?.currentFileCount ?? 0;
-    vfs.writablePaths = options?.writablePaths;
     vfs.initializing = false;
     vfs.onChangeCallback = null;
     // Re-create built-in providers (fresh instances for independent state).
@@ -124,11 +114,25 @@ export class VFS {
     return vfs;
   }
 
-  /** Populate the default directory tree. */
+  /** Populate the default directory tree with explicit mode bits. */
   private initDefaultLayout(): void {
-    const dirs = ['/home', '/home/user', '/tmp', '/bin', '/usr', '/usr/bin', '/usr/lib', '/usr/lib/python', '/mnt'];
-    for (const dir of dirs) {
-      this.mkdirInternal(dir);
+    const dirs: Array<[string, number]> = [
+      ['/home', 0o755],
+      ['/home/user', 0o755],
+      ['/tmp', 0o777],
+      ['/bin', 0o555],
+      ['/usr', 0o555],
+      ['/usr/bin', 0o555],
+      ['/usr/lib', 0o555],
+      ['/usr/lib/python', 0o755],
+      ['/etc', 0o555],
+      ['/etc/codepod', 0o555],
+      ['/usr/share', 0o555],
+      ['/usr/share/pkg', 0o755],
+      ['/mnt', 0o555],
+    ];
+    for (const [dir, mode] of dirs) {
+      this.mkdirInternal(dir, mode);
     }
   }
 
@@ -184,14 +188,12 @@ export class VFS {
     return undefined;
   }
 
-  /** Throw EROFS if the path is outside writable paths. */
-  private assertWritable(path: string): void {
-    if (this.initializing || this.writablePaths === undefined) return;
-    const normalized = '/' + parsePath(path).join('/');
-    for (const prefix of this.writablePaths) {
-      if (normalized === prefix || normalized.startsWith(prefix + '/')) return;
+  /** Throw EACCES if the inode's owner write bit is not set. Bypassed during init/withWriteAccess. */
+  private assertWritePermission(inode: Inode): void {
+    if (this.initializing) return;
+    if (!(inode.metadata.permissions & 0o200)) {
+      throw new VfsError('EACCES', 'permission denied');
     }
-    throw new VfsError('EROFS', `read-only file system: ${path}`);
   }
 
   /** Throw ENOSPC if the file-count limit has been reached. */
@@ -202,11 +204,12 @@ export class VFS {
   }
 
   /** Internal mkdir that silently skips existing directories. Used during init. */
-  private mkdirInternal(path: string): void {
+  private mkdirInternal(path: string, mode?: number): void {
     const segments = parsePath(path);
     let current: DirInode = this.root;
 
-    for (const segment of segments) {
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
       const existing = current.children.get(segment);
       if (existing !== undefined) {
         if (existing.type !== 'dir') {
@@ -214,7 +217,9 @@ export class VFS {
         }
         current = existing;
       } else {
-        const newDir = createDirInode();
+        // Apply specified mode only to the final segment
+        const dirMode = (mode !== undefined && i === segments.length - 1) ? mode : undefined;
+        const newDir = createDirInode(dirMode);
         current.children.set(segment, newDir);
         this.currentFileCount++;
         current = newDir;
@@ -404,7 +409,7 @@ export class VFS {
     return inode.content;
   }
 
-  /** Run a callback with writable-path checks disabled (for system setup). */
+  /** Run a callback with mode-bit permission checks disabled (root mode). */
   withWriteAccess(fn: () => void): void {
     const prev = this.initializing;
     this.initializing = true;
@@ -418,12 +423,18 @@ export class VFS {
       return;
     }
 
-    this.assertWritable(path);
     const { parent, name } = this.resolveParent(path);
     const existing = parent.children.get(name);
 
     if (existing !== undefined && existing.type === 'dir') {
       throw new VfsError('EISDIR', `is a directory: ${path}`);
+    }
+
+    // New file → check parent dir write bit; overwrite → check file write bit
+    if (existing !== undefined && existing.type === 'file') {
+      this.assertWritePermission(existing);
+    } else {
+      this.assertWritePermission(parent);
     }
 
     const oldSize = (existing !== undefined && existing.type === 'file') ? existing.content.byteLength : 0;
@@ -447,8 +458,8 @@ export class VFS {
   }
 
   mkdir(path: string): void {
-    this.assertWritable(path);
     const { parent, name } = this.resolveParent(path);
+    this.assertWritePermission(parent);
 
     if (parent.children.has(name)) {
       throw new VfsError('EEXIST', `file exists: ${path}`);
@@ -461,7 +472,6 @@ export class VFS {
   }
 
   mkdirp(path: string): void {
-    this.assertWritable(path);
     const segments = parsePath(path);
     let current: DirInode = this.root;
 
@@ -476,6 +486,7 @@ export class VFS {
         }
         current = existing;
       } else {
+        this.assertWritePermission(current);
         this.assertFileCountLimit();
         const newDir = createDirInode();
         current.children.set(segment, newDir);
@@ -509,8 +520,8 @@ export class VFS {
   }
 
   unlink(path: string): void {
-    this.assertWritable(path);
     const { parent, name } = this.resolveParent(path);
+    this.assertWritePermission(parent);
     const child = parent.children.get(name);
 
     if (child === undefined) {
@@ -529,8 +540,8 @@ export class VFS {
   }
 
   rmdir(path: string): void {
-    this.assertWritable(path);
     const { parent, name } = this.resolveParent(path);
+    this.assertWritePermission(parent);
     const child = parent.children.get(name);
 
     if (child === undefined) {
@@ -549,9 +560,8 @@ export class VFS {
   }
 
   rename(oldPath: string, newPath: string): void {
-    this.assertWritable(oldPath);
-    this.assertWritable(newPath);
     const { parent: oldParent, name: oldName } = this.resolveParent(oldPath);
+    this.assertWritePermission(oldParent);
     const child = oldParent.children.get(oldName);
 
     if (child === undefined) {
@@ -559,6 +569,7 @@ export class VFS {
     }
 
     const { parent: newParent, name: newName } = this.resolveParent(newPath);
+    this.assertWritePermission(newParent);
 
     oldParent.children.delete(oldName);
     newParent.children.set(newName, child);
@@ -566,8 +577,8 @@ export class VFS {
   }
 
   symlink(target: string, path: string): void {
-    this.assertWritable(path);
     const { parent, name } = this.resolveParent(path);
+    this.assertWritePermission(parent);
 
     if (parent.children.has(name)) {
       throw new VfsError('EEXIST', `file exists: ${path}`);
@@ -580,6 +591,8 @@ export class VFS {
   }
 
   chmod(path: string, mode: number): void {
+    const { parent } = this.resolveParent(path);
+    this.assertWritePermission(parent);
     const inode = this.resolve(path);
     inode.metadata.permissions = mode;
     inode.metadata.ctime = new Date();
@@ -647,7 +660,6 @@ export class VFS {
       totalBytes: this.totalBytes,
       fileCountLimit: this.fileCountLimit,
       currentFileCount: this.currentFileCount,
-      writablePaths: this.writablePaths,
       providers: this.providers,
     });
   }

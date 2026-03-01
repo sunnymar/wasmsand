@@ -48,8 +48,11 @@ mod wasm_entry {
         let mut state = get_state().lock().unwrap();
         let host = WasmHost;
 
+        // Track command in history
+        state.history.push(cmd_str.to_string());
+
         let ast = codepod_shell::parser::parse(cmd_str);
-        let result = match exec_command(&mut state, &host, &ast) {
+        let mut result = match exec_command(&mut state, &host, &ast) {
             Ok(ControlFlow::Normal(r)) => r,
             Ok(ControlFlow::Exit(code, stdout, stderr)) => RunResult {
                 exit_code: code,
@@ -61,7 +64,28 @@ mod wasm_entry {
             Err(e) => RunResult::error(1, format!("{e}\n")),
         };
 
-        let json = serde_json::to_vec(&result).unwrap();
+        // Fire EXIT trap if one is registered
+        if let Some(trap_cmd) = state.traps.remove("EXIT") {
+            let trap_ast = codepod_shell::parser::parse(&trap_cmd);
+            if let Ok(ControlFlow::Normal(trap_result)) = exec_command(&mut state, &host, &trap_ast)
+            {
+                result.stdout.push_str(&trap_result.stdout);
+                result.stderr.push_str(&trap_result.stderr);
+            }
+        }
+
+        // Include env state in result for host sync
+        #[derive(serde::Serialize)]
+        struct WasmOutput {
+            #[serde(flatten)]
+            result: RunResult,
+            env: std::collections::HashMap<String, String>,
+        }
+        let output = WasmOutput {
+            result,
+            env: state.env.clone(),
+        };
+        let json = serde_json::to_vec(&output).unwrap();
         if json.len() > out_cap as usize {
             return json.len() as i32; // signal: need bigger buffer
         }

@@ -7,7 +7,8 @@
  * full Sandbox.run() path (via WASM coreutils) and survive snapshot/restore
  * and fork operations.
  */
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 import { VFS } from '../vfs/vfs.js';
 import { VfsError } from '../vfs/inode.js';

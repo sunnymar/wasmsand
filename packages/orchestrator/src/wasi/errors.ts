@@ -2,11 +2,13 @@
 
 import type { Errno } from '../vfs/inode.js';
 import {
+  WASI_EACCES,
   WASI_EBADF,
   WASI_EEXIST,
   WASI_EIO,
   WASI_EISDIR,
   WASI_ENOENT,
+  WASI_ENOSPC,
   WASI_ENOTDIR,
   WASI_ENOTEMPTY,
   WASI_EROFS,
@@ -26,6 +28,10 @@ export function vfsErrnoToWasi(errno: Errno): number {
       return WASI_ENOTEMPTY;
     case 'EROFS':
       return WASI_EROFS;
+    case 'EACCES':
+      return WASI_EACCES;
+    case 'ENOSPC':
+      return WASI_ENOSPC;
     default:
       return WASI_EIO;
   }

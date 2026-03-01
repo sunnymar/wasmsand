@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, afterEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { Sandbox } from '../sandbox';
 import { NodeAdapter } from '../platform/node-adapter';
-import { resolve } from 'path';
+import { resolve } from 'node:path';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
 

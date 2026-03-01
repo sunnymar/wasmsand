@@ -1,7 +1,8 @@
 /**
  * Conformance tests for find — exercises features beyond basic integration tests.
  */
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, beforeEach } from '@std/testing/bdd';
+import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 
 import { ShellInstance } from '../../shell-instance.js';
