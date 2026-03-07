@@ -18,6 +18,9 @@ async function boot(): Promise<void> {
   // Register python3
   mgr.registerTool('python3', `${WASM_BASE}/python3.wasm`);
 
+  // Pre-load all tool modules so spawnSync can use them synchronously
+  await mgr.preloadModules();
+
   const shellWasmUrl = `${WASM_BASE}/codepod-shell-exec.wasm`;
   const runner = await ShellInstance.create(vfs, mgr, adapter, shellWasmUrl, {
     syncSpawn: (cmd, args, env, stdin, cwd) => mgr.spawnSync(cmd, args, env, stdin, cwd),
