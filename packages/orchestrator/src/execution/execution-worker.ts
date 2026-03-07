@@ -99,10 +99,7 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
     // Pre-load all tool modules so spawnSync can use them synchronously
     await mgr.preloadModules();
 
-    runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
-      syncSpawn: (cmd, args, env, stdin, cwd) =>
-        mgr.spawnSync(cmd, args, env, stdin, cwd),
-    });
+    runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath);
 
     if (msg.stdoutBytes !== undefined || msg.stderrBytes !== undefined) {
       runner.setOutputLimits(msg.stdoutBytes, msg.stderrBytes);

@@ -21,6 +21,7 @@ import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
 import type { FdTarget } from '../wasi/fd-target.js';
+import { createStaticTarget } from '../wasi/fd-target.js';
 import { readString, writeJson } from './common.js';
 
 export interface KernelImportsOptions {
@@ -76,6 +77,10 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       const req = JSON.parse(reqJson) as SpawnRequest;
       if (opts.spawnProcess && opts.kernel) {
         const fdTable = opts.kernel.buildFdTableForSpawn(callerPid, req);
+        // If stdin_data is provided, override fd 0 with a static target
+        if (req.stdin_data) {
+          fdTable.set(0, createStaticTarget(new TextEncoder().encode(req.stdin_data)));
+        }
         return opts.spawnProcess(req, fdTable);
       }
       return -1;
@@ -98,6 +103,45 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       if (!opts.kernel) return -1;
       opts.kernel.closeFd(callerPid, fd);
       return 0;
+    },
+
+    // host_read_fd(fd, out_ptr, out_cap) -> i32
+    // Reads all available data from a pipe fd and writes it to the output buffer.
+    host_read_fd(fd: number, outPtr: number, outCap: number): number {
+      if (!opts.kernel) {
+        return writeJson(memory, outPtr, outCap, { error: 'kernel not available' });
+      }
+      const target = opts.kernel.getFdTarget(callerPid, fd);
+      if (!target || target.type !== 'pipe_read') {
+        return writeJson(memory, outPtr, outCap, { error: `not a readable fd: ${fd}` });
+      }
+      const data = target.pipe.drainSync();
+      const str = new TextDecoder().decode(data);
+      const buf = new Uint8Array(memory.buffer, outPtr, outCap);
+      const encoded = new TextEncoder().encode(str);
+      if (encoded.length > outCap) return encoded.length; // signal retry with larger buffer
+      buf.set(encoded);
+      return encoded.length;
+    },
+
+    // host_dup(fd, out_ptr, out_cap) -> i32
+    // Duplicates a file descriptor, returning a new fd pointing to the same target.
+    host_dup(fd: number, outPtr: number, outCap: number): number {
+      if (!opts.kernel) return -1;
+      try {
+        const newFd = opts.kernel.dup(callerPid, fd);
+        return writeJson(memory, outPtr, outCap, { fd: newFd });
+      } catch { return -1; }
+    },
+
+    // host_dup2(src_fd, dst_fd) -> i32
+    // Makes dst_fd point to the same target as src_fd.
+    host_dup2(srcFd: number, dstFd: number): number {
+      if (!opts.kernel) return -1;
+      try {
+        opts.kernel.dup2(callerPid, srcFd, dstFd);
+        return 0;
+      } catch { return -1; }
     },
 
     // host_yield() -> void

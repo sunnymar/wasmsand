@@ -4,6 +4,7 @@ pub mod control;
 pub mod executor;
 pub mod expand;
 pub mod host;
+pub mod io;
 pub mod state;
 pub mod virtual_commands;
 

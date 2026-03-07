@@ -165,21 +165,14 @@ export class Sandbox {
     // Pre-load all tool modules so spawnSync can use them synchronously
     await mgr.preloadModules();
 
-    // Use a mutable ref so the syncSpawn closure can access the ShellInstance's deadline
-    let shellInstanceRef: ShellInstance | null = null;
     const secLimits = options.security?.limits;
 
     const runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
-      syncSpawn: (cmd, args, env, stdin, cwd) =>
-        mgr.spawnSync(cmd, args, env, stdin, cwd, {
-          deadlineMs: shellInstanceRef?.getDeadlineMs(),
-          memoryBytes: secLimits?.memoryBytes,
-        }),
       networkBridge: bridge,
       extensionRegistry,
       toolAllowlist: options.security?.toolAllowlist,
+      memoryBytes: secLimits?.memoryBytes,
     });
-    shellInstanceRef = runner;
 
     // Wire output limits
     if (secLimits) {
@@ -646,21 +639,15 @@ export class Sandbox {
     // Pre-load all tool modules so spawnSync can use them synchronously
     await childMgr.preloadModules();
 
-    let childShellRef: ShellInstance | null = null;
     const secLimits = this.security?.limits;
 
     // Fork as ShellInstance — create a fresh instance and copy env
     const childRunner = await ShellInstance.create(childVfs, childMgr, this.adapter, this.shellExecWasmPath, {
-      syncSpawn: (cmd, args, env, stdin, cwd) =>
-        childMgr.spawnSync(cmd, args, env, stdin, cwd, {
-          deadlineMs: childShellRef?.getDeadlineMs(),
-          memoryBytes: secLimits?.memoryBytes,
-        }),
       networkBridge: bridge,
       extensionRegistry: this.extensionRegistry ?? undefined,
       toolAllowlist: this.security?.toolAllowlist,
+      memoryBytes: this.security?.limits?.memoryBytes,
     });
-    childShellRef = childRunner;
 
     // Wire output limits to forked runner
     if (secLimits) {

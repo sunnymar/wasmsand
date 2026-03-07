@@ -7,8 +7,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnResult {
     pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,17 +16,6 @@ pub struct FetchResult {
     pub headers: Vec<(String, String)>,
     pub body: String,
     pub error: Option<String>,
-}
-
-/// JSON-encoded spawn request sent to the host via `host_spawn`.
-#[cfg(target_arch = "wasm32")]
-#[derive(Serialize)]
-struct SpawnRequest<'a> {
-    program: &'a str,
-    args: &'a [&'a str],
-    env: &'a [(&'a str, &'a str)],
-    cwd: &'a str,
-    stdin: &'a str,
 }
 
 /// JSON-encoded fetch request sent to the host via `host_fetch`.
@@ -100,14 +87,25 @@ pub enum WriteMode {
 // ---------------------------------------------------------------------------
 
 pub trait HostInterface {
+    /// Spawn a child process. Returns the child PID.
+    ///
+    /// `stdin_data` is piped to the child's stdin (via a static fd target on
+    /// the host side). stdout/stderr flow through the kernel fd table entries
+    /// identified by `stdin_fd`, `stdout_fd`, `stderr_fd`.
+    ///
+    /// Caller must call `waitpid()` to collect the exit code.
+    #[allow(clippy::too_many_arguments)]
     fn spawn(
         &self,
         program: &str,
         args: &[&str],
         env: &[(&str, &str)],
         cwd: &str,
-        stdin: &str,
-    ) -> Result<SpawnResult, HostError>;
+        stdin_data: &str,
+        stdin_fd: i32,
+        stdout_fd: i32,
+        stderr_fd: i32,
+    ) -> Result<i32, HostError>;
 
     fn has_tool(&self, name: &str) -> bool;
 
@@ -164,31 +162,28 @@ pub trait HostInterface {
     /// Check whether a command name is a registered host extension.
     fn is_extension(&self, name: &str) -> bool;
 
-    // ----- Process management (Task 5) -----
-
     /// Create a pipe, returning `(read_fd, write_fd)`.
     fn pipe(&self) -> Result<(i32, i32), HostError>;
 
-    /// Spawn a child process asynchronously (returns immediately with pid).
-    /// The caller is responsible for wiring up stdin/stdout/stderr via
-    /// file descriptors obtained from `pipe()`.
-    #[allow(clippy::too_many_arguments)]
-    fn spawn_async(
-        &self,
-        program: &str,
-        args: &[&str],
-        env: &[(&str, &str)],
-        cwd: &str,
-        stdin_fd: i32,
-        stdout_fd: i32,
-        stderr_fd: i32,
-    ) -> Result<i32, HostError>;
-
-    /// Wait for a child process to exit (blocking). Returns the exit code.
-    fn waitpid(&self, pid: i32) -> Result<i32, HostError>;
+    /// Wait for a child process to exit (blocking).
+    ///
+    /// Returns a `SpawnResult` with the exit code. On wasm32 (production),
+    /// stdout/stderr are empty because output flows through kernel fd targets.
+    /// On MockHost (tests), stdout/stderr contain the mock data so tests
+    /// can verify output without a real fd system.
+    fn waitpid(&self, pid: i32) -> Result<SpawnResult, HostError>;
 
     /// Close a host-side file descriptor.
     fn close_fd(&self, fd: i32) -> Result<(), HostError>;
+
+    /// Duplicate a file descriptor: creates a new fd pointing to the same target as `fd`.
+    fn dup(&self, fd: i32) -> Result<i32, HostError>;
+
+    /// Duplicate a file descriptor: makes `dst_fd` point to the same target as `src_fd`.
+    fn dup2(&self, src_fd: i32, dst_fd: i32) -> Result<(), HostError>;
+
+    /// Read all available data from a file descriptor (drains pipe until EOF).
+    fn read_fd(&self, fd: i32) -> Result<Vec<u8>, HostError>;
 
     /// Yield to the scheduler (cooperative scheduling: sleep(0)).
     fn yield_now(&self) -> Result<(), HostError>;
@@ -324,6 +319,18 @@ extern "C" {
     /// Close a host-side file descriptor. Returns 0 on success, negative on error.
     fn host_close_fd(fd: i32) -> i32;
 
+    /// Duplicate fd: creates a new fd pointing to the same target.
+    /// Writes JSON `{"fd": N}` into the output buffer, or negative error code.
+    fn host_dup(fd: i32, out_ptr: *mut u8, out_cap: u32) -> i32;
+
+    /// Duplicate fd: makes dst_fd point to the same target as src_fd.
+    /// Returns 0 on success, negative on error.
+    fn host_dup2(src_fd: i32, dst_fd: i32) -> i32;
+
+    /// Read all available data from a file descriptor. Writes the data into
+    /// the output buffer. Returns bytes written, or negative error code.
+    fn host_read_fd(fd: i32, out_ptr: *mut u8, out_cap: u32) -> i32;
+
     /// Yield to the JS microtask queue (cooperative scheduling: sleep(0)).
     /// JSPI-suspending — allows other WASM stacks to run.
     fn host_yield();
@@ -401,22 +408,32 @@ impl HostInterface for WasmHost {
         args: &[&str],
         env: &[(&str, &str)],
         cwd: &str,
-        stdin: &str,
-    ) -> Result<SpawnResult, HostError> {
-        let req = SpawnRequest {
-            program,
-            args,
-            env,
-            cwd,
-            stdin,
-        };
-        let req_json = serde_json::to_vec(&req)
-            .map_err(|e| HostError::Other(format!("spawn: failed to serialize request: {e}")))?;
-        let output = call_with_outbuf("spawn", |out_ptr, out_cap| unsafe {
-            host_spawn(req_json.as_ptr(), req_json.len() as u32, out_ptr, out_cap)
-        })?;
-        serde_json::from_str(&output)
-            .map_err(|e| HostError::Other(format!("spawn: failed to deserialize response: {e}")))
+        stdin_data: &str,
+        stdin_fd: i32,
+        stdout_fd: i32,
+        stderr_fd: i32,
+    ) -> Result<i32, HostError> {
+        let mut req = serde_json::json!({
+            "prog": program,
+            "args": args,
+            "env": env,
+            "cwd": cwd,
+            "stdin_fd": stdin_fd,
+            "stdout_fd": stdout_fd,
+            "stderr_fd": stderr_fd,
+        });
+        if !stdin_data.is_empty() {
+            req["stdin_data"] = serde_json::Value::String(stdin_data.to_string());
+        }
+        let req_bytes = req.to_string();
+        let pid = unsafe { host_spawn_async(req_bytes.as_ptr(), req_bytes.len() as u32) };
+        if pid < 0 {
+            return Err(HostError::IoError(format!(
+                "spawn({}): host error code {}",
+                program, pid
+            )));
+        }
+        Ok(pid)
     }
 
     fn has_tool(&self, name: &str) -> bool {
@@ -659,43 +676,15 @@ impl HostInterface for WasmHost {
         Ok((read_fd, write_fd))
     }
 
-    fn spawn_async(
-        &self,
-        program: &str,
-        args: &[&str],
-        env: &[(&str, &str)],
-        cwd: &str,
-        stdin_fd: i32,
-        stdout_fd: i32,
-        stderr_fd: i32,
-    ) -> Result<i32, HostError> {
-        let req = serde_json::json!({
-            "prog": program,
-            "args": args,
-            "env": env,
-            "cwd": cwd,
-            "stdin_fd": stdin_fd,
-            "stdout_fd": stdout_fd,
-            "stderr_fd": stderr_fd,
-        });
-        let req_bytes = req.to_string();
-        let pid = unsafe { host_spawn_async(req_bytes.as_ptr(), req_bytes.len() as u32) };
-        if pid < 0 {
-            return Err(HostError::IoError(format!(
-                "spawn_async({}): host error code {}",
-                program, pid
-            )));
-        }
-        Ok(pid)
-    }
-
-    fn waitpid(&self, pid: i32) -> Result<i32, HostError> {
+    fn waitpid(&self, pid: i32) -> Result<SpawnResult, HostError> {
         let result_json = call_with_outbuf("waitpid", |out_ptr, out_cap| unsafe {
             host_waitpid(pid, out_ptr, out_cap)
         })?;
         let parsed: serde_json::Value = serde_json::from_str(&result_json)
             .map_err(|e| HostError::IoError(format!("waitpid: {e}")))?;
-        Ok(parsed["exit_code"].as_i64().unwrap_or(-1) as i32)
+        Ok(SpawnResult {
+            exit_code: parsed["exit_code"].as_i64().unwrap_or(-1) as i32,
+        })
     }
 
     fn close_fd(&self, fd: i32) -> Result<(), HostError> {
@@ -707,6 +696,37 @@ impl HostInterface for WasmHost {
             )));
         }
         Ok(())
+    }
+
+    fn dup(&self, fd: i32) -> Result<i32, HostError> {
+        let result_json = call_with_outbuf("dup", |out_ptr, out_cap| unsafe {
+            host_dup(fd, out_ptr, out_cap)
+        })?;
+        let parsed: serde_json::Value = serde_json::from_str(&result_json)
+            .map_err(|e| HostError::IoError(format!("dup: {e}")))?;
+        let new_fd = parsed["fd"].as_i64().unwrap_or(-1) as i32;
+        if new_fd < 0 {
+            return Err(HostError::IoError(format!("dup({}): invalid fd", fd)));
+        }
+        Ok(new_fd)
+    }
+
+    fn dup2(&self, src_fd: i32, dst_fd: i32) -> Result<(), HostError> {
+        let rc = unsafe { host_dup2(src_fd, dst_fd) };
+        if rc < 0 {
+            return Err(HostError::IoError(format!(
+                "dup2({}, {}): host error code {}",
+                src_fd, dst_fd, rc
+            )));
+        }
+        Ok(())
+    }
+
+    fn read_fd(&self, fd: i32) -> Result<Vec<u8>, HostError> {
+        let result_str = call_with_outbuf("read_fd", |out_ptr, out_cap| unsafe {
+            host_read_fd(fd, out_ptr, out_cap)
+        })?;
+        Ok(result_str.into_bytes())
     }
 
     fn yield_now(&self) -> Result<(), HostError> {

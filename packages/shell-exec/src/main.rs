@@ -16,6 +16,7 @@ mod wasm_entry {
     use codepod_shell_exec::control::{ControlFlow, RunResult};
     use codepod_shell_exec::executor::exec_command;
     use codepod_shell_exec::host::WasmHost;
+    use codepod_shell_exec::shell_eprintln;
     use codepod_shell_exec::state::ShellState;
 
     static STATE: OnceLock<Mutex<ShellState>> = OnceLock::new();
@@ -52,26 +53,20 @@ mod wasm_entry {
         state.history.push(cmd_str.to_string());
 
         let ast = codepod_shell::parser::parse(cmd_str);
-        let mut result = match exec_command(&mut state, &host, &ast) {
+        let result = match exec_command(&mut state, &host, &ast) {
             Ok(ControlFlow::Normal(r)) => r,
-            Ok(ControlFlow::Exit(code, stdout, stderr)) => RunResult {
-                exit_code: code,
-                stdout,
-                stderr,
-                execution_time_ms: 0,
-            },
+            Ok(ControlFlow::Exit(code)) => RunResult::exit(code),
             Ok(_) => RunResult::empty(),
-            Err(e) => RunResult::error(1, format!("{e}\n")),
+            Err(e) => {
+                shell_eprintln!("{e}");
+                RunResult::exit(1)
+            }
         };
 
         // Fire EXIT trap if one is registered
         if let Some(trap_cmd) = state.traps.remove("EXIT") {
             let trap_ast = codepod_shell::parser::parse(&trap_cmd);
-            if let Ok(ControlFlow::Normal(trap_result)) = exec_command(&mut state, &host, &trap_ast)
-            {
-                result.stdout.push_str(&trap_result.stdout);
-                result.stderr.push_str(&trap_result.stderr);
-            }
+            let _ = exec_command(&mut state, &host, &trap_ast);
         }
 
         // Include env state in result for host sync

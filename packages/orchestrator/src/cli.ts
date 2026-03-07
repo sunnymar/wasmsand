@@ -45,10 +45,7 @@ async function main() {
 
   await mgr.preloadModules();
 
-  const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
-    syncSpawn: (cmd, args, env, stdin, cwd) =>
-      mgr.spawnSync(cmd, args, env, stdin, cwd),
-  });
+  const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM);
   shell.setEnv('HOME', '/home/user');
   shell.setEnv('PWD', '/home/user');
   shell.setEnv('USER', 'user');

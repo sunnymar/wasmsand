@@ -36,7 +36,9 @@ export class NodeAdapter implements PlatformAdapter {
     module: WebAssembly.Module,
     imports: WebAssembly.Imports,
   ): Promise<WebAssembly.Instance> {
-    return new WebAssembly.Instance(module, imports);
+    // Use async instantiation so JSPI-wrapped imports (WebAssembly.Suspending)
+    // are recognized as callable. The sync `new WebAssembly.Instance()` rejects them.
+    return await WebAssembly.instantiate(module, imports);
   }
 
   async scanTools(wasmDir: string): Promise<Map<string, string>> {

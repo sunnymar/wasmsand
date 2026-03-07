@@ -53,13 +53,27 @@ describe('Streaming Pipelines', () => {
     expect(r2.stdout.trim()).toBe('second');
   });
 
-  it('external-only pipeline: seq | head runs without hanging', async () => {
+  it('external-only pipeline: seq | head captures output', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
-    // Both seq and head are external commands spawned asynchronously.
-    // The pipeline completes without deadlock. Output capture for all-external
-    // pipelines requires kernel buffer extraction (future work).
     const result = await sandbox.run('seq 1 5 | head -3');
     expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('1\n2\n3');
+  });
+
+  it('builtin to external: echo | wc -w', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    const result = await sandbox.run('echo hello world | wc -w');
+    expect(result.exitCode).toBe(0);
+    // Must return wc output ("2"), not echo output ("hello world")
+    expect(result.stdout.trim()).toBe('2');
+  });
+
+  it('file content piped to external: cat | wc -l', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    sandbox.writeFile('/tmp/lines.txt', new TextEncoder().encode('aaa\nbbb\nccc\n'));
+    const result = await sandbox.run('cat /tmp/lines.txt | wc -l');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('3');
   });
 
   it('non-pipeline commands still work (regression)', async () => {

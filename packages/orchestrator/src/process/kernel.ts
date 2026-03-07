@@ -11,6 +11,7 @@ export interface SpawnRequest {
   stdin_fd: number;
   stdout_fd: number;
   stderr_fd: number;
+  stdin_data?: string;
 }
 
 export interface ProcessEntry {
@@ -65,11 +66,20 @@ export class ProcessKernel {
     if (!callerFdTable) throw new Error(`No fd table for caller pid ${callerPid}`);
     const newFdTable = new Map<number, FdTarget>();
     const stdinTarget = callerFdTable.get(req.stdin_fd);
-    if (stdinTarget) newFdTable.set(0, stdinTarget);
+    if (stdinTarget) {
+      if (stdinTarget.type === 'pipe_read') stdinTarget.pipe.addRef();
+      newFdTable.set(0, stdinTarget);
+    }
     const stdoutTarget = callerFdTable.get(req.stdout_fd);
-    if (stdoutTarget) newFdTable.set(1, stdoutTarget);
+    if (stdoutTarget) {
+      if (stdoutTarget.type === 'pipe_write') stdoutTarget.pipe.addRef();
+      newFdTable.set(1, stdoutTarget);
+    }
     const stderrTarget = callerFdTable.get(req.stderr_fd);
-    if (stderrTarget) newFdTable.set(2, stderrTarget);
+    if (stderrTarget) {
+      if (stderrTarget.type === 'pipe_write') stderrTarget.pipe.addRef();
+      newFdTable.set(2, stderrTarget);
+    }
     return newFdTable;
   }
 
@@ -91,6 +101,8 @@ export class ProcessKernel {
     const onExit = () => {
       entry.state = 'exited';
       entry.exitCode = wasiHost.getExitCode() ?? 0;
+      // Close the child's fds (decrements pipe refcounts, signals EOF).
+      this.cleanupFds(pid);
       for (const waiter of entry.waiters) waiter(entry.exitCode);
       entry.waiters.length = 0;
     };
@@ -115,6 +127,22 @@ export class ProcessKernel {
 
   allocPid(): number { return this.nextPid++; }
 
+  /** Register a process as already exited (used for synchronous spawn). */
+  registerExited(pid: number, exitCode: number): void {
+    const existing = this.processTable.get(pid);
+    if (existing) {
+      existing.state = 'exited';
+      existing.exitCode = exitCode;
+      existing.promise = Promise.resolve();
+      for (const waiter of existing.waiters) waiter(exitCode);
+      existing.waiters.length = 0;
+    } else {
+      this.processTable.set(pid, {
+        pid, promise: Promise.resolve(), exitCode, state: 'exited', wasiHost: null, waiters: [],
+      });
+    }
+  }
+
   async waitpid(pid: number): Promise<number> {
     const entry = this.processTable.get(pid);
     if (!entry) return -1;
@@ -122,17 +150,59 @@ export class ProcessKernel {
     return new Promise<number>((resolve) => { entry.waiters.push(resolve); });
   }
 
+  dup(pid: number, fd: number): number {
+    const fdTable = this.fdTables.get(pid);
+    if (!fdTable) throw new Error(`No fd table for pid ${pid}`);
+    const srcTarget = fdTable.get(fd);
+    if (!srcTarget) throw new Error(`dup: fd ${fd} not found`);
+    // Add ref for pipes
+    if (srcTarget.type === 'pipe_write') srcTarget.pipe.addRef();
+    if (srcTarget.type === 'pipe_read') srcTarget.pipe.addRef();
+    // Allocate a new fd number
+    let nextFd = this.nextFds.get(pid) ?? 3;
+    const newFd = nextFd++;
+    this.nextFds.set(pid, nextFd);
+    fdTable.set(newFd, srcTarget);
+    return newFd;
+  }
+
+  dup2(pid: number, srcFd: number, dstFd: number): void {
+    const fdTable = this.fdTables.get(pid);
+    if (!fdTable) throw new Error(`No fd table for pid ${pid}`);
+    const srcTarget = fdTable.get(srcFd);
+    if (!srcTarget) throw new Error(`dup2: src fd ${srcFd} not found`);
+    // If dst already exists, close it first (decrement pipe refcount)
+    const existing = fdTable.get(dstFd);
+    if (existing) {
+      if (existing.type === 'pipe_write') existing.pipe.close();
+      if (existing.type === 'pipe_read') existing.pipe.close();
+    }
+    // Point dst to same target as src (add ref for pipes)
+    if (srcTarget.type === 'pipe_write') srcTarget.pipe.addRef();
+    if (srcTarget.type === 'pipe_read') srcTarget.pipe.addRef();
+    fdTable.set(dstFd, srcTarget);
+  }
+
   closeFd(pid: number, fd: number): void {
     const fdTable = this.fdTables.get(pid);
     if (!fdTable) return;
     const target = fdTable.get(fd);
     if (!target) { fdTable.delete(fd); return; }
-    // Only close pipe_write ends (signals EOF to readers).
-    // Pipe_read ends are shared with child processes and must not be
-    // closed from the parent — the child still needs them. They are
-    // cleaned up when all referencing processes exit (dispose).
+    // Ref-counted close — only actually closes when refcount hits 0.
     if (target.type === 'pipe_write') target.pipe.close();
+    if (target.type === 'pipe_read') target.pipe.close();
     fdTable.delete(fd);
+  }
+
+  /** Close all fds in a process's fd table (ref-counted close for pipes). */
+  private cleanupFds(pid: number): void {
+    const fdTable = this.fdTables.get(pid);
+    if (!fdTable) return;
+    for (const [, target] of fdTable) {
+      if (target.type === 'pipe_write') target.pipe.close();
+      if (target.type === 'pipe_read') target.pipe.close();
+    }
+    fdTable.clear();
   }
 
   initProcess(pid: number): void {

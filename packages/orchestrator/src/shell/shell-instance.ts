@@ -21,7 +21,7 @@ import { createShellImports } from '../host-imports/shell-imports.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
 import { ProcessKernel, type SpawnRequest } from '../process/kernel.js';
 import { WasiHost } from '../wasi/wasi-host.js';
-import { createBufferTarget, createNullTarget, type FdTarget } from '../wasi/fd-target.js';
+import { createBufferTarget, createNullTarget, bufferToString, type FdTarget } from '../wasi/fd-target.js';
 
 /** Default environment variables for a new ShellInstance. */
 const DEFAULT_ENV: [string, string][] = [
@@ -48,6 +48,8 @@ export interface ShellInstanceOptions {
   extensionRegistry?: ExtensionRegistry;
   /** Tool allowlist for security policy. */
   toolAllowlist?: string[];
+  /** Max WASM linear memory in bytes for spawned child processes. */
+  memoryBytes?: number;
 }
 
 export class ShellInstance implements ShellLike {
@@ -74,6 +76,10 @@ export class ShellInstance implements ShellLike {
   // JSPI-wrapped __run_command (or raw export if JSPI unavailable).
   // Stored separately because V8 makes WASM exports read-only.
   private runCommandFn: Function | undefined;
+
+  // Process kernel for pipe/spawn support.
+  // Needed to extract buffer-captured output from spawned pipeline stages.
+  private kernel: ProcessKernel | undefined;
 
   private constructor(instance: WebAssembly.Instance) {
     this.instance = instance;
@@ -148,7 +154,10 @@ export class ShellInstance implements ShellLike {
       extensionRegistry: options?.extensionRegistry,
       toolAllowlist: options?.toolAllowlist,
       spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>) => {
-        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter);
+        if (options?.syncSpawn) {
+          return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn);
+        }
+        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes);
       },
     });
 
@@ -392,6 +401,7 @@ export class ShellInstance implements ShellLike {
 
     const shell = new ShellInstance(instance);
     shell.runCommandFn = wrappedRunCommand;
+    shell.kernel = kernel;
     shellRef = shell;
 
     // Populate /bin/ in VFS with entries for registered tools so that
@@ -596,8 +606,27 @@ export class ShellInstance implements ShellLike {
       this.syncedEnv = new Map(this.env);
     }
 
-    let stdout: string = result.stdout ?? '';
-    let stderr: string = result.stderr ?? '';
+    // All output flows through the kernel buffer (pid 0 fd 1/2):
+    // - Builtins call write_to_fd(stdout_fd, ...) via WASI fd_write
+    // - Sync external commands write post-redirect output to stdout_fd
+    // - Async spawned pipeline stages write via child fd tables
+    // This is the single source of truth for stdout/stderr.
+    let stdout = '';
+    let stderr = '';
+    if (this.kernel) {
+      const stdoutTarget = this.kernel.getFdTarget(0, 1);
+      const stderrTarget = this.kernel.getFdTarget(0, 2);
+      if (stdoutTarget?.type === 'buffer' && stdoutTarget.buf.length > 0) {
+        stdout = bufferToString(stdoutTarget);
+      }
+      if (stderrTarget?.type === 'buffer' && stderrTarget.buf.length > 0) {
+        stderr = bufferToString(stderrTarget);
+      }
+      // Reset buffers for the next run
+      if (stdoutTarget?.type === 'buffer') { stdoutTarget.buf.length = 0; stdoutTarget.total = 0; stdoutTarget.truncated = false; }
+      if (stderrTarget?.type === 'buffer') { stderrTarget.buf.length = 0; stderrTarget.total = 0; stderrTarget.truncated = false; }
+    }
+    // Kernel buffer is the sole source of truth. No JSON fallback needed.
     let truncated: { stdout: boolean; stderr: boolean } | undefined;
 
     const enc = new TextEncoder();
@@ -665,7 +694,23 @@ function spawnAsyncProcess(
   mgr: ProcessManager,
   kernel: ProcessKernel,
   adapter: PlatformAdapter,
+  deadlineMs?: number,
+  memoryBytes?: number,
 ): number {
+  // Tool allowlist check
+  if (!mgr.isToolAllowed(req.prog)) {
+    const pid = kernel.allocPid();
+    kernel.initProcess(pid);
+    for (const [fd, target] of fdTable) kernel.setFdTarget(pid, fd, target);
+    const errMsg = new TextEncoder().encode(`${req.prog}: tool not allowed by security policy\n`);
+    const stderrTarget = fdTable.get(2);
+    if (stderrTarget?.type === 'buffer') { stderrTarget.buf.push(errMsg); stderrTarget.total += errMsg.byteLength; }
+    else if (stderrTarget?.type === 'pipe_write') stderrTarget.pipe.write(errMsg);
+    for (const [fd] of fdTable) kernel.closeFd(pid, fd);
+    kernel.registerExited(pid, 126);
+    return pid;
+  }
+
   const pid = kernel.allocPid();
   kernel.initProcess(pid);
   kernel.registerPending(pid);
@@ -673,15 +718,36 @@ function spawnAsyncProcess(
   const module = mgr.getModule(req.prog);
   if (!module) return -1;
 
+  // Store fd targets in the kernel so cleanupFds can close them on exit.
+  // This ensures pipe write ends get closed when the child process exits,
+  // signaling EOF to downstream readers.
+  for (const [fd, target] of fdTable) {
+    kernel.setFdTarget(pid, fd, target);
+  }
+
   const host = new WasiHost({
     vfs: mgr.getVfs(),
     args: [req.prog, ...req.args],
     env: Object.fromEntries(req.env),
     preopens: { '/': '/' },
     ioFds: fdTable,
+    deadlineMs,
   });
 
   const imports = host.getImports() as WebAssembly.Imports & Record<string, Record<string, unknown>>;
+
+  // If memoryBytes is set, inject a bounded memory into the import object
+  if (memoryBytes !== undefined) {
+    const maxPages = Math.ceil(memoryBytes / 65536);
+    const moduleImports = WebAssembly.Module.imports(module);
+    for (const imp of moduleImports) {
+      if (imp.kind === 'memory') {
+        const mem = new WebAssembly.Memory({ initial: 1, maximum: maxPages });
+        if (!imports[imp.module]) imports[imp.module] = {} as WebAssembly.ModuleImports & Record<string, unknown>;
+        (imports[imp.module] as Record<string, unknown>)[imp.name] = mem;
+      }
+    }
+  }
 
   // JSPI-wrap fd_read/fd_write for pipe suspension in the child process.
   if (typeof WebAssembly.Suspending === 'function') {
@@ -692,6 +758,38 @@ function spawnAsyncProcess(
       imports.wasi_snapshot_preview1.fd_write as (...args: number[]) => number,
     ) as unknown as WebAssembly.ImportValue;
   }
+
+  // Helper: check memory limit post-instantiation, write error and bail if exceeded.
+  const checkMemLimit = (instance: WebAssembly.Instance): boolean => {
+    if (memoryBytes === undefined) return false;
+    const mem = instance.exports.memory as WebAssembly.Memory | undefined;
+    if (!mem) return false;
+    const modImports = WebAssembly.Module.imports(module);
+    const hasMemoryImport = modImports.some(imp => imp.kind === 'memory');
+    if (!hasMemoryImport || mem.buffer.byteLength > memoryBytes) {
+      const errMsg = new TextEncoder().encode('memory limit exceeded\n');
+      const stderrTarget = kernel.getFdTarget(pid, 2);
+      if (stderrTarget?.type === 'buffer') { stderrTarget.buf.push(errMsg); stderrTarget.total += errMsg.byteLength; }
+      else if (stderrTarget?.type === 'pipe_write') stderrTarget.pipe.write(errMsg);
+      for (const [fd] of fdTable) kernel.closeFd(pid, fd);
+      kernel.registerExited(pid, 1);
+      return true; // exceeded
+    }
+    return false;
+  };
+
+  const handleInstantiationError = () => {
+    if (memoryBytes !== undefined) {
+      const errMsg = new TextEncoder().encode('memory limit exceeded\n');
+      const stderrTarget = kernel.getFdTarget(pid, 2);
+      if (stderrTarget?.type === 'buffer') { stderrTarget.buf.push(errMsg); stderrTarget.total += errMsg.byteLength; }
+      else if (stderrTarget?.type === 'pipe_write') stderrTarget.pipe.write(errMsg);
+      for (const [fd] of fdTable) kernel.closeFd(pid, fd);
+      kernel.registerExited(pid, 1);
+    } else {
+      kernel.attachProcess(pid, Promise.resolve(), host);
+    }
+  };
 
   // Add kernel imports if the module needs the `codepod` namespace.
   const moduleImportDescs = WebAssembly.Module.imports(module);
@@ -710,7 +808,7 @@ function spawnAsyncProcess(
       memory: childMemoryProxy,
       callerPid: pid,
       kernel,
-      spawnProcess: (req2, fdTable2) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter),
+      spawnProcess: (req2, fdTable2) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes),
     });
     imports.codepod = childKernelImports as unknown as Record<string, WebAssembly.ImportValue>;
 
@@ -729,6 +827,7 @@ function spawnAsyncProcess(
 
     // Start the process asynchronously
     adapter.instantiate(module, imports).then((instance) => {
+      if (checkMemLimit(instance)) return;
       childMemRef = instance.exports.memory as WebAssembly.Memory;
       host.setMemory(childMemRef);
 
@@ -739,13 +838,11 @@ function spawnAsyncProcess(
 
       const promise = Promise.resolve().then(() => startFn()).catch(() => {});
       kernel.attachProcess(pid, promise, host);
-    }).catch(() => {
-      // If instantiation fails, attach as immediately exited
-      kernel.attachProcess(pid, Promise.resolve(), host);
-    });
+    }).catch(handleInstantiationError);
   } else {
     // Module doesn't need codepod imports — simpler path
     adapter.instantiate(module, imports).then((instance) => {
+      if (checkMemLimit(instance)) return;
       host.setMemory(instance.exports.memory as WebAssembly.Memory);
 
       let startFn = instance.exports._start as Function;
@@ -755,10 +852,94 @@ function spawnAsyncProcess(
 
       const promise = Promise.resolve().then(() => startFn()).catch(() => {});
       kernel.attachProcess(pid, promise, host);
-    }).catch(() => {
-      kernel.attachProcess(pid, Promise.resolve(), host);
-    });
+    }).catch(handleInstantiationError);
   }
+
+  return pid;
+}
+
+/**
+ * Synchronous spawn for testing.
+ *
+ * When syncSpawn is provided, external commands are handled by the test's
+ * callback instead of instantiating real WASM modules. The callback's
+ * stdout/stderr are written to the child's fd targets (which point to the
+ * shell's kernel buffers), and the process is registered as already exited.
+ */
+function spawnSyncProcess(
+  req: SpawnRequest,
+  fdTable: Map<number, FdTarget>,
+  kernel: ProcessKernel,
+  syncSpawn: NonNullable<ShellInstanceOptions['syncSpawn']>,
+): number {
+  const pid = kernel.allocPid();
+  kernel.initProcess(pid);
+
+  // Store fd targets in the kernel for cleanup
+  for (const [fd, target] of fdTable) {
+    kernel.setFdTarget(pid, fd, target);
+  }
+
+  const env: Record<string, string> = {};
+  for (const [k, v] of req.env) env[k] = v;
+
+  // Build stdin: prefer stdin_data, then drain pipe/static from fd 0
+  let stdin: Uint8Array;
+  if (req.stdin_data) {
+    stdin = new TextEncoder().encode(req.stdin_data);
+  } else {
+    const stdinTarget = fdTable.get(0);
+    if (stdinTarget?.type === 'pipe_read') {
+      stdin = stdinTarget.pipe.drainSync();
+    } else if (stdinTarget?.type === 'static') {
+      stdin = stdinTarget.data.subarray(stdinTarget.offset);
+      stdinTarget.offset = stdinTarget.data.byteLength;
+    } else {
+      stdin = new Uint8Array(0);
+    }
+  }
+
+  let result: { exit_code: number; stdout: string; stderr: string };
+  try {
+    result = syncSpawn(req.prog, req.args, env, stdin, req.cwd);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    result = { exit_code: 127, stdout: '', stderr: `${req.prog}: ${msg}\n` };
+  }
+
+  const enc = new TextEncoder();
+
+  // Write stdout to the child's fd 1 target
+  const stdoutTarget = fdTable.get(1);
+  if (stdoutTarget && result.stdout) {
+    const data = enc.encode(result.stdout);
+    if (stdoutTarget.type === 'buffer') {
+      stdoutTarget.buf.push(data);
+      stdoutTarget.total += data.byteLength;
+    } else if (stdoutTarget.type === 'pipe_write') {
+      stdoutTarget.pipe.write(data);
+    }
+  }
+
+  // Write stderr to the child's fd 2 target
+  const stderrTarget = fdTable.get(2);
+  if (stderrTarget && result.stderr) {
+    const data = enc.encode(result.stderr);
+    if (stderrTarget.type === 'buffer') {
+      stderrTarget.buf.push(data);
+      stderrTarget.total += data.byteLength;
+    } else if (stderrTarget.type === 'pipe_write') {
+      stderrTarget.pipe.write(data);
+    }
+  }
+
+  // Close child fds (decrements pipe refcounts, signals EOF)
+  for (const [fd] of fdTable) {
+    kernel.closeFd(pid, fd);
+  }
+
+  // Register as already exited so waitpid returns immediately
+  kernel.registerExited(pid, result.exit_code);
 
   return pid;
 }

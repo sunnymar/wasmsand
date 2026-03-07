@@ -2,10 +2,14 @@
 pub mod mock {
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
+    use std::sync::Mutex;
 
     use crate::host::{
         CancelStatus, FetchResult, HostError, HostInterface, SpawnResult, StatInfo, WriteMode,
     };
+
+    /// Mutex to serialize dup2 operations on fd 1 across test threads.
+    pub static FD_MUTEX: Mutex<()> = Mutex::new(());
 
     /// A recorded spawn invocation, for test assertions.
     #[derive(Debug, Clone)]
@@ -13,6 +17,15 @@ pub mod mock {
         pub program: String,
         pub args: Vec<String>,
         pub stdin: String,
+    }
+
+    /// Mock-only spawn output that carries stdout/stderr data for piping,
+    /// plus the exit code. `SpawnResult` itself only has `exit_code`.
+    #[derive(Debug, Clone)]
+    pub struct MockSpawnOutput {
+        pub exit_code: i32,
+        pub stdout: String,
+        pub stderr: String,
     }
 
     /// An in-memory mock implementation of `HostInterface` for testing.
@@ -23,20 +36,24 @@ pub mod mock {
         files: RefCell<HashMap<String, Vec<u8>>>,
         dirs: HashSet<String>,
         tools: HashSet<String>,
-        spawn_results: HashMap<String, SpawnResult>,
+        spawn_results: HashMap<String, MockSpawnOutput>,
         glob_results: HashMap<String, Vec<String>>,
         /// Records every spawn invocation for later assertion.
         spawn_calls: RefCell<Vec<SpawnCall>>,
         /// Optional dynamic spawn handler: receives (program, args, stdin) and
-        /// returns a SpawnResult. When set, this takes priority over
+        /// returns a MockSpawnOutput. When set, this takes priority over
         /// `spawn_results`.
-        spawn_handler: Option<Box<dyn Fn(&str, &[&str], &str) -> SpawnResult>>,
+        spawn_handler: Option<Box<dyn Fn(&str, &[&str], &str) -> MockSpawnOutput>>,
         /// Pre-configured fetch results keyed by URL.
         fetch_results: HashMap<String, FetchResult>,
         /// Extension names mapped to their invoke results.
-        extensions: HashMap<String, SpawnResult>,
+        extensions: HashMap<String, MockSpawnOutput>,
         /// Records register_tool calls for test assertions.
         registered_tools: RefCell<Vec<(String, String)>>,
+        /// Next PID to allocate for spawn.
+        next_pid: RefCell<i32>,
+        /// Stored spawn results keyed by PID, for waitpid to return exit codes.
+        pid_results: RefCell<HashMap<i32, SpawnResult>>,
     }
 
     impl Default for MockHost {
@@ -58,6 +75,8 @@ pub mod mock {
                 fetch_results: HashMap::new(),
                 extensions: HashMap::new(),
                 registered_tools: RefCell::new(Vec::new()),
+                next_pid: RefCell::new(100),
+                pid_results: RefCell::new(HashMap::new()),
             }
         }
 
@@ -68,7 +87,7 @@ pub mod mock {
         }
 
         /// Register a pre-configured spawn result for a command name.
-        pub fn with_spawn_result(mut self, cmd: &str, result: SpawnResult) -> Self {
+        pub fn with_spawn_result(mut self, cmd: &str, result: MockSpawnOutput) -> Self {
             self.spawn_results.insert(cmd.to_string(), result);
             self
         }
@@ -94,10 +113,10 @@ pub mod mock {
         }
 
         /// Register a dynamic spawn handler that receives (program, args, stdin)
-        /// and returns a SpawnResult. Takes priority over `spawn_results`.
+        /// and returns a MockSpawnOutput. Takes priority over `spawn_results`.
         pub fn with_spawn_handler<F>(mut self, handler: F) -> Self
         where
-            F: Fn(&str, &[&str], &str) -> SpawnResult + 'static,
+            F: Fn(&str, &[&str], &str) -> MockSpawnOutput + 'static,
         {
             self.spawn_handler = Some(Box::new(handler));
             self
@@ -123,7 +142,7 @@ pub mod mock {
         }
 
         /// Register an extension that returns a pre-configured result.
-        pub fn with_extension(mut self, name: &str, result: SpawnResult) -> Self {
+        pub fn with_extension(mut self, name: &str, result: MockSpawnOutput) -> Self {
             self.extensions.insert(name.to_string(), result);
             self
         }
@@ -141,29 +160,64 @@ pub mod mock {
             args: &[&str],
             _env: &[(&str, &str)],
             _cwd: &str,
-            stdin: &str,
-        ) -> Result<SpawnResult, HostError> {
+            stdin_data: &str,
+            stdin_fd: i32,
+            stdout_fd: i32,
+            _stderr_fd: i32,
+        ) -> Result<i32, HostError> {
+            // In streaming pipeline mode, stdin comes from a pipe fd, not the
+            // stdin_data string. Read from stdin_fd if stdin_data is empty.
+            let effective_stdin = if stdin_data.is_empty() && stdin_fd > 2 {
+                // Read from the pipe fd
+                let data = self.read_fd(stdin_fd).unwrap_or_default();
+                String::from_utf8_lossy(&data).to_string()
+            } else {
+                stdin_data.to_string()
+            };
+
             // Record the call for later assertion.
             self.spawn_calls.borrow_mut().push(SpawnCall {
                 program: program.to_string(),
                 args: args.iter().map(|s| s.to_string()).collect(),
-                stdin: stdin.to_string(),
+                stdin: effective_stdin.clone(),
             });
 
-            // Dynamic handler takes priority.
-            if let Some(ref handler) = self.spawn_handler {
-                return Ok(handler(program, args, stdin));
-            }
-
-            if let Some(result) = self.spawn_results.get(program) {
-                Ok(result.clone())
+            // Resolve the mock spawn output from handler or static map.
+            let output = if let Some(ref handler) = self.spawn_handler {
+                handler(program, args, &effective_stdin)
+            } else if let Some(r) = self.spawn_results.get(program) {
+                r.clone()
             } else {
-                Ok(SpawnResult {
+                MockSpawnOutput {
                     exit_code: 127,
                     stdout: String::new(),
                     stderr: format!("{program}: command not found"),
-                })
+                }
+            };
+
+            // Write mock stdout to the pipe fd so streaming pipelines work.
+            if !output.stdout.is_empty() && stdout_fd > 2 {
+                let data = output.stdout.as_bytes();
+                unsafe {
+                    libc::write(
+                        stdout_fd as libc::c_int,
+                        data.as_ptr() as *const libc::c_void,
+                        data.len(),
+                    );
+                }
             }
+
+            // Allocate a PID and store the exit code for waitpid.
+            let mut pid_ref = self.next_pid.borrow_mut();
+            let pid = *pid_ref;
+            *pid_ref += 1;
+            self.pid_results.borrow_mut().insert(
+                pid,
+                SpawnResult {
+                    exit_code: output.exit_code,
+                },
+            );
+            Ok(pid)
         }
 
         fn has_tool(&self, name: &str) -> bool {
@@ -321,8 +375,10 @@ pub mod mock {
             _env: &[(&str, &str)],
             _cwd: &str,
         ) -> Result<SpawnResult, HostError> {
-            if let Some(result) = self.extensions.get(name) {
-                return Ok(result.clone());
+            if let Some(output) = self.extensions.get(name) {
+                return Ok(SpawnResult {
+                    exit_code: output.exit_code,
+                });
             }
             Err(HostError::NotFound(format!("{name}: extension not found")))
         }
@@ -338,35 +394,62 @@ pub mod mock {
             self.extensions.contains_key(name)
         }
 
-        // ----- Process management stubs (Task 5) -----
-
         fn pipe(&self) -> Result<(i32, i32), HostError> {
-            Err(HostError::Other("pipe: not available in MockHost".into()))
+            let mut fds = [0 as libc::c_int; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                return Err(HostError::IoError("pipe failed".into()));
+            }
+            Ok((fds[0] as i32, fds[1] as i32))
         }
 
-        fn spawn_async(
-            &self,
-            _program: &str,
-            _args: &[&str],
-            _env: &[(&str, &str)],
-            _cwd: &str,
-            _stdin_fd: i32,
-            _stdout_fd: i32,
-            _stderr_fd: i32,
-        ) -> Result<i32, HostError> {
-            Err(HostError::Other(
-                "spawn_async: not available in MockHost".into(),
-            ))
+        fn waitpid(&self, pid: i32) -> Result<SpawnResult, HostError> {
+            match self.pid_results.borrow().get(&pid) {
+                Some(result) => Ok(result.clone()),
+                None => Err(HostError::Other(format!("waitpid: unknown pid {pid}"))),
+            }
         }
 
-        fn waitpid(&self, _pid: i32) -> Result<i32, HostError> {
-            Err(HostError::Other(
-                "waitpid: not available in MockHost".into(),
-            ))
-        }
-
-        fn close_fd(&self, _fd: i32) -> Result<(), HostError> {
+        fn close_fd(&self, fd: i32) -> Result<(), HostError> {
+            unsafe {
+                libc::close(fd as libc::c_int);
+            }
             Ok(())
+        }
+
+        fn dup(&self, fd: i32) -> Result<i32, HostError> {
+            let r = unsafe { libc::dup(fd as libc::c_int) };
+            if r < 0 {
+                return Err(HostError::IoError(format!("dup({fd}) failed")));
+            }
+            Ok(r as i32)
+        }
+
+        fn dup2(&self, src_fd: i32, dst_fd: i32) -> Result<(), HostError> {
+            if unsafe { libc::dup2(src_fd as libc::c_int, dst_fd as libc::c_int) } < 0 {
+                return Err(HostError::IoError(format!(
+                    "dup2({src_fd}, {dst_fd}) failed"
+                )));
+            }
+            Ok(())
+        }
+
+        fn read_fd(&self, fd: i32) -> Result<Vec<u8>, HostError> {
+            let mut result = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = unsafe {
+                    libc::read(
+                        fd as libc::c_int,
+                        buf.as_mut_ptr() as *mut libc::c_void,
+                        buf.len(),
+                    )
+                };
+                if n <= 0 {
+                    break;
+                }
+                result.extend_from_slice(&buf[..n as usize]);
+            }
+            Ok(result)
         }
 
         fn yield_now(&self) -> Result<(), HostError> {

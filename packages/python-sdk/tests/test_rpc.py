@@ -17,9 +17,10 @@ SHELL_WASM = os.path.join(
 @pytest.fixture
 def client():
     """Start RPC client, create sandbox, yield client, kill on teardown."""
-    runtime = shutil.which("bun")
-    assert runtime is not None, "Bun not found on PATH"
-    c = RpcClient(runtime, SERVER_SCRIPT)
+    runtime = shutil.which("deno")
+    assert runtime is not None, "Deno not found on PATH"
+    server_args = ["run", "-A", "--no-check", "--unstable-sloppy-imports", SERVER_SCRIPT]
+    c = RpcClient(runtime, server_args)
     c.start()
     result = c.call("create", {"wasmDir": WASM_DIR, "shellWasmPath": SHELL_WASM})
     assert result["ok"] is True

@@ -56,6 +56,12 @@ export class ProcessManager {
     return this.registry.has(name);
   }
 
+  /** Check if a tool is allowed by the security policy. */
+  isToolAllowed(name: string): boolean {
+    if (!this.toolAllowlist) return true;
+    return this.toolAllowlist.has(name);
+  }
+
   /** Resolve a tool name to its .wasm path, or throw if not registered. */
   resolveTool(name: string): string {
     const path = this.registry.get(name);

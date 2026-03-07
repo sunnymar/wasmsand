@@ -6,6 +6,7 @@
 use crate::control::RunResult;
 use crate::host::{HostInterface, WriteMode};
 use crate::state::ShellState;
+use crate::{shell_eprint, shell_print};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -100,7 +101,10 @@ fn cmd_curl(
 
     let url = match url {
         Some(u) => u,
-        None => return RunResult::error(1, "curl: no URL specified\n".into()),
+        None => {
+            shell_eprint!("{}", "curl: no URL specified\n");
+            return RunResult::exit(1);
+        }
     };
 
     // Check for network configuration
@@ -149,7 +153,8 @@ fn cmd_curl(
     let result = host.fetch(&url, &method, &header_refs, body);
 
     if let Some(ref err) = result.error {
-        return RunResult::error(1, format!("curl: {err}\n"));
+        shell_eprint!("curl: {err}\n");
+        return RunResult::exit(1);
     }
 
     if head_only {
@@ -158,18 +163,21 @@ fn cmd_curl(
             out.push_str(&format!("{}: {}\r\n", name, value));
         }
         out.push_str("\r\n");
-        return RunResult::success(out);
+        shell_print!("{}", out);
+        return RunResult::empty();
     }
 
     if let Some(ref file) = output_file {
         let resolved = state.resolve_path(file);
         if let Err(e) = host.write_file(&resolved, &result.body, WriteMode::Truncate) {
-            return RunResult::error(1, format!("curl: failed to write {file}: {e}\n"));
+            shell_eprint!("curl: failed to write {file}: {e}\n");
+            return RunResult::exit(1);
         }
         return RunResult::empty();
     }
 
-    RunResult::success(result.body)
+    shell_print!("{}", result.body);
+    RunResult::empty()
 }
 
 fn status_text(code: u16) -> &'static str {
@@ -220,18 +228,23 @@ fn cmd_wget(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -
 
     let url = match url {
         Some(u) => u,
-        None => return RunResult::error(1, "wget: no URL specified\n".into()),
+        None => {
+            shell_eprint!("{}", "wget: no URL specified\n");
+            return RunResult::exit(1);
+        }
     };
 
     let result = host.fetch(&url, "GET", &[], None);
 
     if let Some(ref err) = result.error {
-        return RunResult::error(1, format!("wget: {err}\n"));
+        shell_eprint!("wget: {err}\n");
+        return RunResult::exit(1);
     }
 
     // -O - means write to stdout
     if output_file.as_deref() == Some("-") {
-        return RunResult::success(result.body);
+        shell_print!("{}", result.body);
+        return RunResult::empty();
     }
 
     // Determine output filename
@@ -251,21 +264,15 @@ fn cmd_wget(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -
 
     let resolved = state.resolve_path(&filename);
     if let Err(e) = host.write_file(&resolved, &result.body, WriteMode::Truncate) {
-        return RunResult::error(1, format!("wget: failed to write {filename}: {e}\n"));
+        shell_eprint!("wget: failed to write {filename}: {e}\n");
+        return RunResult::exit(1);
     }
 
-    let stderr = if quiet {
-        String::new()
-    } else {
-        format!("saved to {filename}\n")
-    };
-
-    RunResult {
-        exit_code: 0,
-        stdout: String::new(),
-        stderr,
-        execution_time_ms: 0,
+    if !quiet {
+        shell_eprint!("saved to {filename}\n");
     }
+
+    RunResult::empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -294,10 +301,8 @@ struct PkgInfo {
 
 fn cmd_pkg(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -> RunResult {
     if args.is_empty() {
-        return RunResult::error(
-            1,
-            "pkg: usage: pkg <install|remove|list|info> [args]\n".into(),
-        );
+        shell_eprint!("{}", "pkg: usage: pkg <install|remove|list|info> [args]\n");
+        return RunResult::exit(1);
     }
 
     let subcmd = args[0].as_str();
@@ -308,7 +313,10 @@ fn cmd_pkg(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) ->
         "remove" => pkg_remove(state, host, sub_args),
         "list" => pkg_list(host),
         "info" => pkg_info(host, sub_args),
-        other => RunResult::error(1, format!("pkg: unknown subcommand '{other}'\n")),
+        other => {
+            shell_eprint!("pkg: unknown subcommand '{other}'\n");
+            RunResult::exit(1)
+        }
     }
 }
 
@@ -369,7 +377,8 @@ fn pkg_name_from_url(url: &str) -> String {
 
 fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -> RunResult {
     if args.is_empty() {
-        return RunResult::error(1, "pkg install: no URL specified\n".into());
+        shell_eprint!("{}", "pkg install: no URL specified\n");
+        return RunResult::exit(1);
     }
 
     let url = &args[0];
@@ -377,24 +386,29 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
     // Read policy
     let policy = match read_pkg_policy(host) {
         Some(p) => p,
-        None => return RunResult::error(1, "pkg: package manager is disabled\n".into()),
+        None => {
+            shell_eprint!("{}", "pkg: package manager is disabled\n");
+            return RunResult::exit(1);
+        }
     };
 
     if !policy.enabled {
-        return RunResult::error(1, "pkg: package manager is disabled\n".into());
+        shell_eprint!("{}", "pkg: package manager is disabled\n");
+        return RunResult::exit(1);
     }
 
     // Check host against allowedHosts
     if let Some(ref allowed) = policy.allowed_hosts {
         let host_name = match extract_host(url) {
             Some(h) => h,
-            None => return RunResult::error(1, format!("pkg install: invalid URL: {url}\n")),
+            None => {
+                shell_eprint!("pkg install: invalid URL: {url}\n");
+                return RunResult::exit(1);
+            }
         };
         if !matches_host_list(&host_name, allowed) {
-            return RunResult::error(
-                1,
-                format!("pkg install: Host '{host_name}' is not in the allowed hosts list\n"),
-            );
+            shell_eprint!("pkg install: Host '{host_name}' is not in the allowed hosts list\n");
+            return RunResult::exit(1);
         }
     }
 
@@ -403,35 +417,30 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
 
     // Check duplicate
     if packages.iter().any(|p| p.name == name) {
-        return RunResult::error(
-            1,
-            format!("pkg install: Package '{name}' is already installed\n"),
-        );
+        shell_eprint!("pkg install: Package '{name}' is already installed\n");
+        return RunResult::exit(1);
     }
 
     // Check max installed
     if let Some(max) = policy.max_installed_packages {
         if packages.len() >= max {
-            return RunResult::error(
-                1,
-                format!("pkg install: Maximum of {max} packages reached\n"),
-            );
+            shell_eprint!("pkg install: Maximum of {max} packages reached\n");
+            return RunResult::exit(1);
         }
     }
 
     // Fetch the WASM binary
     let result = host.fetch(url, "GET", &[], None);
     if let Some(ref err) = result.error {
-        return RunResult::error(1, format!("pkg install: download failed: {err}\n"));
+        shell_eprint!("pkg install: download failed: {err}\n");
+        return RunResult::exit(1);
     }
     if !result.ok {
-        return RunResult::error(
-            1,
-            format!(
-                "pkg install: download failed with status {}\n",
-                result.status
-            ),
+        shell_eprint!(
+            "pkg install: download failed with status {}\n",
+            result.status
         );
+        return RunResult::exit(1);
     }
 
     let size = result.body.len();
@@ -439,10 +448,8 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
     // Check size limit
     if let Some(max_bytes) = policy.max_package_bytes {
         if size > max_bytes {
-            return RunResult::error(
-                1,
-                format!("pkg install: Package size {size} exceeds limit of {max_bytes} bytes\n"),
-            );
+            shell_eprint!("pkg install: Package size {size} exceeds limit of {max_bytes} bytes\n");
+            return RunResult::exit(1);
         }
     }
 
@@ -453,7 +460,8 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
     // Write binary to VFS
     let wasm_path = format!("/usr/share/pkg/bin/{name}.wasm");
     if let Err(e) = host.write_file(&wasm_path, &result.body, WriteMode::Truncate) {
-        return RunResult::error(1, format!("pkg install: failed to write binary: {e}\n"));
+        shell_eprint!("pkg install: failed to write binary: {e}\n");
+        return RunResult::exit(1);
     }
 
     // Update metadata
@@ -469,17 +477,20 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
     // Register with host process manager
     if let Err(e) = host.register_tool(&name, &wasm_path) {
         let _ = state; // suppress unused warning
-        return RunResult::error(1, format!("pkg install: failed to register tool: {e}\n"));
+        shell_eprint!("pkg install: failed to register tool: {e}\n");
+        return RunResult::exit(1);
     }
 
-    RunResult::success(format!("Installed {name}\n"))
+    shell_print!("Installed {name}\n");
+    RunResult::empty()
 }
 
 fn pkg_remove(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -> RunResult {
     let _ = state;
 
     if args.is_empty() {
-        return RunResult::error(1, "pkg remove: no package specified\n".into());
+        shell_eprint!("{}", "pkg remove: no package specified\n");
+        return RunResult::exit(1);
     }
 
     let name = &args[0];
@@ -487,16 +498,21 @@ fn pkg_remove(state: &mut ShellState, host: &dyn HostInterface, args: &[String])
     // Read policy
     let policy = match read_pkg_policy(host) {
         Some(p) => p,
-        None => return RunResult::error(1, "pkg: package manager is disabled\n".into()),
+        None => {
+            shell_eprint!("{}", "pkg: package manager is disabled\n");
+            return RunResult::exit(1);
+        }
     };
     if !policy.enabled {
-        return RunResult::error(1, "pkg: package manager is disabled\n".into());
+        shell_eprint!("{}", "pkg: package manager is disabled\n");
+        return RunResult::exit(1);
     }
 
     let mut packages = read_pkg_metadata(host);
 
     if !packages.iter().any(|p| p.name == *name) {
-        return RunResult::error(1, format!("pkg remove: '{name}' is not installed\n"));
+        shell_eprint!("pkg remove: '{name}' is not installed\n");
+        return RunResult::exit(1);
     }
 
     // Delete binary
@@ -507,16 +523,21 @@ fn pkg_remove(state: &mut ShellState, host: &dyn HostInterface, args: &[String])
     packages.retain(|p| p.name != *name);
     write_pkg_metadata(host, &packages);
 
-    RunResult::success(format!("Removed {name}\n"))
+    shell_print!("Removed {name}\n");
+    RunResult::empty()
 }
 
 fn pkg_list(host: &dyn HostInterface) -> RunResult {
     let policy = match read_pkg_policy(host) {
         Some(p) => p,
-        None => return RunResult::error(1, "pkg: package manager is disabled\n".into()),
+        None => {
+            shell_eprint!("{}", "pkg: package manager is disabled\n");
+            return RunResult::exit(1);
+        }
     };
     if !policy.enabled {
-        return RunResult::error(1, "pkg: package manager is disabled\n".into());
+        shell_eprint!("{}", "pkg: package manager is disabled\n");
+        return RunResult::exit(1);
     }
 
     let packages = read_pkg_metadata(host);
@@ -528,20 +549,26 @@ fn pkg_list(host: &dyn HostInterface) -> RunResult {
     for p in &packages {
         out.push_str(&format!("{}\t{}\t{}\n", p.name, p.url, p.size));
     }
-    RunResult::success(out)
+    shell_print!("{}", out);
+    RunResult::empty()
 }
 
 fn pkg_info(host: &dyn HostInterface, args: &[String]) -> RunResult {
     if args.is_empty() {
-        return RunResult::error(1, "pkg info: no package specified\n".into());
+        shell_eprint!("{}", "pkg info: no package specified\n");
+        return RunResult::exit(1);
     }
 
     let policy = match read_pkg_policy(host) {
         Some(p) => p,
-        None => return RunResult::error(1, "pkg: package manager is disabled\n".into()),
+        None => {
+            shell_eprint!("{}", "pkg: package manager is disabled\n");
+            return RunResult::exit(1);
+        }
     };
     if !policy.enabled {
-        return RunResult::error(1, "pkg: package manager is disabled\n".into());
+        shell_eprint!("{}", "pkg: package manager is disabled\n");
+        return RunResult::exit(1);
     }
 
     let name = &args[0];
@@ -552,9 +579,13 @@ fn pkg_info(host: &dyn HostInterface, args: &[String]) -> RunResult {
                 "Name: {}\nURL: {}\nSize: {} bytes\nInstalled: {}\n",
                 p.name, p.url, p.size, p.installed_at
             );
-            RunResult::success(out)
+            shell_print!("{}", out);
+            RunResult::empty()
         }
-        None => RunResult::error(1, format!("pkg info: '{name}' not found\n")),
+        None => {
+            shell_eprint!("pkg info: '{name}' not found\n");
+            RunResult::exit(1)
+        }
     }
 }
 
@@ -598,10 +629,11 @@ struct ExtPyPkg {
 
 fn cmd_pip(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -> RunResult {
     if args.is_empty() {
-        return RunResult::error(
-            1,
-            "pip: usage: pip <install|uninstall|list|show> [args]\n".into(),
+        shell_eprint!(
+            "{}",
+            "pip: usage: pip <install|uninstall|list|show> [args]\n"
         );
+        return RunResult::exit(1);
     }
 
     let subcmd = args[0].as_str();
@@ -612,7 +644,10 @@ fn cmd_pip(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) ->
         "uninstall" => pip_uninstall(state, host, sub_args),
         "list" => pip_list(host),
         "show" => pip_show(host, sub_args),
-        other => RunResult::error(1, format!("pip: unknown command '{other}'\n")),
+        other => {
+            shell_eprint!("pip: unknown command '{other}'\n");
+            RunResult::exit(1)
+        }
     }
 }
 
@@ -685,7 +720,8 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
         .collect();
 
     if names.is_empty() {
-        return RunResult::error(1, "pip install: no package specified\n".into());
+        shell_eprint!("{}", "pip install: no package specified\n");
+        return RunResult::exit(1);
     }
 
     let registry = read_pip_registry(host);
@@ -704,14 +740,10 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                 // Extension-provided package — already available
                 continue;
             }
-            return RunResult {
-                exit_code: 1,
-                stdout: String::new(),
-                stderr: format!(
-                    "ERROR: Could not find a version that satisfies the requirement {name}\n"
-                ),
-                execution_time_ms: 0,
-            };
+            shell_eprint!(
+                "ERROR: Could not find a version that satisfies the requirement {name}\n"
+            );
+            return RunResult::exit(1);
         }
 
         let deps = resolve_deps(&registry, name);
@@ -723,7 +755,8 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
     }
 
     if all_to_install.is_empty() {
-        return RunResult::success("Requirement already satisfied\n".into());
+        shell_print!("{}", "Requirement already satisfied\n");
+        return RunResult::empty();
     }
 
     // Install each package: write Python files to VFS
@@ -756,7 +789,8 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
         all_to_install.join(" ")
     ));
 
-    RunResult::success(out)
+    shell_print!("{}", out);
+    RunResult::empty()
 }
 
 fn pip_uninstall(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -> RunResult {
@@ -770,7 +804,8 @@ fn pip_uninstall(state: &mut ShellState, host: &dyn HostInterface, args: &[Strin
         .collect();
 
     if names.is_empty() {
-        return RunResult::error(1, "pip uninstall: no package specified\n".into());
+        shell_eprint!("{}", "pip uninstall: no package specified\n");
+        return RunResult::exit(1);
     }
 
     let registry = read_pip_registry(host);
@@ -801,12 +836,14 @@ fn pip_uninstall(state: &mut ShellState, host: &dyn HostInterface, args: &[Strin
             installed.remove(pos);
             out.push_str(&format!("Successfully uninstalled {name}\n"));
         } else {
-            return RunResult::error(1, format!("pip uninstall: '{name}' is not installed\n"));
+            shell_eprint!("pip uninstall: '{name}' is not installed\n");
+            return RunResult::exit(1);
         }
     }
 
     write_pip_installed(host, &installed);
-    RunResult::success(out)
+    shell_print!("{}", out);
+    RunResult::empty()
 }
 
 fn pip_list(host: &dyn HostInterface) -> RunResult {
@@ -814,7 +851,8 @@ fn pip_list(host: &dyn HostInterface) -> RunResult {
     let extensions = read_extension_meta(host);
 
     if installed.is_empty() && extensions.is_empty() {
-        return RunResult::success("Package    Version\n---------- -------\n".into());
+        shell_print!("{}", "Package    Version\n---------- -------\n");
+        return RunResult::empty();
     }
 
     let mut entries: Vec<(String, String)> = Vec::new();
@@ -849,12 +887,14 @@ fn pip_list(host: &dyn HostInterface) -> RunResult {
         ));
     }
 
-    RunResult::success(out)
+    shell_print!("{}", out);
+    RunResult::empty()
 }
 
 fn pip_show(host: &dyn HostInterface, args: &[String]) -> RunResult {
     if args.is_empty() {
-        return RunResult::error(1, "pip show: no package specified\n".into());
+        shell_eprint!("{}", "pip show: no package specified\n");
+        return RunResult::exit(1);
     }
 
     let name = &args[0];
@@ -869,10 +909,14 @@ fn pip_show(host: &dyn HostInterface, args: &[String]) -> RunResult {
         } else {
             "available"
         };
-        return RunResult::success(format!(
+        shell_print!(
             "Name: {}\nVersion: {}\nSummary: {}\nStatus: {}\n",
-            pkg.name, pkg.version, pkg.summary, status
-        ));
+            pkg.name,
+            pkg.version,
+            pkg.summary,
+            status
+        );
+        return RunResult::empty();
     }
 
     // Check extensions — also try listing files from VFS
@@ -894,9 +938,11 @@ fn pip_show(host: &dyn HostInterface, args: &[String]) -> RunResult {
                     }
                 }
             }
-            return RunResult::success(out);
+            shell_print!("{}", out);
+            return RunResult::empty();
         }
     }
 
-    RunResult::error(1, format!("pip show: package '{name}' not found\n"))
+    shell_eprint!("pip show: package '{name}' not found\n");
+    RunResult::exit(1)
 }

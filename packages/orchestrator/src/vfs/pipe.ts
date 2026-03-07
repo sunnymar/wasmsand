@@ -103,7 +103,11 @@ const DEFAULT_PIPE_CAPACITY = 65536; // 64KB, matches Linux PIPE_BUF
 export interface AsyncPipeReadEnd {
   /** Read up to buf.length bytes. Returns 0 on EOF. Suspends if empty. */
   read(buf: Uint8Array): Promise<number>;
+  /** Drain all currently buffered data synchronously. Does NOT wait for more data. */
+  drainSync(): Uint8Array;
   close(): void;
+  /** Increment reference count (for sharing across fd tables). */
+  addRef(): void;
   readonly closed: boolean;
 }
 
@@ -113,6 +117,8 @@ export interface AsyncPipeWriteEnd {
   /** Write data, waiting for space if pipe is full. Returns total bytes written, or -1 on EPIPE. */
   writeAsync(data: Uint8Array): Promise<number>;
   close(): void;
+  /** Increment reference count (for sharing across fd tables). */
+  addRef(): void;
   readonly closed: boolean;
 }
 
@@ -121,6 +127,8 @@ interface AsyncPipeBuffer {
   totalBytes: number;
   writeClosed: boolean;
   readClosed: boolean;
+  writeRefs: number;
+  readRefs: number;
   capacity: number;
   pendingReader: ((n: number) => void) | null;
   pendingReaderBuf: Uint8Array | null;
@@ -145,6 +153,8 @@ export function createAsyncPipe(
     totalBytes: 0,
     writeClosed: false,
     readClosed: false,
+    writeRefs: 1,
+    readRefs: 1,
     capacity,
     pendingReader: null,
     pendingReaderBuf: null,
@@ -219,7 +229,16 @@ export function createAsyncPipe(
       });
     },
 
+    drainSync(): Uint8Array {
+      if (shared.totalBytes === 0) return new Uint8Array(0);
+      const buf = new Uint8Array(shared.totalBytes);
+      drainChunks(buf);
+      tryFlushPendingWriter();
+      return buf;
+    },
+
     close() {
+      if (--shared.readRefs > 0) return;
       shared.readClosed = true;
       // Wake blocked writer with EPIPE.
       if (shared.pendingWriter) {
@@ -228,6 +247,10 @@ export function createAsyncPipe(
         shared.pendingWriterData = null;
         resolve(-1);
       }
+    },
+
+    addRef() {
+      shared.readRefs++;
     },
   };
 
@@ -280,6 +303,7 @@ export function createAsyncPipe(
     },
 
     close() {
+      if (--shared.writeRefs > 0) return;
       shared.writeClosed = true;
       // Wake a pending reader with EOF.
       if (shared.pendingReader) {
@@ -288,6 +312,10 @@ export function createAsyncPipe(
         shared.pendingReaderBuf = null;
         resolve(0);
       }
+    },
+
+    addRef() {
+      shared.writeRefs++;
     },
   };
 

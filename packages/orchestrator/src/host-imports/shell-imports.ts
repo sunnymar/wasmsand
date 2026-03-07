@@ -183,11 +183,12 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
         }
       }
 
-      // Fallback: return error (async spawn not wired yet)
+      // syncSpawn not provided — production uses spawn_async (host_spawn_async)
+      // via the kernel imports, so this path should not be reached.
       return writeJson(memory, outPtr, outCap, {
         exit_code: 127,
         stdout: '',
-        stderr: `${cmd}: async spawn not available\n`,
+        stderr: `${cmd}: sync spawn not available\n`,
       });
     },
 

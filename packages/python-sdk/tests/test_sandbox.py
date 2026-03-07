@@ -12,16 +12,16 @@ class TestSandbox:
             result = sbx.commands.run("echo hello")
             assert result.exit_code == 0
 
-    def test_missing_bun_raises(self, monkeypatch):
+    def test_missing_deno_raises(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda _: None)
         monkeypatch.setattr("codepod.sandbox._is_bundled", lambda: False)
-        with pytest.raises(RuntimeError, match="Bun not found"):
+        with pytest.raises(RuntimeError, match="Deno not found"):
             Sandbox()
 
 
 class TestSandboxEndToEnd:
     """End-to-end tests exercising the full stack:
-    Python SDK -> RPC client -> Bun subprocess -> SDK server -> Sandbox -> WASM tools.
+    Python SDK -> RPC client -> Deno subprocess -> SDK server -> Sandbox -> WASM tools.
 
     These tests focus on cross-layer integration: combining file operations
     with command execution, sequential operations, and verifying data flows

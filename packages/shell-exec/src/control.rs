@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
     pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
     pub execution_time_ms: u64,
 }
 
@@ -12,26 +10,13 @@ impl RunResult {
     pub fn empty() -> Self {
         Self {
             exit_code: 0,
-            stdout: String::new(),
-            stderr: String::new(),
             execution_time_ms: 0,
         }
     }
 
-    pub fn success(stdout: String) -> Self {
-        Self {
-            exit_code: 0,
-            stdout,
-            stderr: String::new(),
-            execution_time_ms: 0,
-        }
-    }
-
-    pub fn error(code: i32, stderr: String) -> Self {
+    pub fn exit(code: i32) -> Self {
         Self {
             exit_code: code,
-            stdout: String::new(),
-            stderr,
             execution_time_ms: 0,
         }
     }
@@ -43,7 +28,7 @@ pub enum ControlFlow {
     Break(u32),
     Continue(u32),
     Return(i32),
-    Exit(i32, String, String),
+    Exit(i32),
     Cancelled(CancelReason),
 }
 

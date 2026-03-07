@@ -18,23 +18,25 @@ def _is_bundled() -> bool:
     return os.path.isdir(_BUNDLED_DIR)
 
 
-def _bundled_paths() -> tuple[str, str, str, str]:
-    """Return (runtime, server_script, wasm_dir, shell_wasm) for installed mode."""
-    runtime = os.path.join(_BUNDLED_DIR, "bun")
+def _bundled_paths() -> tuple[str, list[str], str, str]:
+    """Return (runtime, server_args, wasm_dir, shell_wasm) for installed mode."""
+    runtime = os.path.join(_BUNDLED_DIR, "deno")
     server = os.path.join(_BUNDLED_DIR, "server.js")
+    server_args = [server]
     wasm_dir = os.path.join(_BUNDLED_DIR, "wasm")
     shell_wasm = os.path.join(wasm_dir, "codepod-shell.wasm")
-    return runtime, server, wasm_dir, shell_wasm
+    return runtime, server_args, wasm_dir, shell_wasm
 
 
-def _dev_paths() -> tuple[str, str, str, str]:
-    """Return (runtime, server_script, wasm_dir, shell_wasm) for dev mode."""
-    runtime_path = shutil.which("bun")
+def _dev_paths() -> tuple[str, list[str], str, str]:
+    """Return (runtime, server_args, wasm_dir, shell_wasm) for dev mode."""
+    runtime_path = shutil.which("deno")
     if runtime_path is None:
-        raise RuntimeError("Bun not found on PATH (required for dev mode)")
+        raise RuntimeError("Deno not found on PATH (required for dev mode)")
 
     repo_root = os.path.abspath(os.path.join(_PKG_DIR, "..", "..", "..", ".."))
     server = os.path.join(repo_root, "packages", "sdk-server", "src", "server.ts")
+    server_args = ["run", "-A", "--no-check", "--unstable-sloppy-imports", server]
     wasm_dir = os.path.join(
         repo_root, "packages", "orchestrator", "src", "platform", "__tests__", "fixtures"
     )
@@ -42,7 +44,7 @@ def _dev_paths() -> tuple[str, str, str, str]:
         repo_root, "packages", "orchestrator", "src", "shell", "__tests__", "fixtures",
         "codepod-shell.wasm",
     )
-    return runtime_path, server, wasm_dir, shell_wasm
+    return runtime_path, server_args, wasm_dir, shell_wasm
 
 
 MountSpec = dict[str, bytes | str]
@@ -82,11 +84,11 @@ class Sandbox:
             return
 
         if _is_bundled():
-            runtime, server, wasm_dir, shell_wasm = _bundled_paths()
+            runtime, server_args, wasm_dir, shell_wasm = _bundled_paths()
         else:
-            runtime, server, wasm_dir, shell_wasm = _dev_paths()
+            runtime, server_args, wasm_dir, shell_wasm = _dev_paths()
 
-        self._client = RpcClient(runtime, server)
+        self._client = RpcClient(runtime, server_args)
         self._client.start()
         self._sandbox_id = None
 
