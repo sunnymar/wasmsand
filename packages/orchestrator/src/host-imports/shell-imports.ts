@@ -371,7 +371,10 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
 
     // host_fetch(req_ptr, req_len, out_ptr, out_cap) -> i32
     // Synchronous HTTP fetch via NetworkBridge (SAB+Atomics).
-    host_fetch(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+    // host_fetch(req_ptr, req_len, out_ptr, out_cap) -> i32
+    // Async HTTP fetch via NetworkBridge. Uses fetchAsync (browser/JSPI) when
+    // available, falls back to fetchSync (SAB+Atomics in Node/Deno).
+    async host_fetch(reqPtr: number, reqLen: number, outPtr: number, outCap: number): Promise<number> {
       const reqJson = readString(memory, reqPtr, reqLen);
 
       if (!opts.networkBridge) {
@@ -396,7 +399,10 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
         }
         const body = req.body ?? undefined;
 
-        const result = opts.networkBridge.fetchSync(url, method, hdrs, body);
+        // Use async fetch if available (browser), otherwise fall back to sync (SAB bridge)
+        const result = opts.networkBridge.fetchAsync
+          ? await opts.networkBridge.fetchAsync(url, method, hdrs, body)
+          : opts.networkBridge.fetchSync(url, method, hdrs, body);
 
         // Convert headers object to array of tuples for Rust FetchResult
         const headerPairs: [string, string][] = Object.entries(result.headers ?? {});
