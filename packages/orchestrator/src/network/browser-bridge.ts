@@ -49,6 +49,10 @@ export class BrowserNetworkBridge implements NetworkBridgeLike {
       };
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      // Browser fetch() throws "Failed to fetch" for CORS / network errors
+      if (msg === 'Failed to fetch') {
+        return { status: 0, body: '', headers: {}, error: `network error (likely CORS: ${url} does not allow cross-origin requests)` };
+      }
       return { status: 0, body: '', headers: {}, error: msg };
     }
   }
