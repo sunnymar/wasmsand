@@ -27,9 +27,17 @@ export interface SyncFetchResult {
   error?: string;
 }
 
+/** Generic sync request/response for any bridge operation. */
+export interface SyncRequestResult {
+  ok: boolean;
+  [key: string]: unknown;
+}
+
 /** Minimal interface for synchronous network access (main-thread or Worker). */
 export interface NetworkBridgeLike {
   fetchSync(url: string, method: string, headers: Record<string, string>, body?: string): SyncFetchResult;
+  /** Send a generic operation (connect/send/recv/close) through the bridge. */
+  requestSync(op: Record<string, unknown>): SyncRequestResult;
 }
 
 export class NetworkBridge implements NetworkBridgeLike {
@@ -79,6 +87,190 @@ export class NetworkBridge implements NetworkBridgeLike {
         return { allowed: false, reason: 'no network policy configured (default deny)' };
       }
 
+      // Socket state for full mode
+      const sockets = new Map();
+      let nextSocketId = 1;
+      let net = null;
+      let tls = null;
+      try { net = require('node:net'); tls = require('node:tls'); } catch {}
+
+      function writeResponse(json, status) {
+        const encoded = encoder.encode(json);
+        uint8.set(encoded, 8);
+        Atomics.store(int32, 1, encoded.byteLength);
+        Atomics.store(int32, 0, status);
+        Atomics.notify(int32, 0);
+      }
+
+      function writeOk(obj) {
+        writeResponse(JSON.stringify(obj), ${STATUS_RESPONSE_READY});
+      }
+
+      function writeErr(msg) {
+        writeResponse(JSON.stringify({ ok: false, error: msg }), ${STATUS_ERROR});
+      }
+
+      function checkHostAccess(host) {
+        if (allowedHosts !== undefined) {
+          if (matchesHostList(host, allowedHosts)) return { allowed: true };
+          return { allowed: false, reason: 'host ' + host + ' not in allowedHosts' };
+        }
+        if (blockedHosts !== undefined) {
+          if (matchesHostList(host, blockedHosts)) return { allowed: false, reason: 'host ' + host + ' is in blockedHosts' };
+          return { allowed: true };
+        }
+        return { allowed: false, reason: 'no network policy configured (default deny)' };
+      }
+
+      async function handleFetch(req) {
+        const access = checkAccess(req.url);
+        if (!access.allowed) {
+          writeResponse(JSON.stringify({ status: 403, body: '', headers: {}, error: access.reason }), ${STATUS_ERROR});
+          return;
+        }
+        const MAX_REDIRECTS = 5;
+        const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+        let currentUrl = req.url;
+        let currentMethod = req.method;
+        let currentBody = req.body || undefined;
+        let resp;
+        let redirectCount = 0;
+
+        for (;;) {
+          if (redirectCount > 0) {
+            const hopAccess = checkAccess(currentUrl);
+            if (!hopAccess.allowed) {
+              writeResponse(JSON.stringify({ status: 403, body: '', headers: {}, error: hopAccess.reason }), ${STATUS_ERROR});
+              return;
+            }
+          }
+          resp = await fetch(currentUrl, {
+            method: currentMethod,
+            headers: req.headers,
+            body: currentBody,
+            redirect: 'manual',
+          });
+          if (!REDIRECT_STATUSES.has(resp.status)) break;
+          const location = resp.headers.get('location');
+          if (!location) break;
+          currentUrl = new URL(location, currentUrl).href;
+          if (resp.status === 303) { currentMethod = 'GET'; currentBody = undefined; }
+          redirectCount++;
+          if (redirectCount > MAX_REDIRECTS) {
+            writeResponse(JSON.stringify({ status: 0, body: '', headers: {}, error: 'too many redirects' }), ${STATUS_ERROR});
+            return;
+          }
+        }
+        const body = await resp.text();
+        const headers = {};
+        resp.headers.forEach((v, k) => { headers[k] = v; });
+        writeOk({ status: resp.status, body, headers });
+      }
+
+      async function handleConnect(req) {
+        if (!net) { writeErr('sockets not available (no net module)'); return; }
+        const access = checkHostAccess(req.host);
+        if (!access.allowed) { writeErr(access.reason); return; }
+        const id = nextSocketId++;
+        return new Promise((resolve) => {
+          const connectFn = req.tls ? tls.connect : net.connect;
+          const opts = { host: req.host, port: req.port };
+          if (req.tls) opts.servername = req.host;
+          const sock = connectFn(opts, () => {
+            sockets.set(id, sock);
+            writeOk({ ok: true, socket_id: id });
+            resolve();
+          });
+          sock.on('error', (err) => {
+            sockets.delete(id);
+            writeErr('connect: ' + err.message);
+            resolve();
+          });
+          setTimeout(() => {
+            if (!sockets.has(id)) {
+              sock.destroy();
+              writeErr('connect: timed out');
+              resolve();
+            }
+          }, 30000);
+        });
+      }
+
+      async function handleSend(req) {
+        const sock = sockets.get(req.socket_id);
+        if (!sock) { writeErr('send: invalid socket_id'); return; }
+        const data = Buffer.from(req.data_b64, 'base64');
+        return new Promise((resolve) => {
+          sock.write(data, (err) => {
+            if (err) { writeErr('send: ' + err.message); }
+            else { writeOk({ ok: true, bytes_sent: data.length }); }
+            resolve();
+          });
+        });
+      }
+
+      async function handleRecv(req) {
+        const sock = sockets.get(req.socket_id);
+        if (!sock) { writeErr('recv: invalid socket_id'); return; }
+        const maxBytes = req.max_bytes || 65536;
+        return new Promise((resolve) => {
+          const chunk = sock.read(maxBytes);
+          if (chunk) {
+            writeOk({ ok: true, data_b64: chunk.toString('base64') });
+            resolve();
+            return;
+          }
+          // No data available yet — wait for readable or end
+          let settled = false;
+          const onReadable = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            const c = sock.read(maxBytes);
+            writeOk({ ok: true, data_b64: c ? c.toString('base64') : '' });
+            resolve();
+          };
+          const onEnd = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            writeOk({ ok: true, data_b64: '' });
+            resolve();
+          };
+          const onError = (err) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            writeErr('recv: ' + err.message);
+            resolve();
+          };
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            writeErr('recv: timed out');
+            resolve();
+          }, 30000);
+          function cleanup() {
+            clearTimeout(timer);
+            sock.removeListener('readable', onReadable);
+            sock.removeListener('end', onEnd);
+            sock.removeListener('error', onError);
+          }
+          sock.on('readable', onReadable);
+          sock.on('end', onEnd);
+          sock.on('error', onError);
+        });
+      }
+
+      function handleClose(req) {
+        const sock = sockets.get(req.socket_id);
+        if (!sock) { writeErr('close: invalid socket_id'); return; }
+        sock.destroy();
+        sockets.delete(req.socket_id);
+        writeOk({ ok: true });
+      }
+
       parentPort.postMessage('ready');
 
       async function loop() {
@@ -90,90 +282,19 @@ export class NetworkBridge implements NetworkBridgeLike {
           const reqJson = decoder.decode(uint8.slice(8, 8 + len));
           const req = JSON.parse(reqJson);
 
-          // Enforce network policy inside the worker before fetching
-          const access = checkAccess(req.url);
-          if (!access.allowed) {
-            const result = JSON.stringify({ status: 403, body: '', headers: {}, error: access.reason });
-            const encoded = encoder.encode(result);
-            uint8.set(encoded, 8);
-            Atomics.store(int32, 1, encoded.byteLength);
-            Atomics.store(int32, 0, ${STATUS_ERROR});
-            Atomics.notify(int32, 0);
-            continue;
-          }
-
           try {
-            const MAX_REDIRECTS = 5;
-            const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-            let currentUrl = req.url;
-            let currentMethod = req.method;
-            let currentBody = req.body || undefined;
-            let resp;
-            let redirectCount = 0;
-
-            for (;;) {
-              // Re-validate policy on redirect hops
-              if (redirectCount > 0) {
-                const hopAccess = checkAccess(currentUrl);
-                if (!hopAccess.allowed) {
-                  const result = JSON.stringify({ status: 403, body: '', headers: {}, error: hopAccess.reason });
-                  const encoded = encoder.encode(result);
-                  uint8.set(encoded, 8);
-                  Atomics.store(int32, 1, encoded.byteLength);
-                  Atomics.store(int32, 0, ${STATUS_ERROR});
-                  resp = null;
-                  break;
-                }
-              }
-
-              resp = await fetch(currentUrl, {
-                method: currentMethod,
-                headers: req.headers,
-                body: currentBody,
-                redirect: 'manual',
-              });
-
-              if (!REDIRECT_STATUSES.has(resp.status)) break;
-
-              const location = resp.headers.get('location');
-              if (!location) break;
-
-              currentUrl = new URL(location, currentUrl).href;
-              if (resp.status === 303) {
-                currentMethod = 'GET';
-                currentBody = undefined;
-              }
-
-              redirectCount++;
-              if (redirectCount > MAX_REDIRECTS) {
-                const result = JSON.stringify({ status: 0, body: '', headers: {}, error: 'too many redirects' });
-                const encoded = encoder.encode(result);
-                uint8.set(encoded, 8);
-                Atomics.store(int32, 1, encoded.byteLength);
-                Atomics.store(int32, 0, ${STATUS_ERROR});
-                resp = null;
-                break;
-              }
-            }
-
-            if (resp) {
-              const body = await resp.text();
-              const headers = {};
-              resp.headers.forEach((v, k) => { headers[k] = v; });
-              const result = JSON.stringify({ status: resp.status, body, headers });
-              const encoded = encoder.encode(result);
-              uint8.set(encoded, 8);
-              Atomics.store(int32, 1, encoded.byteLength);
-              Atomics.store(int32, 0, ${STATUS_RESPONSE_READY});
+            const op = req.op || 'fetch';
+            switch (op) {
+              case 'fetch': await handleFetch(req); break;
+              case 'connect': await handleConnect(req); break;
+              case 'send': await handleSend(req); break;
+              case 'recv': await handleRecv(req); break;
+              case 'close': handleClose(req); break;
+              default: writeErr('unknown op: ' + op); break;
             }
           } catch (err) {
-            const result = JSON.stringify({ status: 0, body: '', headers: {}, error: err.message });
-            const encoded = encoder.encode(result);
-            uint8.set(encoded, 8);
-            Atomics.store(int32, 1, encoded.byteLength);
-            Atomics.store(int32, 0, ${STATUS_ERROR});
+            writeErr(err.message);
           }
-          Atomics.notify(int32, 0);
         }
       }
       loop();
@@ -251,6 +372,40 @@ export class NetworkBridge implements NetworkBridgeLike {
       result.error = result.error || 'unknown error';
     }
     return result;
+  }
+
+  /**
+   * Generic sync request — sends any operation through the bridge.
+   * Used for socket operations (connect, send, recv, close).
+   */
+  requestSync(op: Record<string, unknown>): SyncRequestResult {
+    if (!this.worker) {
+      return { ok: false, error: 'bridge not started' };
+    }
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    const reqJson = JSON.stringify(op);
+    const reqEncoded = encoder.encode(reqJson);
+    if (reqEncoded.byteLength > SAB_SIZE - 8) {
+      return { ok: false, error: 'request too large' };
+    }
+    this.uint8.set(reqEncoded, 8);
+    Atomics.store(this.int32, 1, reqEncoded.byteLength);
+    Atomics.store(this.int32, 0, STATUS_REQUEST_READY);
+    Atomics.notify(this.int32, 0);
+
+    const waitResult = Atomics.wait(this.int32, 0, STATUS_REQUEST_READY, 30_000);
+    if (waitResult === 'timed-out') {
+      Atomics.store(this.int32, 0, STATUS_IDLE);
+      return { ok: false, error: 'request timed out' };
+    }
+
+    const len = Atomics.load(this.int32, 1);
+    const respJson = decoder.decode(this.uint8.slice(8, 8 + len));
+    Atomics.store(this.int32, 0, STATUS_IDLE);
+    return JSON.parse(respJson) as SyncRequestResult;
   }
 
   dispose(): void {

@@ -66,8 +66,8 @@ describe('socket shim source', () => {
   it('exports SITE_CUSTOMIZE_SOURCE that injects socket and ssl into sys.modules', () => {
     expect(typeof SITE_CUSTOMIZE_SOURCE).toBe('string');
     expect(SITE_CUSTOMIZE_SOURCE).toContain('sys.modules[name]');
-    expect(SITE_CUSTOMIZE_SOURCE).toContain('"socket"');
-    expect(SITE_CUSTOMIZE_SOURCE).toContain('"ssl"');
+    expect(SITE_CUSTOMIZE_SOURCE).toContain('_inject_shim("socket"');
+    expect(SITE_CUSTOMIZE_SOURCE).toContain('_inject_shim("ssl"');
   });
 
   it('exports SSL_SHIM_SOURCE with required ssl API surface', () => {

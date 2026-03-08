@@ -6,7 +6,7 @@
  * and waits synchronously for the response.
  */
 
-import type { SyncFetchResult, NetworkBridgeLike } from './bridge.js';
+import type { SyncFetchResult, SyncRequestResult, NetworkBridgeLike } from './bridge.js';
 import type { NetworkGateway } from './gateway.js';
 
 const STATUS_IDLE = 0;
@@ -64,5 +64,28 @@ export class BridgeClient implements NetworkBridgeLike {
       result.error = result.error || 'unknown error';
     }
     return result;
+  }
+
+  requestSync(op: Record<string, unknown>): SyncRequestResult {
+    const reqJson = JSON.stringify(op);
+    const reqEncoded = this.encoder.encode(reqJson);
+    if (reqEncoded.byteLength > this.uint8.byteLength - 8) {
+      return { ok: false, error: 'request too large' };
+    }
+    this.uint8.set(reqEncoded, 8);
+    Atomics.store(this.int32, 1, reqEncoded.byteLength);
+    Atomics.store(this.int32, 0, STATUS_REQUEST_READY);
+    Atomics.notify(this.int32, 0);
+
+    const waitResult = Atomics.wait(this.int32, 0, STATUS_REQUEST_READY, 30_000);
+    if (waitResult === 'timed-out') {
+      Atomics.store(this.int32, 0, STATUS_IDLE);
+      return { ok: false, error: 'request timed out' };
+    }
+
+    const len = Atomics.load(this.int32, 1);
+    const respJson = this.decoder.decode(this.uint8.slice(8, 8 + len));
+    Atomics.store(this.int32, 0, STATUS_IDLE);
+    return JSON.parse(respJson) as SyncRequestResult;
   }
 }

@@ -19,6 +19,14 @@ export interface NetworkPolicy {
     method: string;
     headers: Record<string, string>;
   }) => Promise<boolean>;
+  /**
+   * Network mode:
+   * - `"restricted"` (default): HTTP/HTTPS only via fetch(). Works in browser + Deno.
+   * - `"full"`: Real TCP/TLS sockets via host. Any protocol. Deno/Node only.
+   */
+  mode?: 'restricted' | 'full';
+  /** Whether to allow listening on ports. Default: false. */
+  allowListen?: boolean;
 }
 
 export class NetworkAccessDenied extends Error {
@@ -51,33 +59,40 @@ export class NetworkGateway {
     return this.policy.blockedHosts;
   }
 
+  /** Return the network mode. */
+  getMode(): 'restricted' | 'full' {
+    return this.policy.mode ?? 'restricted';
+  }
+
+  /** Check whether raw socket operations are allowed to the given host. */
+  checkSocketAccess(host: string): { allowed: boolean; reason?: string } {
+    if (this.getMode() !== 'full') {
+      return { allowed: false, reason: 'raw sockets not available in restricted mode' };
+    }
+    return this.checkHostAccess(host);
+  }
+
+  /** Synchronous host check against allow/block lists. */
+  private checkHostAccess(host: string): { allowed: boolean; reason?: string } {
+    const { allowedHosts, blockedHosts } = this.policy;
+    if (allowedHosts !== undefined) {
+      if (matchesHostList(host, allowedHosts)) return { allowed: true };
+      return { allowed: false, reason: `host ${host} not in allowedHosts` };
+    }
+    if (blockedHosts !== undefined) {
+      if (matchesHostList(host, blockedHosts)) return { allowed: false, reason: `host ${host} is in blockedHosts` };
+      return { allowed: true };
+    }
+    return { allowed: false, reason: 'no network policy configured (default deny)' };
+  }
+
   /** Synchronous check against allow/block lists. */
-  checkAccess(url: string, method: string): { allowed: boolean; reason?: string } {
+  checkAccess(url: string, _method: string): { allowed: boolean; reason?: string } {
     const host = this.extractHost(url);
     if (host === null) {
       return { allowed: false, reason: 'invalid URL' };
     }
-
-    const { allowedHosts, blockedHosts } = this.policy;
-
-    // If allowedHosts is set, use whitelist mode
-    if (allowedHosts !== undefined) {
-      if (matchesHostList(host, allowedHosts)) {
-        return { allowed: true };
-      }
-      return { allowed: false, reason: `host ${host} not in allowedHosts` };
-    }
-
-    // If blockedHosts is set, use blacklist mode
-    if (blockedHosts !== undefined) {
-      if (matchesHostList(host, blockedHosts)) {
-        return { allowed: false, reason: `host ${host} is in blockedHosts` };
-      }
-      return { allowed: true };
-    }
-
-    // Neither list set: block all (safe default)
-    return { allowed: false, reason: 'no network policy configured (default deny)' };
+    return this.checkHostAccess(host);
   }
 
   /** Fetch with policy enforcement. Throws NetworkAccessDenied on denial. */

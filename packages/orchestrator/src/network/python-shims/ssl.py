@@ -45,6 +45,8 @@ class SSLContext:
         self.verify_mode = CERT_NONE
         self.check_hostname = False
         self.options = 0
+        self.post_handshake_auth = False
+        self.keylog_filename = None
         self._cadata = None
         self._cafile = None
         self._capath = None

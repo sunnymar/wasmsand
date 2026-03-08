@@ -6,24 +6,17 @@ By loading our shims here (which runs at interpreter startup), we inject
 them into sys.modules before any other code can import the frozen versions.
 """
 import sys
-import types
-import importlib
 import importlib.machinery
-
-_run = getattr(importlib, '_bootstrap')._call_with_frames_cleaned_up if hasattr(importlib, '_bootstrap') else None
+import importlib.util
 
 
 def _inject_shim(name, path):
     """Load a .py file and register it as a sys.modules entry."""
-    spec = importlib.machinery.ModuleSpec(name, None, origin=path)
-    mod = types.ModuleType(name)
-    mod.__spec__ = spec
-    mod.__file__ = path
-    with open(path) as f:
-        code = compile(f.read(), path, "exec")
-    # Populate the module namespace from our trusted shim file
-    __builtins__["exec"](code, mod.__dict__)  # noqa: S102
+    loader = importlib.machinery.SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_file_location(name, path, loader=loader)
+    mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
+    loader.exec_module(mod)
 
 
 _inject_shim("socket", "/usr/lib/python/socket.py")
