@@ -1,6 +1,6 @@
 import { describe, it } from '@std/testing/bdd';
 import { expect } from '@std/expect';
-import { SOCKET_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from '../socket-shim.js';
+import { SOCKET_SHIM_SOURCE, SSL_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from '../socket-shim.js';
 
 describe('socket shim source', () => {
   it('exports a non-empty Python source string', () => {
@@ -63,8 +63,23 @@ describe('socket shim source', () => {
     expect(SOCKET_SHIM_SOURCE).toContain('family == 0 or family == AF_INET6');
   });
 
-  it('exports SITE_CUSTOMIZE_SOURCE that injects socket into sys.modules', () => {
+  it('exports SITE_CUSTOMIZE_SOURCE that injects socket and ssl into sys.modules', () => {
     expect(typeof SITE_CUSTOMIZE_SOURCE).toBe('string');
-    expect(SITE_CUSTOMIZE_SOURCE).toContain('sys.modules["socket"]');
+    expect(SITE_CUSTOMIZE_SOURCE).toContain('sys.modules[name]');
+    expect(SITE_CUSTOMIZE_SOURCE).toContain('"socket"');
+    expect(SITE_CUSTOMIZE_SOURCE).toContain('"ssl"');
+  });
+
+  it('exports SSL_SHIM_SOURCE with required ssl API surface', () => {
+    expect(typeof SSL_SHIM_SOURCE).toBe('string');
+    expect(SSL_SHIM_SOURCE.length).toBeGreaterThan(100);
+    expect(SSL_SHIM_SOURCE).toContain('class SSLContext');
+    expect(SSL_SHIM_SOURCE).toContain('def wrap_socket(');
+    expect(SSL_SHIM_SOURCE).toContain('def create_default_context(');
+    expect(SSL_SHIM_SOURCE).toContain('CERT_NONE');
+    expect(SSL_SHIM_SOURCE).toContain('CERT_REQUIRED');
+    expect(SSL_SHIM_SOURCE).toContain('PROTOCOL_TLS_CLIENT');
+    expect(SSL_SHIM_SOURCE).toContain('class SSLError');
+    expect(SSL_SHIM_SOURCE).toContain('_create_default_https_context');
   });
 });

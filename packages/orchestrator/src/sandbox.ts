@@ -16,7 +16,7 @@ import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge } from './network/bridge.js';
-import { SOCKET_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from './network/socket-shim.js';
+import { SOCKET_SHIM_SOURCE, SSL_SHIM_SOURCE, SITE_CUSTOMIZE_SOURCE } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
 import type { WorkerExecutor } from './execution/worker-executor.js';
@@ -207,9 +207,10 @@ export class Sandbox {
       vfs.withWriteAccess(() => {
         vfs.mkdirp('/usr/lib/python');
         vfs.writeFile('/usr/lib/python/socket.py', new TextEncoder().encode(SOCKET_SHIM_SOURCE));
-        // sitecustomize.py pre-loads our socket shim into sys.modules at interpreter
-        // startup, bypassing RustPython's frozen socket module which would otherwise
-        // take priority over PYTHONPATH files.
+        vfs.writeFile('/usr/lib/python/ssl.py', new TextEncoder().encode(SSL_SHIM_SOURCE));
+        // sitecustomize.py pre-loads our socket+ssl shims into sys.modules at
+        // interpreter startup, bypassing RustPython's frozen modules which would
+        // otherwise take priority over PYTHONPATH files.
         vfs.writeFile('/usr/lib/python/sitecustomize.py', new TextEncoder().encode(SITE_CUSTOMIZE_SOURCE));
       });
     }
