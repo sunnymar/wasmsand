@@ -1,4 +1,4 @@
-import { VFS, ProcessManager, ShellInstance, BrowserAdapter } from '@codepod/sandbox';
+import { VFS, ProcessManager, ShellInstance, BrowserAdapter, BrowserNetworkBridge } from '@codepod/sandbox';
 import { createTerminal } from './terminal.js';
 import '@xterm/xterm/css/xterm.css';
 
@@ -19,16 +19,30 @@ async function boot(): Promise<void> {
   mgr.registerTool('python3', `${WASM_BASE}/python3.wasm`);
   vfs.withWriteAccess(() => vfs.symlink('/usr/bin/python3', '/usr/bin/python'));
 
+  // Write a sample file for curl/wget demos
+  vfs.withWriteAccess(() => {
+    vfs.mkdirp('/var/www');
+    vfs.writeFile('/var/www/hello.txt', new TextEncoder().encode(
+      'Hello from codepod!\nThis file lives in the in-memory filesystem.\n'
+    ));
+  });
+
   // Pre-load all tool modules so spawnSync can use them synchronously
   await mgr.preloadModules();
 
   const shellWasmUrl = `${WASM_BASE}/codepod-shell-exec.wasm`;
+
+  // Set up networking (restricted mode — HTTP via browser fetch())
+  const networkBridge = new BrowserNetworkBridge({
+    allowedHosts: ['*'],  // allow all hosts in the demo
+  });
 
   // Use async spawning when JSPI is available (avoids V8 8MB sync-instantiation
   // limit for large modules like python3.wasm). Fall back to syncSpawn on older
   // browsers without JSPI support.
   const hasJSPI = typeof WebAssembly.Suspending === 'function';
   const runner = await ShellInstance.create(vfs, mgr, adapter, shellWasmUrl, {
+    networkBridge,
     ...(!hasJSPI && {
       syncSpawn: (cmd: string, args: string[], env: Record<string, string>, stdin: Uint8Array, cwd: string) =>
         mgr.spawnSync(cmd, args, env, stdin, cwd),
@@ -42,6 +56,10 @@ async function boot(): Promise<void> {
 }
 
 boot().catch((err) => {
-  document.body.textContent = `Boot failed: ${err.message}`;
+  const el = document.getElementById('boot-error');
+  if (el) {
+    el.textContent = `Boot failed: ${err.message}`;
+    el.style.display = 'block';
+  }
   console.error(err);
 });

@@ -188,6 +188,10 @@ export class ShellInstance implements ShellLike {
       codepodImports.host_yield = new WebAssembly.Suspending(
         kernelImports.host_yield as () => Promise<void>,
       ) as unknown as WebAssembly.ImportValue;
+      // Network fetch (async for browser JSPI support)
+      codepodImports.host_network_fetch = new WebAssembly.Suspending(
+        kernelImports.host_network_fetch as (...args: number[]) => Promise<number>,
+      ) as unknown as WebAssembly.ImportValue;
     }
 
     // WASI P1 stubs (minimal -- shell-exec doesn't use WASI for I/O)
@@ -828,6 +832,9 @@ function spawnAsyncProcess(
       ) as unknown as WebAssembly.ImportValue;
       imports.codepod.host_yield = new WebAssembly.Suspending(
         childKernelImports.host_yield as () => Promise<void>,
+      ) as unknown as WebAssembly.ImportValue;
+      imports.codepod.host_network_fetch = new WebAssembly.Suspending(
+        childKernelImports.host_network_fetch as (...args: number[]) => Promise<number>,
       ) as unknown as WebAssembly.ImportValue;
     }
 

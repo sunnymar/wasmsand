@@ -33,9 +33,11 @@ export interface SyncRequestResult {
   [key: string]: unknown;
 }
 
-/** Minimal interface for synchronous network access (main-thread or Worker). */
+/** Minimal interface for network access from WASM host imports. */
 export interface NetworkBridgeLike {
   fetchSync(url: string, method: string, headers: Record<string, string>, body?: string): SyncFetchResult;
+  /** Async fetch — used in the browser where Atomics.wait() isn't available on the main thread. */
+  fetchAsync?(url: string, method: string, headers: Record<string, string>, body?: string): Promise<SyncFetchResult>;
   /** Send a generic operation (connect/send/recv/close) through the bridge. */
   requestSync(op: Record<string, unknown>): SyncRequestResult;
 }

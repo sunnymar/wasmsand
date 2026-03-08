@@ -167,8 +167,9 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // ── Network ──
 
     // host_network_fetch(req_ptr, req_len, out_ptr, out_cap) -> i32
-    // Synchronous HTTP fetch via NetworkBridge. Works in both restricted and full modes.
-    host_network_fetch(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+    // HTTP fetch via NetworkBridge. Async (JSPI) to support both SAB-based
+    // bridges (Node/Deno) and direct fetch() in the browser.
+    async host_network_fetch(reqPtr: number, reqLen: number, outPtr: number, outCap: number): Promise<number> {
       const reqJson = readString(memory, reqPtr, reqLen);
 
       if (!opts.networkBridge) {
@@ -187,7 +188,10 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         const headers = (req.headers as Record<string, string>) ?? {};
         const body = req.body as string | undefined;
 
-        const result = opts.networkBridge.fetchSync(url, method, headers, body);
+        // Use async fetch if available (browser), otherwise fall back to sync (SAB bridge)
+        const result = opts.networkBridge.fetchAsync
+          ? await opts.networkBridge.fetchAsync(url, method, headers, body)
+          : opts.networkBridge.fetchSync(url, method, headers, body);
         return writeJson(memory, outPtr, outCap, {
           ok: true,
           status: result.status,

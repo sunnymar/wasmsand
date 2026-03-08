@@ -36,15 +36,21 @@ export function createTerminal(
     term.write(PROMPT);
   }
 
-  function printBanner(): void {
-    term.writeln('codepod — WebAssembly sandbox shell');
-    term.writeln('Try: for i in 1 2 3; do echo "hello $i"; done');
-    term.writeln('     case $USER in u*) echo "matched";; esac');
-    term.writeln('     python3 -c "print(1+1)"');
-    term.writeln('');
-  }
+  // Wire up clickable example commands from the intro
+  document.querySelectorAll('#examples [data-cmd]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const cmd = (el as HTMLElement).dataset.cmd;
+      if (cmd && !running) {
+        if (currentLine.length > 0) {
+          term.write('\r' + PROMPT + ' '.repeat(currentLine.length) + '\r' + PROMPT);
+        }
+        currentLine = cmd;
+        term.write(cmd);
+        term.focus();
+      }
+    });
+  });
 
-  printBanner();
   prompt();
 
   term.onKey(async ({ key, domEvent }) => {

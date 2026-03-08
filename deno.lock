@@ -13,6 +13,7 @@
     "npm:@xterm/xterm@^5.5.0": "5.5.0",
     "npm:tsup@8": "8.5.1_typescript@5.9.3_esbuild@0.27.3",
     "npm:typescript@^5.7.0": "5.9.3",
+    "npm:vite@*": "6.4.1_@types+node@22.19.13_picomatch@4.0.3",
     "npm:vite@6": "6.4.1_@types+node@22.19.13_picomatch@4.0.3",
     "npm:zod@^3.25.0": "3.25.76"
   },
