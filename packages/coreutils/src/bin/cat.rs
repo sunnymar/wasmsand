@@ -60,6 +60,16 @@ fn cat_reader<R: BufRead>(
     Ok(())
 }
 
+fn open_and_cat(
+    path: &str,
+    opts: &CatOptions,
+    line_num: &mut usize,
+    stdout: &mut impl Write,
+) -> io::Result<()> {
+    let f = File::open(path)?;
+    cat_reader(BufReader::new(f), opts, line_num, stdout)
+}
+
 fn run() -> i32 {
     let args: Vec<String> = env::args().collect();
     let mut opts = CatOptions {
@@ -119,6 +129,9 @@ fn run() -> i32 {
             let stdin = io::stdin();
             let reader = BufReader::new(stdin.lock());
             if let Err(e) = cat_reader(reader, &opts, &mut line_num, &mut stdout) {
+                if e.kind() == io::ErrorKind::BrokenPipe {
+                    return 0;
+                }
                 eprintln!("cat: stdin: {}", e);
                 exit_code = 1;
             }
@@ -128,40 +141,29 @@ fn run() -> i32 {
                     let stdin = io::stdin();
                     let reader = BufReader::new(stdin.lock());
                     if let Err(e) = cat_reader(reader, &opts, &mut line_num, &mut stdout) {
+                        if e.kind() == io::ErrorKind::BrokenPipe {
+                            return 0;
+                        }
                         eprintln!("cat: stdin: {}", e);
                         exit_code = 1;
                     }
-                } else {
-                    match File::open(file) {
-                        Ok(f) => {
-                            let reader = BufReader::new(f);
-                            if let Err(e) = cat_reader(reader, &opts, &mut line_num, &mut stdout) {
-                                eprintln!("cat: {}: {}", file, e);
-                                exit_code = 1;
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("cat: {}: {}", file, e);
-                            exit_code = 1;
-                        }
+                } else if let Err(e) = open_and_cat(file, &opts, &mut line_num, &mut stdout) {
+                    if e.kind() == io::ErrorKind::BrokenPipe {
+                        return 0;
                     }
+                    eprintln!("cat: {}: {}", file, e);
+                    exit_code = 1;
                 }
             }
         }
     } else {
         for file in &files {
-            match File::open(file) {
-                Ok(f) => {
-                    let reader = BufReader::new(f);
-                    if let Err(e) = cat_reader(reader, &opts, &mut line_num, &mut stdout) {
-                        eprintln!("cat: {}: {}", file, e);
-                        exit_code = 1;
-                    }
+            if let Err(e) = open_and_cat(file, &opts, &mut line_num, &mut stdout) {
+                if e.kind() == io::ErrorKind::BrokenPipe {
+                    return 0;
                 }
-                Err(e) => {
-                    eprintln!("cat: {}: {}", file, e);
-                    exit_code = 1;
-                }
+                eprintln!("cat: {}: {}", file, e);
+                exit_code = 1;
             }
         }
     }

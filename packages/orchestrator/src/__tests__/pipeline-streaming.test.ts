@@ -76,6 +76,28 @@ describe('Streaming Pipelines', () => {
     expect(result.stdout.trim()).toBe('3');
   });
 
+  it('4-stage pipeline: echo | cat | grep | cat', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    const result = await sandbox.run('echo "hello world" | cat | grep hello | cat');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('hello world');
+  });
+
+  it('5-stage pipeline: seq | head | cat | grep | wc', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    const result = await sandbox.run('seq 1 10 | head -5 | cat | grep -E "^[0-9]" | wc -l');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('5');
+  });
+
+  it('3+ stage with while read loop', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    const result = await sandbox.run('echo -e "a\\nb\\nc" | cat | while read line; do echo "got:$line"; done');
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.trim().split('\n');
+    expect(lines).toEqual(['got:a', 'got:b', 'got:c']);
+  });
+
   it('non-pipeline commands still work (regression)', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 

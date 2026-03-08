@@ -1050,14 +1050,40 @@ fn builtin_read(
     let use_pipeline = if state.pipeline_stdin.is_some() {
         true
     } else {
-        // First read in this compound command — drain fd 0 into
-        // pipeline_stdin so subsequent reads can consume line by line.
-        match host.read_fd(0) {
-            Ok(data) if !data.is_empty() => {
-                state.pipeline_stdin = Some(String::from_utf8_lossy(&data).to_string());
-                true
+        // On WASM: read line-by-line from stdin via WASI fd_read (JSPI-wrapped),
+        // so the WASM stack suspends until upstream pipe data arrives.
+        // On native: use host.read_fd(0) which drains the pipe synchronously.
+        let _ = &host; // used only on non-wasm32
+        #[cfg(target_arch = "wasm32")]
+        {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            let mut reader = stdin.lock();
+            let mut buf = Vec::new();
+            match reader.read_until(delimiter as u8, &mut buf) {
+                Ok(0) => false,
+                Ok(_) => {
+                    if buf.last() == Some(&(delimiter as u8)) {
+                        buf.pop();
+                    }
+                    if delimiter == '\n' && buf.last() == Some(&b'\r') {
+                        buf.pop();
+                    }
+                    state.pipeline_stdin = Some(String::from_utf8_lossy(&buf).to_string());
+                    true
+                }
+                Err(_) => false,
             }
-            _ => false,
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match host.read_fd(0) {
+                Ok(data) if !data.is_empty() => {
+                    state.pipeline_stdin = Some(String::from_utf8_lossy(&data).to_string());
+                    true
+                }
+                _ => false,
+            }
         }
     };
     let effective_stdin = if use_pipeline {
