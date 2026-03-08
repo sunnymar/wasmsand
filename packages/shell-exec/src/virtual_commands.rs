@@ -100,7 +100,13 @@ fn cmd_curl(
     }
 
     let url = match url {
-        Some(u) => u,
+        Some(u) => {
+            if !u.contains("://") {
+                format!("https://{u}")
+            } else {
+                u
+            }
+        }
         None => {
             shell_eprint!("{}", "curl: no URL specified\n");
             return RunResult::exit(1);
@@ -227,7 +233,14 @@ fn cmd_wget(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -
     }
 
     let url = match url {
-        Some(u) => u,
+        Some(u) => {
+            // Auto-prepend https:// if no scheme (like real wget, but https for browser compat)
+            if !u.contains("://") {
+                format!("https://{u}")
+            } else {
+                u
+            }
+        }
         None => {
             shell_eprint!("{}", "wget: no URL specified\n");
             return RunResult::exit(1);
