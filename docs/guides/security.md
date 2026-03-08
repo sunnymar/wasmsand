@@ -121,6 +121,21 @@ The WASI P1 host implementation selectively provides syscalls:
 | **Polling** | `poll_oneoff` | **Blocked** — returns `ENOSYS` |
 | **Advanced I/O** | `fd_pread`, `fd_pwrite`, `fd_renumber`, `path_link` | **Blocked** — returns `ENOSYS` |
 
+## Tool file integrity
+
+Executables are represented as special files in `/usr/bin/` with the `S_TOOL` permission flag (`0o100000`). This flag:
+
+- Is set by the process manager during tool registration (runs in root mode)
+- Cannot be set or cleared by `chmod` in user mode — the VFS preserves it on reads but strips attempts to modify it
+- Is verified during command resolution — files without `S_TOOL` are never treated as tool stubs
+
+Combined with `/usr/bin/` being `0o555` (read-only), this provides two independent layers preventing sandbox code from introducing or modifying executables:
+
+1. **Directory permissions** — `/usr/bin/` is not writable, so files can't be created or modified
+2. **S_TOOL flag** — even if a file existed, it wouldn't be treated as a tool without the flag
+
+Symlinks to tool files work naturally through VFS resolution — the flag is checked on the resolved target, not the symlink itself.
+
 ## Tool allowlist
 
 The orchestrator can restrict which commands are available:
@@ -219,6 +234,12 @@ The codebase includes dedicated security tests:
   - Write restriction enforcement
   - Host mount read-only behavior
   - Snapshot/restore consistency
+
+- **Tool file tests** (`process.test.ts`) — S_TOOL flag integrity:
+  - Tool files are created with S_TOOL flag in /usr/bin
+  - User-created files without S_TOOL are rejected by resolver
+  - chmod cannot set or clear the S_TOOL flag
+  - Symlink chains resolve correctly through tool files
 
 ## What's sandboxed vs. what's host-side
 

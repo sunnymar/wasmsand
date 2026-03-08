@@ -29,11 +29,32 @@ All three share the same I/O model: stdin is fd 0, stdout is fd 1, stderr is fd 
 | Math & data | bc, dc, sqlite3 (in-memory) |
 | Encoding & hashing | base64, md5sum, sha256sum, cksum, xxd, od |
 | Scripting | echo, printf, test, expr, seq, sleep, yes, true, false, mktemp, timeout |
-| Python | python3 (RustPython, standard library) |
+| Python | python3, python (RustPython, standard library) |
 
 Executables are compiled to `wasm32-wasip1` and live in `packages/coreutils/src/bin/`. The sandbox auto-discovers `.wasm` files from the configured `wasmDir`.
 
+`python` is a symlink to `python3` — both work interchangeably.
+
 Note: `echo`, `printf`, and `test` exist as both executables and shell builtins. The shell builtin takes precedence; the executable is used when invoked via `command echo` or `/usr/bin/echo`.
+
+### Tool files and command aliasing
+
+Every registered executable is represented as a file in `/usr/bin/` with a special `S_TOOL` permission flag. The file's content is the path to its `.wasm` binary. Because tools are real files, standard Unix symlinks work as command aliases:
+
+```bash
+# python is already a symlink to python3:
+ls -la /usr/bin/python   # -> /usr/bin/python3
+
+# Symlinks resolve through the VFS naturally:
+python -c "print('hello')"   # runs python3.wasm
+```
+
+The `S_TOOL` flag (`0o100000`) is a reserved permission bit that:
+- Is set automatically when tools are registered during sandbox initialization
+- Cannot be set or cleared by `chmod` — the VFS strips it in user mode
+- Is checked during command resolution — only files with `S_TOOL` are treated as tool stubs
+
+This prevents sandbox code from forging tool files. Even if a user could write to `/usr/bin/` (they can't — it's `0o555`), a file without `S_TOOL` would not be recognized as a tool.
 
 ## Shell builtins
 

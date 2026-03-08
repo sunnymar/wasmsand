@@ -86,7 +86,7 @@ cp target/wasm32-wasip1/release/rot13.wasm \
    packages/orchestrator/src/platform/__tests__/fixtures/
 ```
 
-The sandbox auto-discovers `.wasm` files in the `wasmDir` directory. No registration code needed — just drop the file in.
+The sandbox auto-discovers `.wasm` files in the `wasmDir` directory. No registration code needed — just drop the file in. Each discovered tool is automatically registered as a special file in `/usr/bin/` with the `S_TOOL` flag (see [Security](./security.md#tool-file-integrity)).
 
 ### 5. Test
 
@@ -131,6 +131,17 @@ cp target/wasm32-wasip1/release/my-tool.wasm \
 ```
 
 The command name is derived from the `.wasm` filename: `my-tool.wasm` -> command `my-tool`.
+
+### Command aliases via symlinks
+
+To create a command alias, use a VFS symlink. For example, `python` is a built-in symlink to `python3`:
+
+```
+/usr/bin/python → /usr/bin/python3   (symlink, created at init)
+/usr/bin/python3                      (tool file, S_TOOL flag set)
+```
+
+The resolver follows symlinks through the VFS, reads the target tool file, and verifies the `S_TOOL` flag. This means standard `ln -s` semantics apply — no special aliasing API needed.
 
 ## What Your Executable Can Do
 
