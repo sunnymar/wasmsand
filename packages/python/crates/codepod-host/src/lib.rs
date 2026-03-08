@@ -33,6 +33,19 @@ extern "C" {
 
     /// Check if a named extension is available. Returns 1 if yes, 0 if no.
     fn host_is_extension(name_ptr: *const u8, name_len: u32) -> i32;
+
+    /// Open a TCP/TLS socket. JSON request/response via output buffer.
+    fn host_socket_connect(req_ptr: *const u8, req_len: u32, out_ptr: *mut u8, out_cap: u32)
+        -> i32;
+
+    /// Send data on a socket. JSON request/response via output buffer.
+    fn host_socket_send(req_ptr: *const u8, req_len: u32, out_ptr: *mut u8, out_cap: u32) -> i32;
+
+    /// Receive data from a socket. JSON request/response via output buffer.
+    fn host_socket_recv(req_ptr: *const u8, req_len: u32, out_ptr: *mut u8, out_cap: u32) -> i32;
+
+    /// Close a socket. Returns 0 on success, negative on error.
+    fn host_socket_close(req_ptr: *const u8, req_len: u32) -> i32;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +198,101 @@ fn json_to_py(json_str: &str, py_vm: &vm::VirtualMachine) -> vm::PyResult<vm::Py
 }
 
 // ---------------------------------------------------------------------------
+// Helpers for socket operations
+// ---------------------------------------------------------------------------
+
+/// Create an OSError exception.
+fn os_err(py_vm: &vm::VirtualMachine, msg: &str) -> vm::PyRef<vm::builtins::PyBaseException> {
+    py_vm.new_exception_msg(py_vm.ctx.exceptions.os_error.to_owned(), msg.to_owned())
+}
+
+/// Extract a string value from a JSON response by key (minimal parser).
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\":\"", key);
+    let start = json.find(&pattern)? + pattern.len();
+    let rest = &json[start..];
+    let mut end = 0;
+    let mut escaped = false;
+    for ch in rest.chars() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+    Some(rest[..end].to_string())
+}
+
+/// Extract a numeric value from a JSON response by key (minimal parser).
+fn extract_json_number(json: &str, key: &str) -> Option<i64> {
+    let pattern = format!("\"{}\":", key);
+    let start = json.find(&pattern)? + pattern.len();
+    let rest = json[start..].trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '-')
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+// ---------------------------------------------------------------------------
+// Base64 encode/decode — minimal implementation to avoid extra dependencies
+// ---------------------------------------------------------------------------
+
+const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(B64_CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(B64_CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim_end_matches('=');
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+    for ch in s.bytes() {
+        let val = match ch {
+            b'A'..=b'Z' => ch - b'A',
+            b'a'..=b'z' => ch - b'a' + 26,
+            b'0'..=b'9' => ch - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'\n' | b'\r' | b' ' => continue,
+            _ => return Err(format!("invalid base64 char: {}", ch as char)),
+        };
+        buf = (buf << 6) | val as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Python module: _codepod
 // ---------------------------------------------------------------------------
 
@@ -319,6 +427,168 @@ pub mod _codepod {
         {
             let _ = name;
             false
+        }
+    }
+
+    // ----- Socket operations (full mode) -----
+
+    /// Open a TCP or TLS socket to host:port.
+    ///
+    /// Usage: `_codepod.socket_connect(host, port, tls=False) -> int`
+    ///
+    /// Returns a socket_id for use with socket_send/recv/close.
+    #[pyfunction]
+    fn socket_connect(
+        host: vm::builtins::PyStrRef,
+        port: u16,
+        tls: vm::function::OptionalArg<bool>,
+        py_vm: &VirtualMachine,
+    ) -> PyResult<u32> {
+        let use_tls = tls.unwrap_or(false);
+        let request_json = format!(
+            "{{\"host\":\"{}\",\"port\":{},\"tls\":{}}}",
+            json_escape(host.as_str()),
+            port,
+            use_tls,
+        );
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let response_str = call_host_json(host_socket_connect, &request_json)
+                .map_err(|e| os_err(py_vm, &format!("socket_connect failed: {}", e)))?;
+            // Parse JSON response directly (avoid Python dict overhead)
+            let ok = response_str.contains("\"ok\":true") || response_str.contains("\"ok\": true");
+            if !ok {
+                let err = extract_json_string(&response_str, "error")
+                    .unwrap_or_else(|| "unknown error".to_string());
+                return Err(os_err(py_vm, &format!("socket_connect: {}", err)));
+            }
+            let sid = extract_json_number(&response_str, "socket_id")
+                .ok_or_else(|| os_err(py_vm, "socket_connect: missing socket_id"))?;
+            Ok(sid as u32)
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = request_json;
+            Err(py_vm.new_exception_msg(
+                py_vm.ctx.exceptions.runtime_error.to_owned(),
+                "_codepod.socket_connect() is only available inside a WASM sandbox".to_owned(),
+            ))
+        }
+    }
+
+    /// Send data on an open socket.
+    ///
+    /// Usage: `_codepod.socket_send(socket_id, data) -> int`
+    ///
+    /// Returns bytes sent.
+    #[pyfunction]
+    fn socket_send(
+        socket_id: u32,
+        data: vm::builtins::PyBytesRef,
+        py_vm: &VirtualMachine,
+    ) -> PyResult<usize> {
+        let data_bytes = data.as_ref();
+        let data_b64 = base64_encode(data_bytes);
+        let request_json = format!(
+            "{{\"socket_id\":{},\"data_b64\":\"{}\"}}",
+            socket_id, data_b64,
+        );
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let response_str = call_host_json(host_socket_send, &request_json)
+                .map_err(|e| os_err(py_vm, &format!("socket_send failed: {}", e)))?;
+            let ok = response_str.contains("\"ok\":true") || response_str.contains("\"ok\": true");
+            if !ok {
+                let err = extract_json_string(&response_str, "error")
+                    .unwrap_or_else(|| "unknown error".to_string());
+                return Err(os_err(py_vm, &format!("socket_send: {}", err)));
+            }
+            let bs = extract_json_number(&response_str, "bytes_sent").unwrap_or(0);
+            Ok(bs as usize)
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = request_json;
+            Err(py_vm.new_exception_msg(
+                py_vm.ctx.exceptions.runtime_error.to_owned(),
+                "_codepod.socket_send() is only available inside a WASM sandbox".to_owned(),
+            ))
+        }
+    }
+
+    /// Receive data from an open socket.
+    ///
+    /// Usage: `_codepod.socket_recv(socket_id, max_bytes) -> bytes`
+    ///
+    /// Returns received bytes (empty bytes = EOF).
+    #[pyfunction]
+    fn socket_recv(
+        socket_id: u32,
+        max_bytes: usize,
+        py_vm: &VirtualMachine,
+    ) -> PyResult<vm::PyObjectRef> {
+        let request_json = format!(
+            "{{\"socket_id\":{},\"max_bytes\":{}}}",
+            socket_id, max_bytes,
+        );
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let response_str = call_host_json(host_socket_recv, &request_json)
+                .map_err(|e| os_err(py_vm, &format!("socket_recv failed: {}", e)))?;
+            let ok = response_str.contains("\"ok\":true") || response_str.contains("\"ok\": true");
+            if !ok {
+                let err = extract_json_string(&response_str, "error")
+                    .unwrap_or_else(|| "unknown error".to_string());
+                return Err(os_err(py_vm, &format!("socket_recv: {}", err)));
+            }
+            let data_b64 = extract_json_string(&response_str, "data_b64").unwrap_or_default();
+            let decoded = base64_decode(&data_b64)
+                .map_err(|e| os_err(py_vm, &format!("socket_recv: base64 decode error: {}", e)))?;
+            Ok(py_vm.ctx.new_bytes(decoded).into())
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = request_json;
+            Err(py_vm.new_exception_msg(
+                py_vm.ctx.exceptions.runtime_error.to_owned(),
+                "_codepod.socket_recv() is only available inside a WASM sandbox".to_owned(),
+            ))
+        }
+    }
+
+    /// Close an open socket.
+    ///
+    /// Usage: `_codepod.socket_close(socket_id)`
+    #[pyfunction]
+    fn socket_close(socket_id: u32, py_vm: &VirtualMachine) -> PyResult<()> {
+        let request_json = format!("{{\"socket_id\":{}}}", socket_id);
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let req_bytes = request_json.as_bytes();
+            let rc = unsafe { host_socket_close(req_bytes.as_ptr(), req_bytes.len() as u32) };
+            if rc < 0 {
+                return Err(os_err(
+                    py_vm,
+                    &format!("socket_close failed: error code {}", rc),
+                ));
+            }
+            Ok(())
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = request_json;
+            Err(py_vm.new_exception_msg(
+                py_vm.ctx.exceptions.runtime_error.to_owned(),
+                "_codepod.socket_close() is only available inside a WASM sandbox".to_owned(),
+            ))
         }
     }
 }

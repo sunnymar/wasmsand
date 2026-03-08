@@ -340,6 +340,7 @@ dependencies = [
 name = "codepod-shell-exec"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "codepod-shell",
  "libc",
  "regex",

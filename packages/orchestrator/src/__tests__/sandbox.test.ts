@@ -279,7 +279,7 @@ describe('Sandbox', () => {
 
       const siteData = sandbox.readFile('/usr/lib/python/sitecustomize.py');
       const siteContent = new TextDecoder().decode(siteData);
-      expect(siteContent).toContain('sys.modules["socket"]');
+      expect(siteContent).toContain('sys.modules[name]');
     });
 
     it('sets PYTHONPATH when network is configured', async () => {
