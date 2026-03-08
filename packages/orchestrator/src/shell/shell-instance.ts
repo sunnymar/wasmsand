@@ -778,17 +778,19 @@ function spawnAsyncProcess(
     return false;
   };
 
-  const handleInstantiationError = () => {
+  const handleInstantiationError = (err?: unknown) => {
+    let msg = 'memory limit exceeded\n';
     if (memoryBytes !== undefined) {
-      const errMsg = new TextEncoder().encode('memory limit exceeded\n');
-      const stderrTarget = kernel.getFdTarget(pid, 2);
-      if (stderrTarget?.type === 'buffer') { stderrTarget.buf.push(errMsg); stderrTarget.total += errMsg.byteLength; }
-      else if (stderrTarget?.type === 'pipe_write') stderrTarget.pipe.write(errMsg);
-      for (const [fd] of fdTable) kernel.closeFd(pid, fd);
-      kernel.registerExited(pid, 1);
-    } else {
-      kernel.attachProcess(pid, Promise.resolve(), host);
+      // Memory-limited spawn — generic memory error
+    } else if (err instanceof Error) {
+      msg = `${err.message}\n`;
     }
+    const errMsg = new TextEncoder().encode(msg);
+    const stderrTarget = kernel.getFdTarget(pid, 2);
+    if (stderrTarget?.type === 'buffer') { stderrTarget.buf.push(errMsg); stderrTarget.total += errMsg.byteLength; }
+    else if (stderrTarget?.type === 'pipe_write') stderrTarget.pipe.write(errMsg);
+    for (const [fd] of fdTable) kernel.closeFd(pid, fd);
+    kernel.registerExited(pid, 1);
   };
 
   // Add kernel imports if the module needs the `codepod` namespace.

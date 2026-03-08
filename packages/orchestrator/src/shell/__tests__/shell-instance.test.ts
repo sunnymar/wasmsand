@@ -67,6 +67,23 @@ describe('ShellInstance', () => {
     expect(r2.exitCode).toBe(1);
   });
 
+  it('syncSpawn errors appear in stderr', async () => {
+    const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+      syncSpawn: (cmd) => {
+        // Simulate V8 >8MB sync instantiation error
+        return {
+          exit_code: 1,
+          stdout: '',
+          stderr: `${cmd}: WebAssembly.Instance is disallowed on the main thread\n`,
+        };
+      },
+    });
+
+    const result = await shell.run('bigmodule');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('WebAssembly.Instance is disallowed');
+  });
+
   it('handles commands with multiple arguments', async () => {
     const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd, args) => {

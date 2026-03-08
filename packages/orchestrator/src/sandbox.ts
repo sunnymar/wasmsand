@@ -144,7 +144,7 @@ export class Sandbox {
     });
     const { gateway, bridge } = await Sandbox.createNetworkBridge(options.network);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
-    const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir);
+    const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir, vfs);
 
     // Build extension registry
     const extensionRegistry = new ExtensionRegistry();
@@ -362,6 +362,7 @@ export class Sandbox {
     mgr: ProcessManager,
     adapter: PlatformAdapter,
     wasmDir: string,
+    vfs: VFS,
   ): Promise<Map<string, string>> {
     const tools = await adapter.scanTools(wasmDir);
     for (const [name, path] of tools) {
@@ -370,6 +371,10 @@ export class Sandbox {
     if (!tools.has('python3')) {
       mgr.registerTool('python3', `${wasmDir}/python3.wasm`);
     }
+    // Standard aliases via symlinks — these resolve naturally through the VFS
+    vfs.withWriteAccess(() => {
+      try { vfs.symlink('/usr/bin/python3', '/usr/bin/python'); } catch { /* already exists */ }
+    });
     return tools;
   }
 
@@ -634,7 +639,7 @@ export class Sandbox {
     const childVfs = this.vfs.cowClone();
     const { gateway, bridge } = await Sandbox.createNetworkBridge(this.networkPolicy);
     const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist);
-    const tools = await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir);
+    const tools = await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir, childVfs);
 
     // Pre-load all tool modules so spawnSync can use them synchronously
     await childMgr.preloadModules();

@@ -9,6 +9,7 @@
 import type { DirEntry, DirInode, Inode, StatResult } from './inode.js';
 import {
   VfsError,
+  S_TOOL,
   createDirInode,
   createFileInode,
   createSymlinkInode,
@@ -594,7 +595,14 @@ export class VFS {
     const { parent } = this.resolveParent(path);
     this.assertWritePermission(parent);
     const inode = this.resolve(path);
-    inode.metadata.permissions = mode;
+    if (this.initializing) {
+      // Root mode (withWriteAccess): allow setting/clearing S_TOOL
+      inode.metadata.permissions = mode;
+    } else {
+      // User mode: preserve S_TOOL — cannot be set or cleared via chmod
+      const preserved = inode.metadata.permissions & S_TOOL;
+      inode.metadata.permissions = (mode & ~S_TOOL) | preserved;
+    }
     inode.metadata.ctime = new Date();
     this.notifyChange();
   }

@@ -2,6 +2,13 @@
 
 export type InodeType = 'file' | 'dir' | 'symlink';
 
+/**
+ * System-tool flag — stored in the permissions field as a high bit.
+ * Marks a file as a tool stub (content = wasm path).
+ * chmod strips this bit so sandbox users cannot forge tool files.
+ */
+export const S_TOOL = 0o100000;
+
 export interface InodeMetadata {
   permissions: number;
   mtime: Date;

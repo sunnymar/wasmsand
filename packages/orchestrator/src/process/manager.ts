@@ -8,6 +8,7 @@
 
 import type { PlatformAdapter } from '../platform/adapter.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
+import { S_TOOL } from '../vfs/inode.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
@@ -31,9 +32,25 @@ export class ProcessManager {
     this.toolAllowlist = toolAllowlist ? new Set(toolAllowlist) : null;
   }
 
-  /** Register a tool name to a .wasm file path. */
+  /** Register a tool name to a .wasm file path.
+   *  Also creates an executable tool file at /usr/bin/<name> so that
+   *  symlinks (e.g. `ln -s python3 /usr/bin/python`) resolve naturally. */
   registerTool(name: string, wasmPath: string): void {
     this.registry.set(name, wasmPath);
+    // Create tool stub in /usr/bin — content is the wasm path, marked with S_TOOL.
+    // S_TOOL is a high bit that chmod cannot set or clear, so sandbox users
+    // cannot forge tool files. /usr/bin is 0o555 so writes are also blocked.
+    try {
+      this.vfs.withWriteAccess(() => {
+        this.vfs.writeFile(
+          `/usr/bin/${name}`,
+          new TextEncoder().encode(wasmPath),
+        );
+        this.vfs.chmod(`/usr/bin/${name}`, S_TOOL | 0o555);
+      });
+    } catch {
+      // VFS may not have /usr/bin yet (e.g. VfsProxy in worker) — non-fatal
+    }
   }
 
   /** Return the names of all registered tools. */
@@ -62,13 +79,34 @@ export class ProcessManager {
     return this.toolAllowlist.has(name);
   }
 
-  /** Resolve a tool name to its .wasm path, or throw if not registered. */
+  /** Resolve a tool name to its .wasm path, or throw if not registered.
+   *  Falls back to VFS PATH lookup so that symlinks work as aliases
+   *  (e.g. /usr/bin/python → python3 resolves to the python3 wasm path). */
   resolveTool(name: string): string {
-    const path = this.registry.get(name);
-    if (path === undefined) {
-      throw new Error(`Tool not found: ${name}`);
+    const direct = this.registry.get(name);
+    if (direct !== undefined) return direct;
+
+    // VFS PATH fallback: check /usr/bin/<name> (stat follows symlinks).
+    // Only files with the S_TOOL flag are valid tool stubs — this flag
+    // cannot be set via chmod, so sandbox users cannot forge tool files.
+    for (const dir of ['/usr/bin', '/bin']) {
+      try {
+        const filePath = `${dir}/${name}`;
+        const st = this.vfs.stat(filePath); // follows symlinks
+        if (!(st.permissions & S_TOOL)) continue; // not a tool file
+        // Read the resolved file's content — it contains the wasm path
+        const content = new TextDecoder().decode(this.vfs.readFile(filePath));
+        if (content && this.moduleCache.has(content)) return content;
+        // Also try registry lookup by content (wasm path may match)
+        for (const [, wasmPath] of this.registry) {
+          if (wasmPath === content) return wasmPath;
+        }
+      } catch {
+        // Not found in this dir, continue
+      }
     }
-    return path;
+
+    throw new Error(`Tool not found: ${name}`);
   }
 
   /** Return the VFS instance for external use (e.g. spawnAsyncProcess). */
@@ -343,6 +381,11 @@ export class ProcessManager {
     } catch (e: unknown) {
       if (opts?.memoryBytes !== undefined && e instanceof Error && /memory/i.test(e.message)) {
         return { exit_code: 1, stdout: '', stderr: `memory limit exceeded\n` };
+      }
+      // Catch >8MB sync instantiation errors (V8 main-thread limitation) and
+      // other instantiation failures — return an error result instead of crashing.
+      if (e instanceof Error) {
+        return { exit_code: 1, stdout: '', stderr: `${command}: ${e.message}\n` };
       }
       throw e;
     }
