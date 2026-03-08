@@ -30,14 +30,17 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
     }
   });
 
-  it('lists 4 tools', async () => {
+  it('lists all tools', async () => {
     const ctx = createClient();
     transport = ctx.transport;
     await ctx.client.connect(ctx.transport);
 
     const result = await ctx.client.listTools();
     const names = result.tools.map((t) => t.name).sort();
-    expect(names).toEqual(['list_directory', 'read_file', 'run_command', 'write_file']);
+    expect(names).toEqual([
+      'list_directory', 'read_file', 'restore', 'run_command',
+      'snapshot', 'write_file',
+    ]);
   }, 30_000);
 
   it('run_command executes shell commands', async () => {

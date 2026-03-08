@@ -1,7 +1,14 @@
 /**
  * MCP server for codepod — exposes a WASM sandbox via the Model Context Protocol.
  *
- * Provides four tools: run_command, read_file, write_file, list_directory.
+ * Tools:
+ *   run_command    — execute shell commands (full POSIX shell + coreutils)
+ *   read_file      — read a file from the sandbox VFS
+ *   write_file     — write a file to the sandbox VFS
+ *   list_directory — list directory contents with type/size
+ *   snapshot       — take a CoW snapshot of the sandbox filesystem
+ *   restore        — restore to a previous snapshot
+ *
  * All debug/error output goes to stderr (stdout is reserved for MCP protocol).
  */
 
@@ -28,7 +35,7 @@ const config = loadConfig(process.argv.slice(2), {
   wasmDir: process.env.CODEPOD_WASM_DIR
     ?? resolve(__dirname, '../../orchestrator/src/platform/__tests__/fixtures'),
   shellWasm: process.env.CODEPOD_SHELL_WASM
-    ?? resolve(__dirname, '../../orchestrator/src/shell/__tests__/fixtures/codepod-shell.wasm'),
+    ?? resolve(__dirname, '../../orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm'),
 });
 
 async function main(): Promise<void> {
@@ -60,7 +67,7 @@ async function main(): Promise<void> {
     adapter: new NodeAdapter(),
     timeoutMs: config.timeoutMs,
     fsLimitBytes: config.fsLimitBytes,
-    shellWasmPath: config.shellWasm,
+    shellExecWasmPath: config.shellWasm,
     network,
   });
 
@@ -80,7 +87,7 @@ async function main(): Promise<void> {
   // --- Tool: run_command ---
   server.tool(
     'run_command',
-    'Run a shell command in the WASM sandbox',
+    'Run a shell command in the WASM sandbox. Full POSIX shell with pipes, redirects, variables, loops, functions. All coreutils available (ls, grep, sed, awk, jq, find, python3, etc). State persists between calls.',
     { command: z.string().describe('The shell command to execute') },
     async ({ command }) => {
       const result = await sandbox.run(command);
@@ -100,7 +107,7 @@ async function main(): Promise<void> {
   // --- Tool: read_file ---
   server.tool(
     'read_file',
-    'Read a file from the sandbox filesystem',
+    'Read a file from the sandbox virtual filesystem. For binary files or large reads, prefer run_command with cat/head/xxd.',
     { path: z.string().describe('Absolute path of the file to read') },
     async ({ path }) => {
       try {
@@ -124,7 +131,7 @@ async function main(): Promise<void> {
   // --- Tool: write_file ---
   server.tool(
     'write_file',
-    'Write a file to the sandbox filesystem',
+    'Write a file to the sandbox virtual filesystem. For appending or complex writes, prefer run_command with shell redirects.',
     {
       path: z.string().describe('Absolute path of the file to write'),
       contents: z.string().describe('Text contents to write'),
@@ -185,6 +192,42 @@ async function main(): Promise<void> {
           content: [{
             type: 'text' as const,
             text: `Error listing directory: ${(err as Error).message}`,
+          }],
+        };
+      }
+    },
+  );
+
+  // --- Tool: snapshot ---
+  server.tool(
+    'snapshot',
+    'Take a copy-on-write snapshot of the sandbox filesystem. Returns a snapshot ID for later restore. Useful before destructive operations.',
+    {},
+    async () => {
+      const id = sandbox.snapshot();
+      return {
+        content: [{ type: 'text' as const, text: `Snapshot created: ${id}` }],
+      };
+    },
+  );
+
+  // --- Tool: restore ---
+  server.tool(
+    'restore',
+    'Restore the sandbox filesystem to a previously taken snapshot. All changes since the snapshot are discarded.',
+    { id: z.string().describe('Snapshot ID returned by the snapshot tool') },
+    async ({ id }) => {
+      try {
+        sandbox.restore(id);
+        return {
+          content: [{ type: 'text' as const, text: `Restored to snapshot ${id}` }],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{
+            type: 'text' as const,
+            text: `Error restoring snapshot: ${(err as Error).message}`,
           }],
         };
       }
