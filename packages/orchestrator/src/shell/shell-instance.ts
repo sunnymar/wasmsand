@@ -157,7 +157,7 @@ export class ShellInstance implements ShellLike {
         if (options?.syncSpawn) {
           return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn);
         }
-        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes);
+        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes, options?.networkBridge, options?.extensionRegistry);
       },
     });
 
@@ -696,6 +696,8 @@ function spawnAsyncProcess(
   adapter: PlatformAdapter,
   deadlineMs?: number,
   memoryBytes?: number,
+  networkBridge?: NetworkBridgeLike,
+  extensionRegistry?: ExtensionRegistry,
 ): number {
   // Tool allowlist check
   if (!mgr.isToolAllowed(req.prog)) {
@@ -810,7 +812,9 @@ function spawnAsyncProcess(
       memory: childMemoryProxy,
       callerPid: pid,
       kernel,
-      spawnProcess: (req2, fdTable2) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes),
+      networkBridge,
+      extensionRegistry,
+      spawnProcess: (req2, fdTable2) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry),
     });
     imports.codepod = childKernelImports as unknown as Record<string, WebAssembly.ImportValue>;
 

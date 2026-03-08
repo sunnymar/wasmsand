@@ -1,11 +1,3 @@
-/**
- * Python socket module replacement that routes HTTP through _codepod.fetch().
- *
- * This source is written to the VFS at /usr/lib/python/socket.py by
- * Sandbox.create() when networking is enabled. It shadows RustPython's
- * frozen socket module via PYTHONPATH.
- */
-export const SOCKET_SHIM_SOURCE = `\
 """
 Wasmsand socket shim — routes HTTP through _codepod.fetch().
 
@@ -188,11 +180,11 @@ class socket:
 
     def _should_flush(self):
         """Check if send buffer contains a complete HTTP request."""
-        idx = self._sendbuf.find(b"\\r\\n\\r\\n")
+        idx = self._sendbuf.find(b"\r\n\r\n")
         if idx < 0:
             return False
         header_block = self._sendbuf[:idx].decode("utf-8", errors="replace")
-        for line in header_block.split("\\r\\n"):
+        for line in header_block.split("\r\n"):
             if line.lower().startswith("content-length:"):
                 expected = int(line.split(":", 1)[1].strip())
                 body_start = idx + 4
@@ -202,13 +194,13 @@ class socket:
     def _flush_request(self):
         """Parse buffered HTTP request, send via _codepod.fetch(), buffer response."""
         raw = self._sendbuf.decode("utf-8", errors="replace")
-        head, _, body = raw.partition("\\r\\n\\r\\n")
-        first_line, _, header_block = head.partition("\\r\\n")
+        head, _, body = raw.partition("\r\n\r\n")
+        first_line, _, header_block = head.partition("\r\n")
         parts = first_line.split(" ", 2)
         method = parts[0] if parts else "GET"
         path = parts[1] if len(parts) > 1 else "/"
         headers = {}
-        for line in header_block.split("\\r\\n"):
+        for line in header_block.split("\r\n"):
             if ": " in line:
                 k, v = line.split(": ", 1)
                 headers[k] = v
@@ -226,11 +218,11 @@ class socket:
         # Strip content-length — we recalculate it from the actual body
         for hdr in ("content-length", "Content-Length"):
             resp_headers.pop(hdr, None)
-        status_line = "HTTP/1.1 {} OK\\r\\n".format(status)
-        header_lines = "".join("{}: {}\\r\\n".format(k, v) for k, v in resp_headers.items())
+        status_line = "HTTP/1.1 {} OK\r\n".format(status)
+        header_lines = "".join("{}: {}\r\n".format(k, v) for k, v in resp_headers.items())
         body_bytes = resp_body.encode("utf-8") if isinstance(resp_body, str) else resp_body
-        cl = "Content-Length: {}\\r\\n".format(len(body_bytes))
-        self._recvbuf = (status_line + header_lines + cl + "\\r\\n").encode("utf-8") + body_bytes
+        cl = "Content-Length: {}\r\n".format(len(body_bytes))
+        self._recvbuf = (status_line + header_lines + cl + "\r\n").encode("utf-8") + body_bytes
         self._sendbuf = b""
 
 
@@ -263,7 +255,7 @@ class _SocketFile:
         if not self._sock._recvbuf and self._sock._should_flush():
             self._sock._flush_request()
         buf = self._sock._recvbuf
-        idx = buf.find(b"\\n")
+        idx = buf.find(b"\n")
         if idx >= 0:
             if limit > 0 and idx >= limit:
                 line = buf[:limit]
@@ -323,151 +315,3 @@ class _SocketFile:
         if not line:
             raise StopIteration
         return line
-`;
-
-/**
- * Minimal ssl module shim that makes urllib's HTTPSHandler work.
- *
- * The host bridge handles TLS transparently, so ssl.wrap_socket just
- * marks the socket as port-443 (HTTPS) and returns it unchanged.
- */
-export const SSL_SHIM_SOURCE = `\
-"""
-Wasmsand ssl shim — makes urllib HTTPS work via the host network bridge.
-
-The actual TLS is handled by the host. This module provides just enough
-API surface for http.client and urllib to use HTTPSHandler.
-"""
-import socket as _socket
-
-PROTOCOL_TLS = 2
-PROTOCOL_TLS_CLIENT = 16
-PROTOCOL_TLS_SERVER = 17
-CERT_NONE = 0
-CERT_OPTIONAL = 1
-CERT_REQUIRED = 2
-OP_NO_SSLv2 = 0x01000000
-OP_NO_SSLv3 = 0x02000000
-HAS_SNI = True
-HAS_ECDH = True
-HAS_NPN = False
-HAS_ALPN = True
-OPENSSL_VERSION = "Wasmsand 0.0.0"
-OPENSSL_VERSION_INFO = (0, 0, 0, 0, 0)
-OPENSSL_VERSION_NUMBER = 0
-
-_RESTRICTED_SERVER_CIPHERS = ""
-
-
-class SSLError(OSError):
-    pass
-
-
-class SSLCertVerificationError(SSLError):
-    pass
-
-
-class CertificateError(SSLError):
-    pass
-
-
-class SSLContext:
-    """Minimal SSLContext — wrapping is a no-op since the host does TLS."""
-
-    def __init__(self, protocol=PROTOCOL_TLS_CLIENT):
-        self.protocol = protocol
-        self.verify_mode = CERT_NONE
-        self.check_hostname = False
-        self.options = 0
-        self._cadata = None
-        self._cafile = None
-        self._capath = None
-
-    def set_default_verify_paths(self):
-        pass
-
-    def load_default_certs(self, purpose=None):
-        pass
-
-    def load_verify_locations(self, cafile=None, capath=None, cadata=None):
-        self._cafile = cafile
-        self._capath = capath
-        self._cadata = cadata
-
-    def load_cert_chain(self, certfile, keyfile=None, password=None):
-        pass
-
-    def set_ciphers(self, ciphers):
-        pass
-
-    def set_alpn_protocols(self, protocols):
-        pass
-
-    def wrap_socket(self, sock, server_side=False, do_handshake_on_connect=True,
-                    suppress_ragged_eofs=True, server_hostname=None):
-        # Mark the socket as HTTPS (port 443) so the shim builds https:// URLs
-        if server_hostname and hasattr(sock, '_host'):
-            sock._host = server_hostname
-        if hasattr(sock, '_port') and sock._port in (None, 80):
-            sock._port = 443
-        return sock
-
-
-class Purpose:
-    SERVER_AUTH = "SERVER_AUTH"
-    CLIENT_AUTH = "CLIENT_AUTH"
-
-
-def create_default_context(purpose=Purpose.SERVER_AUTH, cafile=None, capath=None, cadata=None):
-    ctx = SSLContext(PROTOCOL_TLS_CLIENT)
-    ctx.verify_mode = CERT_REQUIRED
-    ctx.check_hostname = True
-    if cafile or capath or cadata:
-        ctx.load_verify_locations(cafile, capath, cadata)
-    else:
-        ctx.set_default_verify_paths()
-    return ctx
-
-
-def _create_unverified_context(protocol=PROTOCOL_TLS_CLIENT):
-    ctx = SSLContext(protocol)
-    ctx.verify_mode = CERT_NONE
-    ctx.check_hostname = False
-    return ctx
-
-_create_default_https_context = create_default_context
-
-
-def wrap_socket(sock, keyfile=None, certfile=None, server_side=False,
-                cert_reqs=CERT_NONE, ssl_version=PROTOCOL_TLS,
-                ca_certs=None, do_handshake_on_connect=True,
-                suppress_ragged_eofs=True, ciphers=None,
-                server_hostname=None):
-    ctx = SSLContext(ssl_version)
-    ctx.verify_mode = cert_reqs
-    return ctx.wrap_socket(sock, server_side=server_side,
-                           server_hostname=server_hostname)
-`;
-
-/**
- * sitecustomize.py source that pre-loads our socket shim into sys.modules.
- *
- * RustPython's frozen `socket` module takes priority over PYTHONPATH files.
- * By loading our shim in sitecustomize.py (which runs at interpreter startup),
- * we inject it into sys.modules["socket"] before any other code can import
- * the frozen version.
- */
-export const SITE_CUSTOMIZE_SOURCE = `\
-import sys
-import types
-import importlib.machinery
-_spec = importlib.machinery.ModuleSpec("socket", None, origin="/usr/lib/python/socket.py")
-_mod = types.ModuleType("socket")
-_mod.__spec__ = _spec
-_mod.__file__ = "/usr/lib/python/socket.py"
-with open("/usr/lib/python/socket.py") as _f:
-    _code = _f.read()
-exec(compile(_code, "/usr/lib/python/socket.py", "exec"), _mod.__dict__)
-sys.modules["socket"] = _mod
-del _spec, _mod, _f, _code
-`;
