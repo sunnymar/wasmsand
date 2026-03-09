@@ -179,7 +179,7 @@ pub fn lex(input: &str) -> Vec<Token> {
                 tokens.push(Token::Redirect(RedirectType::BothOverwrite(target)));
                 continue;
             }
-            // Lone & — treat as a word for now
+            tokens.push(Token::Amp);
             pos += 1;
             continue;
         }
@@ -1512,5 +1512,15 @@ mod tests {
                 }]),
             ]
         );
+    }
+
+    #[test]
+    fn lex_ampersand() {
+        let tokens = lex("echo hello &");
+        assert!(tokens.contains(&Token::Amp));
+        // Make sure && still works
+        let tokens2 = lex("cmd1 && cmd2");
+        assert!(tokens2.contains(&Token::And));
+        assert!(!tokens2.contains(&Token::Amp));
     }
 }

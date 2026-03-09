@@ -15,6 +15,8 @@ pub enum Token {
     Pipe,
     /// And: &&
     And,
+    /// Single ampersand: & (background)
+    Amp,
     /// Or: ||
     Or,
     /// Semicolon: ;
