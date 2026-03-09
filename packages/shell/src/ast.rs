@@ -54,9 +54,10 @@ pub struct Assignment {
 /// The operator joining two commands in a list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ListOp {
-    And, // &&
-    Or,  // ||
-    Seq, // ;
+    And,        // &&
+    Or,         // ||
+    Seq,        // ;
+    Background, // &
 }
 
 /// A shell command AST node.

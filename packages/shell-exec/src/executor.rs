@@ -1653,6 +1653,11 @@ pub fn exec_command(
                     }
                 }
                 ListOp::Seq => exec_command(state, host, right),
+                ListOp::Background => {
+                    // TODO(task5): implement background job spawning
+                    // For now, run synchronously like Seq
+                    exec_command(state, host, right)
+                }
             }
         }
 

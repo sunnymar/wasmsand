@@ -116,6 +116,24 @@ impl Parser {
             let op = match self.peek() {
                 Some(Token::And) => ListOp::And,
                 Some(Token::Or) => ListOp::Or,
+                Some(Token::Amp) => {
+                    self.advance(); // consume &
+                    self.skip_newlines();
+                    // Trailing & with no following command
+                    if self.at_list_terminator() || !self.at_command_start() {
+                        left = Command::List {
+                            left: Box::new(left),
+                            op: ListOp::Background,
+                            right: Box::new(Command::Simple {
+                                words: vec![],
+                                redirects: vec![],
+                                assignments: vec![],
+                            }),
+                        };
+                        break;
+                    }
+                    ListOp::Background
+                }
                 Some(Token::Semi) | Some(Token::Newline) => {
                     // Peek ahead: if the next meaningful token is a terminator
                     // or EOF, this semicolon/newline is just a trailing separator.
@@ -130,7 +148,7 @@ impl Parser {
             };
 
             // For And and Or we need to consume the operator token.
-            if op != ListOp::Seq {
+            if !matches!(op, ListOp::Seq | ListOp::Background) {
                 self.advance();
                 self.skip_newlines();
             }
@@ -848,6 +866,72 @@ mod tests {
                 _ => panic!("expected Pipeline on left"),
             },
             _ => panic!("expected List"),
+        }
+    }
+
+    #[test]
+    fn background_trailing() {
+        let cmd = parse("echo hello &");
+        match cmd {
+            Command::List {
+                op: ListOp::Background,
+                ..
+            } => {}
+            _ => panic!("expected Background list, got {:?}", cmd),
+        }
+    }
+
+    #[test]
+    fn background_with_continuation() {
+        let cmd = parse("echo a & echo b");
+        match cmd {
+            Command::List {
+                op: ListOp::Background,
+                right,
+                ..
+            } => match *right {
+                Command::Simple { ref words, .. } => {
+                    assert_eq!(words[0], Word::literal("echo"));
+                    assert_eq!(words[1], Word::literal("b"));
+                }
+                _ => panic!("expected Simple right"),
+            },
+            _ => panic!("expected Background list"),
+        }
+    }
+
+    #[test]
+    fn multiple_background() {
+        let cmd = parse("cmd1 & cmd2 & cmd3");
+        match cmd {
+            Command::List {
+                op: ListOp::Background,
+                left,
+                ..
+            } => match *left {
+                Command::List {
+                    op: ListOp::Background,
+                    ..
+                } => {}
+                _ => panic!("expected nested Background"),
+            },
+            _ => panic!("expected outer Background"),
+        }
+    }
+
+    #[test]
+    fn subshell_background() {
+        let cmd = parse("(echo hello) &");
+        match cmd {
+            Command::List {
+                op: ListOp::Background,
+                left,
+                ..
+            } => match *left {
+                Command::Subshell { .. } => {}
+                _ => panic!("expected Subshell"),
+            },
+            _ => panic!("expected Background list"),
         }
     }
 }
