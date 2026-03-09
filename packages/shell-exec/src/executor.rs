@@ -9,6 +9,50 @@ use crate::expand::{
 };
 use crate::host::{HostInterface, WriteMode};
 use crate::state::ShellState;
+use std::collections::HashSet;
+
+// ---------------------------------------------------------------------------
+// Alias expansion
+// ---------------------------------------------------------------------------
+
+/// Expand aliases in the first word of a command.
+///
+/// If the first word matches an alias, its replacement text is split on
+/// whitespace and prepended to the remaining arguments. Expansion recurses
+/// if the replacement's first word is itself an alias, but tracks seen names
+/// to prevent infinite loops.
+fn expand_alias(state: &ShellState, words: Vec<String>) -> Vec<String> {
+    if words.is_empty() {
+        return words;
+    }
+
+    let mut result = words;
+    let mut seen = HashSet::new();
+
+    loop {
+        let first = &result[0];
+        if seen.contains(first.as_str()) {
+            break;
+        }
+        let replacement = match state.aliases.get(first) {
+            Some(r) => r.clone(),
+            None => break,
+        };
+        seen.insert(result[0].clone());
+        let replacement_words: Vec<String> = replacement
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+        if replacement_words.is_empty() {
+            break;
+        }
+        let rest: Vec<String> = result[1..].to_vec();
+        result = replacement_words;
+        result.extend(rest);
+    }
+
+    result
+}
 
 // ---------------------------------------------------------------------------
 // Heredoc / herestring expansion helper
@@ -576,6 +620,7 @@ pub fn exec_command(
             if globbed.is_empty() {
                 return Ok(ControlFlow::Normal(RunResult::empty()));
             }
+            let globbed = expand_alias(state, globbed);
             let cmd_name = &globbed[0];
             let args: Vec<&str> = globbed[1..].iter().map(|s| s.as_str()).collect();
 
@@ -1016,6 +1061,7 @@ pub fn exec_command(
                                 continue;
                             }
 
+                            let globbed = expand_alias(state, globbed);
                             let cmd_name = &globbed[0];
                             let args: Vec<&str> = globbed[1..].iter().map(|s| s.as_str()).collect();
 
@@ -1348,6 +1394,7 @@ pub fn exec_command(
                                 last_result = RunResult::empty();
                                 last_stage_was_spawned = false;
                             } else {
+                                let globbed = expand_alias(state, globbed);
                                 let cmd_name = &globbed[0];
                                 let pipe_func_args: Vec<String> =
                                     globbed[1..].iter().map(|s| s.to_string()).collect();
@@ -6106,5 +6153,68 @@ mod tests {
         };
         assert_eq!(state.last_exit_code, 0);
         assert_eq!(state.jobs.len(), 1);
+    }
+
+    // -- alias expansion tests --------------------------------------------
+
+    #[test]
+    fn alias_expands_simple_command() {
+        let host = MockHost::new();
+        let mut state = ShellState::new_default();
+        state
+            .aliases
+            .insert("hi".to_string(), "echo hello".to_string());
+        let (code, stdout) = exec_capture(&mut state, &host, "hi");
+        assert_eq!(code, 0);
+        assert_eq!(stdout, "hello\n");
+    }
+
+    #[test]
+    fn alias_expands_with_args() {
+        let host = MockHost::new();
+        let mut state = ShellState::new_default();
+        state
+            .aliases
+            .insert("greet".to_string(), "echo hi".to_string());
+        let (code, stdout) = exec_capture(&mut state, &host, "greet world");
+        assert_eq!(code, 0);
+        assert_eq!(stdout, "hi world\n");
+    }
+
+    #[test]
+    fn alias_not_recursive_infinite() {
+        let host = MockHost::new();
+        let mut state = ShellState::new_default();
+        // alias that refers to itself — should not loop
+        state.aliases.insert("echo".to_string(), "echo".to_string());
+        let (code, stdout) = exec_capture(&mut state, &host, "echo ok");
+        assert_eq!(code, 0);
+        assert_eq!(stdout, "ok\n");
+    }
+
+    #[test]
+    fn alias_chained_expansion() {
+        let host = MockHost::new();
+        let mut state = ShellState::new_default();
+        state.aliases.insert("a".to_string(), "b".to_string());
+        state
+            .aliases
+            .insert("b".to_string(), "echo chained".to_string());
+        let (code, stdout) = exec_capture(&mut state, &host, "a");
+        assert_eq!(code, 0);
+        assert_eq!(stdout, "chained\n");
+    }
+
+    #[test]
+    fn alias_does_not_expand_in_second_position() {
+        let host = MockHost::new();
+        let mut state = ShellState::new_default();
+        state
+            .aliases
+            .insert("world".to_string(), "REPLACED".to_string());
+        let (code, stdout) = exec_capture(&mut state, &host, "echo world");
+        assert_eq!(code, 0);
+        // "world" in second position should NOT be expanded
+        assert_eq!(stdout, "world\n");
     }
 }
