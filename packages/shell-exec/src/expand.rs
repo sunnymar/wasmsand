@@ -576,6 +576,7 @@ fn expand_variable(state: &mut ShellState, name: &str) -> String {
     // Special variables
     match name {
         "?" => return state.last_exit_code.to_string(),
+        "!" => return state.last_bg_pid.to_string(),
         "@" | "*" => return state.positional_args.join(" "),
         "#" => return state.positional_args.len().to_string(),
         "RANDOM" => return random_u15(state).to_string(),

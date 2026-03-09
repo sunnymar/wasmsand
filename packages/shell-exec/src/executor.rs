@@ -482,6 +482,29 @@ fn resolve_process_subs(
 }
 
 /// Execute a parsed `Command` AST node.
+fn format_command(cmd: &Command) -> String {
+    match cmd {
+        Command::Simple { words, .. } => words
+            .iter()
+            .map(|w| {
+                w.parts
+                    .iter()
+                    .map(|p| match p {
+                        WordPart::Literal(s) => s.clone(),
+                        WordPart::QuotedLiteral(s) => s.clone(),
+                        WordPart::Variable(v) => format!("${}", v),
+                        _ => "...".to_string(),
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        Command::Pipeline { .. } => "<pipeline>".to_string(),
+        Command::Subshell { .. } => "<subshell>".to_string(),
+        _ => "<compound>".to_string(),
+    }
+}
+
 pub fn exec_command(
     state: &mut ShellState,
     host: &dyn HostInterface,
@@ -1654,9 +1677,31 @@ pub fn exec_command(
                 }
                 ListOp::Seq => exec_command(state, host, right),
                 ListOp::Background => {
-                    // TODO(task5): implement background job spawning
-                    // For now, run synchronously like Seq
-                    exec_command(state, host, right)
+                    // Record background job
+                    let job_id = state.next_job_id;
+                    state.next_job_id += 1;
+                    state.jobs.push(crate::state::Job {
+                        id: job_id,
+                        pid: 0,
+                        command: format_command(left),
+                        done: Some(left_run.exit_code),
+                    });
+                    state.last_bg_pid = 0;
+                    state.last_exit_code = 0; // & always returns 0
+
+                    // If right side is empty (trailing &), return
+                    if let Command::Simple { words, .. } = right.as_ref() {
+                        if words.is_empty() {
+                            return Ok(ControlFlow::Normal(RunResult::exit(0)));
+                        }
+                    }
+
+                    // Execute the right side
+                    let right_result = exec_command(state, host, right)?;
+                    match right_result {
+                        ControlFlow::Normal(r) => Ok(ControlFlow::Normal(r)),
+                        other => Ok(other),
+                    }
                 }
             }
         }
@@ -6025,5 +6070,41 @@ mod tests {
         let (prog, args) = result.unwrap();
         assert_eq!(prog, "cat");
         assert_eq!(args[0], "/home/user/file.txt");
+    }
+
+    #[test]
+    fn background_runs_both_sides() {
+        let host = MockHost::new().with_spawn_handler(make_handler());
+        let mut state = ShellState::new_default();
+        let cmd = Command::List {
+            left: Box::new(simple_cmd("echo-a")),
+            op: codepod_shell::ast::ListOp::Background,
+            right: Box::new(simple_cmd("echo-b")),
+        };
+        let (exit_code, stdout) = exec_capture_cmd(&mut state, &host, &cmd);
+        assert!(stdout.contains("a\n"));
+        assert!(stdout.contains("b\n"));
+        assert_eq!(state.jobs.len(), 1);
+    }
+
+    #[test]
+    fn trailing_background_returns_zero() {
+        let host = MockHost::new().with_spawn_handler(make_handler());
+        let mut state = ShellState::new_default();
+        let cmd = Command::List {
+            left: Box::new(simple_cmd("false")),
+            op: codepod_shell::ast::ListOp::Background,
+            right: Box::new(Command::Simple {
+                words: vec![],
+                redirects: vec![],
+                assignments: vec![],
+            }),
+        };
+        let result = exec_command(&mut state, &host, &cmd);
+        let ControlFlow::Normal(run) = result.unwrap() else {
+            panic!("expected Normal")
+        };
+        assert_eq!(state.last_exit_code, 0);
+        assert_eq!(state.jobs.len(), 1);
     }
 }
