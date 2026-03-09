@@ -435,6 +435,23 @@ pub mod mock {
             Ok(())
         }
 
+        fn waitpid_nohang(&self, pid: i32) -> Result<i32, HostError> {
+            // In tests, spawned processes complete immediately
+            let results = self.pid_results.borrow();
+            match results.get(&pid) {
+                Some(result) => Ok(result.exit_code),
+                None => Ok(-1),
+            }
+        }
+
+        fn list_processes(&self) -> Result<String, HostError> {
+            Ok("[]".to_string())
+        }
+
+        fn sleep(&self, _ms: u32) -> Result<(), HostError> {
+            Ok(())
+        }
+
         fn socket_connect(&self, _host: &str, _port: u16, _tls: bool) -> Result<u32, HostError> {
             Err(HostError::IoError("sockets not available in test".into()))
         }

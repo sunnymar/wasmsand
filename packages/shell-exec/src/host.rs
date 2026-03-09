@@ -158,6 +158,16 @@ pub trait HostInterface {
     /// Yield to the scheduler (cooperative scheduling: sleep(0)).
     fn yield_now(&self) -> Result<(), HostError>;
 
+    /// Check if a process has exited without blocking.
+    /// Returns exit code if done, -1 if still running.
+    fn waitpid_nohang(&self, pid: i32) -> Result<i32, HostError>;
+
+    /// Get a JSON-encoded list of all processes in the kernel.
+    fn list_processes(&self) -> Result<String, HostError>;
+
+    /// Sleep for the given number of milliseconds. JSPI-suspending on wasm32.
+    fn sleep(&self, ms: u32) -> Result<(), HostError>;
+
     // ----- Socket operations (full mode) -----
 
     /// Open a TCP or TLS socket to host:port. Returns a socket_id.
@@ -311,6 +321,15 @@ extern "C" {
     /// Yield to the JS microtask queue (cooperative scheduling: sleep(0)).
     /// JSPI-suspending — allows other WASM stacks to run.
     fn host_yield();
+
+    /// Non-blocking waitpid. Returns exit code if done, -1 if still running.
+    fn host_waitpid_nohang(pid: i32) -> i32;
+
+    /// List all processes. Writes JSON array to output buffer.
+    fn host_list_processes(out_ptr: *mut u8, out_cap: u32) -> i32;
+
+    /// Sleep for ms milliseconds. JSPI-suspending.
+    fn host_sleep(ms: u32);
 
     // ----- Socket syscalls (full mode) -----
 
@@ -695,6 +714,22 @@ impl HostInterface for WasmHost {
 
     fn yield_now(&self) -> Result<(), HostError> {
         unsafe { host_yield() };
+        Ok(())
+    }
+
+    fn waitpid_nohang(&self, pid: i32) -> Result<i32, HostError> {
+        let rc = unsafe { host_waitpid_nohang(pid) };
+        Ok(rc)
+    }
+
+    fn list_processes(&self) -> Result<String, HostError> {
+        call_with_outbuf("list_processes", |out_ptr, out_cap| unsafe {
+            host_list_processes(out_ptr, out_cap)
+        })
+    }
+
+    fn sleep(&self, ms: u32) -> Result<(), HostError> {
+        unsafe { host_sleep(ms) };
         Ok(())
     }
 
