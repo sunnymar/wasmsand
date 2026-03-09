@@ -10,7 +10,7 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 
 - **Shell execution** — pipes, redirects, variables, globbing, control flow, functions, subshells
 - **95+ commands** — cat, grep, sed, awk, find, sort, jq, tar, curl, sqlite3, and more
-- **Python 3** via RustPython compiled to WASI
+- **Python 3** via RustPython compiled to WASI, with **numpy** support (native Rust implementation)
 - **Virtual filesystem** — in-memory POSIX VFS with optional persistence
 - **Host mounts** — inject files into the VFS at arbitrary paths
 - **Extensions** — register custom shell commands backed by host-side handlers
@@ -107,7 +107,7 @@ All command execution runs inside the WASM sandbox — no host process spawning.
 - **In-memory filesystem.** Default 256 MB, configurable. Use persistence modes to survive restarts.
 - **Sequential pipeline execution.** Pipeline stages run one at a time with buffered I/O.
 - **Bash-compatible, not full POSIX.** Covers most scripting needs. Missing: aliases, `trap`, job control, arrays, process substitution.
-- **No runtime pip install from PyPI.** Python packages are standard library or provided via extensions.
+- **No runtime pip install from PyPI.** Python packages are standard library, native Rust implementations (numpy), or provided via extensions.
 - **Not formally audited.** Defense-in-depth security is implemented but not yet pen-tested.
 
 ## Development
@@ -122,43 +122,71 @@ make npm           # package for npm
 make wheel         # package Python wheel (current platform)
 ```
 
-## Related projects
+## How it compares
 
-codepod occupies a specific point in the design space: a lightweight WASM-based sandbox with real POSIX semantics, designed for LLM code execution on both server and browser. Here's how it compares to related projects.
+codepod occupies a specific point in the design space: a lightweight WASM-based sandbox with real POSIX semantics, designed for LLM code execution on both server and browser.
 
-### RustPython
+### vs. E2B
+
+[E2B](https://e2b.dev) (~11k stars) runs Firecracker microVMs in the cloud. Each sandbox is a full Linux VM with its own kernel, filesystem, and network stack. This gives you maximum compatibility (any language, any binary, full networking) but at a cost: cloud-only, per-second billing, and ~150-200ms cold starts.
+
+codepod takes a fundamentally different approach — no VMs, no containers, no kernel. WASM instances in a single process.
+
+| | codepod | E2B |
+|---|---|---|
+| **Isolation** | WASM linear memory sandbox | Firecracker microVM (KVM) |
+| **Startup** | Instant (cached WASM instantiation) | ~150-200ms (VM boot) |
+| **Runs locally** | Yes (Deno/Node.js, browser) | No (requires Linux KVM) |
+| **Runs in browser** | Yes | No |
+| **Infrastructure** | None — single process, in-memory | Cloud service or self-hosted Terraform + KVM |
+| **Cost per sandbox** | ~64KB initial memory | Full VM (default 512MB+ RAM) |
+| **10 concurrent sandboxes** | ~1x compiled code + 10x heap | 10x full VMs |
+| **Python** | RustPython + native numpy | Full CPython + pip install anything |
+| **Shell** | POSIX shell, 95+ commands | Full Linux (bash, apt, everything) |
+| **Networking** | Opt-in domain allowlist | Full network stack |
+| **Persistence** | Snapshot/restore/fork/export (in-memory) | VM snapshots |
+| **Open source** | Yes (BSD 3-Clause) | Yes (Apache 2.0) |
+
+E2B is the right choice when you need full Linux compatibility — C extensions, system packages, GPU, or unrestricted networking. codepod is for when you want lightweight, zero-infrastructure sandboxes that run anywhere (including the browser) with predictable resource usage and no cloud dependency.
+
+### vs. Deno Sandbox
+
+[Deno Sandbox](https://deno.com/deploy/sandbox) is a cloud service (beta, launched Feb 2026) running lightweight Linux microVMs on Deno Deploy. Like E2B, it provides full Linux environments with any language support. Unlike E2B, it's cloud-only with no self-hosting option.
+
+| | codepod | Deno Sandbox |
+|---|---|---|
+| **Isolation** | WASM linear memory | Linux microVM |
+| **Startup** | Instant | <1s (stated) |
+| **Self-hostable** | Yes | No (managed service only) |
+| **Runs in browser** | Yes | No |
+| **Open source** | Yes | No |
+| **Python** | RustPython + numpy | Full CPython |
+| **Shell** | POSIX shell, 95+ commands | Full Linux |
+
+### vs. RustPython
 
 [RustPython](https://github.com/RustPython/RustPython) (21k+ stars) is a Python 3 interpreter written in Rust. codepod uses RustPython compiled to WASI as its Python runtime — it runs as a standard WASI binary through the same process manager as coreutils, sharing the virtual filesystem and I/O plumbing with no special-case integration.
 
-RustPython gives codepod near-complete Python 3 coverage (classes, generators, decorators, context managers, and stdlib modules like `json`, `re`, `math`, `collections`) in a single ~12MB WASM binary. The tradeoff is startup latency (hundreds of milliseconds for the first invocation, cached after) and no C extension support — `numpy`, `pandas`, and anything requiring native code won't work. For LLM use cases this is rarely a limitation since agents primarily use the standard library.
+RustPython gives codepod near-complete Python 3 coverage (classes, generators, decorators, context managers, and stdlib modules like `json`, `re`, `math`, `collections`) in a single WASM binary. The tradeoff is startup latency (hundreds of milliseconds for the first invocation, cached after) and no C extension support. codepod works around this for key packages by providing native Rust implementations compiled directly into the WASM binary — numpy is supported this way via [numpy-rust](https://github.com/codepod-sandbox/numpy-rust) (400+ operations, 8 dtypes, linalg, FFT, random). Additional packages (pillow, matplotlib) follow the same pattern.
 
-### Monty (Pydantic)
+### vs. Monty (Pydantic)
 
 [Monty](https://github.com/pydantic/monty) (5.7k stars) is a minimal Python interpreter from the Pydantic team, explicitly targeting LLM-generated code. It prioritizes microsecond startup (~0.06ms), tiny footprint, and strict isolation via a controlled external-function model — filesystem, network, and environment access only happen through developer-approved callbacks.
 
 codepod initially used Monty but switched to RustPython because Monty's Python subset was too restrictive for practical agent use: no classes, limited stdlib (only `sys`, `typing`, `asyncio`), and no modules like `json` or `re` that LLMs reach for constantly. Monty is the right choice if you need sub-millisecond startup and can constrain your agent to simple procedural scripts. codepod chose broader Python coverage at the cost of higher startup latency, since commands are typically batched and the WASM module is cached after first load.
 
-Monty is still early and actively developing — classes and `json` support are on their roadmap. It's worth watching.
+### vs. lifo
 
-### lifo
-
-[lifo](https://github.com/lifo-sh/lifo) is a browser-native Unix environment — 60+ commands, a bash-like shell, a virtual filesystem with IndexedDB persistence, and Node.js compatibility shims. It positions itself as [zero-cost AI sandboxing](https://lifo.sh/): no server, no VM, instant boot.
-
-The key architectural difference: lifo implements commands in JavaScript against browser APIs, while codepod compiles real Rust coreutils and a Rust shell parser to WebAssembly running under WASI. This has significant implications:
+[lifo](https://github.com/lifo-sh/lifo) is a browser-native Unix environment — 60+ commands, a bash-like shell, a virtual filesystem with IndexedDB persistence. It implements commands in JavaScript against browser APIs, while codepod compiles real Rust coreutils and a Rust shell parser to WebAssembly running under WASI.
 
 | | codepod | lifo |
 |---|---|---|
 | **Execution model** | WASM binaries under WASI host | JS functions against browser APIs |
 | **Process isolation** | Each command is an isolated WASM instance with its own linear memory | Shared JS thread, no memory isolation between commands |
-| **Security boundary** | WASM sandbox + WASI syscall interception + configurable policies (tool allowlist, output limits, memory limits, hard-kill) | Browser sandbox only — "not for high-security sandboxing" per their docs |
+| **Security boundary** | WASM sandbox + WASI syscall interception + configurable policies | Browser sandbox only |
 | **Server-side** | Yes (Deno/Node.js with Worker-based hard-kill) | Browser-only |
-| **Python** | Full Python 3 via RustPython WASI | None |
-| **Persistence** | In-memory VFS with snapshot/restore/fork, export/import, and auto-persist to IndexedDB or filesystem | IndexedDB-backed VFS |
-| **Networking** | Opt-in with domain allowlist, sync bridge for WASI | Browser fetch (no policy layer) |
-
-lifo is a good fit for lightweight browser-side demos and prototyping where the browser sandbox is sufficient. codepod is designed for the harder problem: running untrusted LLM-generated code in production on both server and browser, where you need real process isolation, configurable security policies, and hard-kill guarantees.
-
-codepod has adopted several ideas from lifo's design — a package manager concept, persistence modes, and shell ergonomics for long autonomous runs — adapted to work within the WASM security boundary rather than as bare JS.
+| **Python** | Full Python 3 via RustPython WASI + numpy | None |
+| **Persistence** | In-memory VFS with snapshot/restore/fork, export/import | IndexedDB-backed VFS |
 
 ## Origin
 
