@@ -24,7 +24,7 @@ def _bundled_paths() -> tuple[str, list[str], str, str]:
     server = os.path.join(_BUNDLED_DIR, "server.js")
     server_args = [server]
     wasm_dir = os.path.join(_BUNDLED_DIR, "wasm")
-    shell_wasm = os.path.join(wasm_dir, "codepod-shell.wasm")
+    shell_wasm = os.path.join(wasm_dir, "codepod-shell-exec.wasm")
     return runtime, server_args, wasm_dir, shell_wasm
 
 
@@ -41,8 +41,8 @@ def _dev_paths() -> tuple[str, list[str], str, str]:
         repo_root, "packages", "orchestrator", "src", "platform", "__tests__", "fixtures"
     )
     shell_wasm = os.path.join(
-        repo_root, "packages", "orchestrator", "src", "shell", "__tests__", "fixtures",
-        "codepod-shell.wasm",
+        repo_root, "packages", "orchestrator", "src", "platform", "__tests__", "fixtures",
+        "codepod-shell-exec.wasm",
     )
     return runtime_path, server_args, wasm_dir, shell_wasm
 
