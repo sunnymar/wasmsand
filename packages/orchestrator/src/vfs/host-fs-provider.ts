@@ -8,7 +8,7 @@
  * Path traversal is prevented: all resolved paths must stay under hostRoot.
  */
 
-import { readFileSync, writeFileSync, statSync, readdirSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, statSync, readdirSync, mkdirSync, realpathSync } from 'node:fs';
 import { resolve, normalize, dirname } from 'node:path';
 import { VfsError } from './inode.js';
 import type { VirtualProvider } from './provider.js';
@@ -103,10 +103,22 @@ export class HostFsProvider implements VirtualProvider {
       return this.hostRoot;
     }
     const full = normalize(resolve(this.hostRoot, subpath));
-    // Ensure the resolved path is still under hostRoot
+    // Ensure the resolved path is still under hostRoot (pre-symlink check)
     if (!full.startsWith(this.hostRoot + '/') && full !== this.hostRoot) {
       throw new VfsError('ENOENT', `path traversal blocked: ${subpath}`);
     }
-    return full;
+    // Resolve symlinks and re-check containment to prevent symlink escapes
+    try {
+      const real = realpathSync(full);
+      const realRoot = realpathSync(this.hostRoot);
+      if (!real.startsWith(realRoot + '/') && real !== realRoot) {
+        throw new VfsError('ENOENT', `symlink traversal blocked: ${subpath}`);
+      }
+      return real;
+    } catch (err) {
+      if (err instanceof VfsError) throw err;
+      // Path doesn't exist yet (e.g. writeFile to new path) — use normalized path
+      return full;
+    }
   }
 }

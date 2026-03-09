@@ -226,14 +226,15 @@ export class WorkerExecutor {
     const path = (metadata.path as string) ?? '';
     const vfs = this.config.vfs;
 
-    // Only use withWriteAccess for write operations targeting system paths.
-    // Read operations never need it; user-path writes go through normal
-    // writable-path checks.
+    // Only use withWriteAccess for write operations targeting tool stub paths.
+    // Restrict elevation to /usr/bin (tool stubs only) and /.wasi (WASI internals).
+    // Never elevate writes to /usr/lib, /usr/share, or /bin to prevent
+    // overwriting security-critical files (e.g. Python socket shim).
     const READ_OPS = new Set(['readFile', 'stat', 'lstat', 'readdir']);
-    const SYSTEM_PREFIXES = ['/bin', '/usr', '/.wasi'];
+    const ELEVATED_WRITE_PREFIXES = ['/usr/bin/', '/.wasi/'];
     const isRead = READ_OPS.has(op);
-    const isSystemPath = SYSTEM_PREFIXES.some(p => path.startsWith(p));
-    const needsElevation = !isRead && isSystemPath;
+    const isElevatedPath = ELEVATED_WRITE_PREFIXES.some(p => path.startsWith(p));
+    const needsElevation = !isRead && isElevatedPath;
 
     const exec = () => {
       switch (op) {

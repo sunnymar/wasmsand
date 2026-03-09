@@ -69,6 +69,13 @@ async function main(): Promise<void> {
     fsLimitBytes: config.fsLimitBytes,
     shellExecWasmPath: config.shellWasm,
     network,
+    security: {
+      limits: {
+        stdoutBytes: 1 * 1024 * 1024,    // 1MB stdout cap
+        stderrBytes: 1 * 1024 * 1024,    // 1MB stderr cap
+        commandBytes: 65536,              // 64KB command size
+      },
+    },
   });
 
   // --- Mount host directories ---

@@ -509,6 +509,10 @@ export class ShellInstance implements ShellLike {
     const envExports: string[] = [];
     for (const [k, v] of this.env) {
       if (this.syncedEnv.get(k) !== v) {
+        // Validate env var name to prevent shell injection
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) {
+          continue; // skip invalid env var names
+        }
         // Escape single quotes in value for shell safety
         const escaped = v.replace(/'/g, "'\\''");
         envExports.push(`export ${k}='${escaped}'`);
@@ -518,6 +522,10 @@ export class ShellInstance implements ShellLike {
     // Check for unset vars
     for (const k of this.syncedEnv.keys()) {
       if (!this.env.has(k)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) {
+          this.syncedEnv.delete(k);
+          continue;
+        }
         envExports.push(`unset ${k}`);
         this.syncedEnv.delete(k);
       }

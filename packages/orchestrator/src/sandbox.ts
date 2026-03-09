@@ -117,7 +117,9 @@ export class Sandbox {
     this.bridge = parts.bridge ?? null;
     this.networkPolicy = parts.networkPolicy;
     this.security = parts.security;
-    this.sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    this.sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36);
     this.auditHandler = parts.security?.onAuditEvent;
     this.workerExecutor = parts.workerExecutor ?? null;
     this.extensionRegistry = parts.extensionRegistry ?? null;
@@ -563,6 +565,9 @@ export class Sandbox {
 
   setEnv(name: string, value: string): void {
     this.assertAlive();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new Error(`Invalid environment variable name: '${name}'`);
+    }
     this.runner.setEnv(name, value);
   }
 

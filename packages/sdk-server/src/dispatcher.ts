@@ -47,6 +47,9 @@ export interface RpcError {
   message: string;
 }
 
+/** Maximum number of concurrent forked sandboxes. */
+const MAX_FORKS = 16;
+
 export class Dispatcher {
   private sandbox: SandboxLike;
   private killed = false;
@@ -259,6 +262,9 @@ export class Dispatcher {
   }
 
   private async sandboxFork(params: Record<string, unknown>) {
+    if (this.forks.size >= MAX_FORKS) {
+      throw this.rpcError(-32602, `Maximum of ${MAX_FORKS} concurrent forks reached`);
+    }
     const sb = this.resolveSandbox(params);
     const child = await sb.fork();
     const sandboxId = String(this.nextForkId++);

@@ -145,6 +145,14 @@ async function main(): Promise<void> {
           return;
         }
 
+        // Validate wasmDir is an absolute path and doesn't contain traversal
+        const { resolve: resolvePath, normalize: normalizePath } = await import('node:path');
+        const normalizedWasmDir = normalizePath(resolvePath(wasmDir));
+        if (normalizedWasmDir !== wasmDir && normalizedWasmDir !== resolvePath(wasmDir)) {
+          respond(errorResponse(id, -32602, 'wasmDir contains path traversal'));
+          return;
+        }
+
         // Decode base64-encoded mount files
         const mountConfigs = mounts?.map(m => ({
           path: m.path,
@@ -172,11 +180,11 @@ async function main(): Promise<void> {
         }));
 
         const sandbox = await Sandbox.create({
-          wasmDir,
+          wasmDir: normalizedWasmDir,
           adapter: new NodeAdapter(),
           timeoutMs,
           fsLimitBytes,
-          shellWasmPath,
+          shellExecWasmPath: shellWasmPath,
           security: limits ? { limits } : undefined,
           mounts: mountConfigs,
           pythonPath,

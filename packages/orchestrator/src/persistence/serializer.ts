@@ -19,6 +19,9 @@
 import type { VfsLike } from '../vfs/vfs-like.js';
 import type { SerializedState } from './types.js';
 
+/** S_TOOL bit — must not be importable from external state blobs. */
+const S_TOOL = 0o100000;
+
 /** Encode bytes to base64 (works in both Node and browser). */
 function toBase64(bytes: Uint8Array): string {
   let binary = '';
@@ -195,10 +198,10 @@ export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string,
         vfs.writeFile(entry.path, content);
       }
     }
-    // Apply permissions after all entries are created
+    // Apply permissions after all entries are created (strip S_TOOL bit)
     for (const entry of safeFiles) {
       if (entry.permissions !== undefined) {
-        vfs.chmod(entry.path, entry.permissions);
+        vfs.chmod(entry.path, entry.permissions & ~S_TOOL);
       }
     }
   });

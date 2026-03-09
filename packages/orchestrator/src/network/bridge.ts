@@ -146,9 +146,24 @@ export class NetworkBridge implements NetworkBridgeLike {
               return;
             }
           }
+          // Strip sensitive headers on cross-origin redirects
+          let reqHeaders = req.headers;
+          if (redirectCount > 0) {
+            try {
+              const origHost = new URL(req.url).hostname;
+              const curHost = new URL(currentUrl).hostname;
+              if (origHost !== curHost) {
+                reqHeaders = Object.assign({}, req.headers);
+                delete reqHeaders['authorization'];
+                delete reqHeaders['Authorization'];
+                delete reqHeaders['cookie'];
+                delete reqHeaders['Cookie'];
+              }
+            } catch {}
+          }
           resp = await fetch(currentUrl, {
             method: currentMethod,
-            headers: req.headers,
+            headers: reqHeaders,
             body: currentBody,
             redirect: 'manual',
           });

@@ -8,6 +8,8 @@ export interface PackagePolicy {
   maxPackageBytes?: number;
   /** Maximum number of installed packages. */
   maxInstalledPackages?: number;
+  /** If true, require a SHA-256 hash for each installed package. */
+  requireIntegrity?: boolean;
 }
 
 /** Security configuration for sandbox instances. */
