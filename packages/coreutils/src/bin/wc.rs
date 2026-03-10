@@ -37,15 +37,29 @@ impl Counts {
 
 fn count_reader<R: Read>(reader: R) -> io::Result<Counts> {
     let mut counts = Counts::new();
-    let buf = BufReader::new(reader);
-    for line in buf.lines() {
-        let line = line?;
-        counts.lines += 1;
-        counts.bytes += line.len() + 1; // +1 for the newline
-        counts.chars += line.chars().count() + 1; // +1 for the newline
-        counts.words += line.split_whitespace().count();
-        if line.len() > counts.max_line_len {
-            counts.max_line_len = line.len();
+    let mut buf = BufReader::new(reader);
+    let mut line_buf = String::new();
+
+    loop {
+        line_buf.clear();
+        let n = buf.read_line(&mut line_buf)?;
+        if n == 0 {
+            break;
+        }
+        // read_line preserves the trailing newline if present
+        let has_newline = line_buf.ends_with('\n');
+        let content = if has_newline {
+            &line_buf[..line_buf.len() - 1]
+        } else {
+            &line_buf[..]
+        };
+
+        counts.lines += if has_newline { 1 } else { 0 };
+        counts.bytes += n;
+        counts.chars += content.chars().count() + if has_newline { 1 } else { 0 };
+        counts.words += content.split_whitespace().count();
+        if content.len() > counts.max_line_len {
+            counts.max_line_len = content.len();
         }
     }
     Ok(counts)

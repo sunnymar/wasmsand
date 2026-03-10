@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 
 import type { PlatformAdapter } from './adapter.js';
 
-const EXCLUDED = new Set(['codepod-shell.wasm', 'python3.wasm']);
+const EXCLUDED = new Set(['python3.wasm']);
 
 function wasmToToolName(filename: string): string {
   if (filename === 'true-cmd.wasm') return 'true';
@@ -16,7 +16,8 @@ function wasmToToolName(filename: string): string {
 }
 
 export class NodeAdapter implements PlatformAdapter {
-  supportsWorkerExecution = true;
+  // Worker threads require Node.js (not Deno) to load .ts worker files
+  supportsWorkerExecution = typeof (globalThis as any).Deno === 'undefined';
 
   /** Cross-instance cache so repeated compilations of the same .wasm
    *  (e.g. across test-level ProcessManager instances) don't re-read

@@ -11,9 +11,11 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
+const IS_DENO = typeof (globalThis as any).Deno !== 'undefined';
+const workerDescribe = IS_DENO ? describe.skip : describe;
 
 
-describe('Sandbox', () => {
+describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   let sandbox: Sandbox;
 
   afterEach(() => {
@@ -409,9 +411,9 @@ describe('Sandbox', () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
         adapter: new NodeAdapter(),
-        security: { limits: { fileCount: 200 } },
+        security: { limits: { fileCount: 250 } },
       });
-      // Default layout creates ~103 inodes (9 dirs + 89 tools + config);
+      // Default layout creates ~115 inodes (9 dirs + 95+ tools + config);
       // try to fill up the remaining allocation
       let threw = false;
       for (let i = 0; i < 200; i++) {
@@ -466,7 +468,7 @@ describe('Sandbox', () => {
     });
   });
 
-  describe('worker-based hard kill', () => {
+  workerDescribe('worker-based hard kill', () => {
     it('kills a pure CPU-bound Python loop via worker termination', { timeout: 15000 }, async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
@@ -582,7 +584,7 @@ describe('Sandbox', () => {
     });
   });
 
-  describe('hard kill via Worker', () => {
+  workerDescribe('hard kill via Worker', () => {
     it('timeout terminates execution via worker.terminate()', async () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,

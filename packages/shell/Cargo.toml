@@ -3,10 +3,6 @@ name = "codepod-shell"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "codepod-shell"
-path = "src/main.rs"
-
 [lib]
 name = "codepod_shell"
 path = "src/lib.rs"

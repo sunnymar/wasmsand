@@ -319,6 +319,38 @@ path = "src/bin/unzip.rs"
 name = "rg"
 path = "src/bin/rg.rs"
 
+[[bin]]
+name = "true"
+path = "src/bin/true.rs"
+
+[[bin]]
+name = "false"
+path = "src/bin/false.rs"
+
+[[bin]]
+name = "link"
+path = "src/bin/link.rs"
+
+[[bin]]
+name = "unlink"
+path = "src/bin/unlink.rs"
+
+[[bin]]
+name = "arch"
+path = "src/bin/arch.rs"
+
+[[bin]]
+name = "factor"
+path = "src/bin/factor.rs"
+
+[[bin]]
+name = "shuf"
+path = "src/bin/shuf.rs"
+
+[[bin]]
+name = "sum"
+path = "src/bin/sum.rs"
+
 [dependencies]
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }

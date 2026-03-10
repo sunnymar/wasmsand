@@ -40,9 +40,8 @@ bash scripts/build-wheel.sh
 
 ## WASM Binaries
 
-Two different shell WASM files exist — don't confuse them:
-- `codepod-shell-exec.wasm` (1.3MB) — Full shell executor with `__alloc`/`__dealloc`/`__run_command` exports. **This is the one to use.**
-- `codepod-shell.wasm` (113KB) — Minimal module with only `_start`/`__main_void`. Not useful for sandbox execution.
+- `codepod-shell-exec.wasm` (1.3MB) — Full shell executor with `__alloc`/`__dealloc`/`__run_command` exports.
+- `packages/shell/` is the parser library (Rust crate `codepod_shell`) used by `codepod-shell-exec`. It has no standalone binary.
 
 Test fixtures live at `packages/orchestrator/src/platform/__tests__/fixtures/`.
 

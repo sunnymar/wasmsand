@@ -193,8 +193,11 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     async host_network_fetch(reqPtr: number, reqLen: number, outPtr: number, outCap: number): Promise<number> {
       const reqJson = readString(memory, reqPtr, reqLen);
 
+      const fetchError = (error: string) =>
+        writeJson(memory, outPtr, outCap, { ok: false, status: 0, headers: {}, body: '', error });
+
       if (!opts.networkBridge) {
-        return writeJson(memory, outPtr, outCap, { ok: false, error: 'networking not configured' });
+        return fetchError('networking not configured');
       }
 
       try {
@@ -222,7 +225,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        return writeJson(memory, outPtr, outCap, { ok: false, error: msg });
+        return fetchError(msg);
       }
     },
 

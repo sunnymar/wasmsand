@@ -11,7 +11,6 @@ FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
 echo "Building coreutils + shell + shell-exec to wasm32-wasip1..."
 cargo build \
   -p codepod-coreutils \
-  -p codepod-shell \
   -p codepod-shell-exec \
   -p true-cmd-wasm \
   -p false-cmd-wasm \
@@ -31,14 +30,13 @@ if [[ "${1:-}" == "--copy-fixtures" ]]; then
   echo ""
   echo "Copying to test fixtures..."
 
-  TOOLS=(cat echo head tail wc sort uniq grep ls mkdir rm cp mv touch tee tr cut basename dirname env printf find sed awk jq du df gzip tar bc dc hostname base64 sha256sum md5sum stat xxd rev nproc fmt fold nl expand unexpand paste comm join split strings od cksum truncate tree patch file column cmp timeout numfmt csplit zip unzip)
+  TOOLS=(cat echo head tail wc sort uniq grep ls mkdir rm cp mv touch tee tr cut basename dirname env printf find sed awk jq du df gzip tar bc dc hostname base64 sha256sum md5sum stat xxd rev nproc fmt fold nl expand unexpand paste comm join split strings od cksum truncate tree patch file column cmp timeout numfmt csplit zip unzip arch factor shuf sum link unlink)
   for tool in "${TOOLS[@]}"; do
     cp "$TARGET_DIR/$tool.wasm" "$FIXTURES_DIR/$tool.wasm"
   done
 
   cp "$TARGET_DIR/true-cmd-wasm.wasm" "$FIXTURES_DIR/true-cmd.wasm"
   cp "$TARGET_DIR/false-cmd-wasm.wasm" "$FIXTURES_DIR/false-cmd.wasm"
-  cp "$TARGET_DIR/codepod-shell.wasm" "$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures/codepod-shell.wasm"
   cp "$TARGET_DIR/codepod-shell-exec.wasm" "$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures/codepod-shell-exec.wasm"
 
   echo "Done."

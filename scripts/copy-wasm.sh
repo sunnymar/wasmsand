@@ -11,8 +11,7 @@ SHELL_FIXTURES="$ROOT/packages/orchestrator/src/shell/__tests__/fixtures"
 
 mkdir -p "$TARGET"
 
-# Shell parser + shell executor
-cp "$SHELL_FIXTURES/codepod-shell.wasm" "$TARGET/"
+# Shell executor
 cp "$SHELL_FIXTURES/codepod-shell-exec.wasm" "$TARGET/"
 
 # All coreutils + python

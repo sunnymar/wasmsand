@@ -164,7 +164,9 @@ describe('PythonRunner', () => {
   });
 
   describe('resource limits', () => {
-    it('terminates infinite loops via worker hard-kill', { timeout: 10000 }, async () => {
+    // Worker-based hard-kill requires Node.js worker_threads (not available in Deno)
+    const workerIt = typeof (globalThis as any).Deno !== 'undefined' ? it.skip : it;
+    workerIt('terminates infinite loops via worker hard-kill', { timeout: 10000 }, async () => {
       const adapter = new NodeAdapter();
       const sb = await Sandbox.create({
         wasmDir: FIXTURES,

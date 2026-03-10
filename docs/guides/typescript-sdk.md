@@ -58,9 +58,6 @@ const sandbox = await Sandbox.create({
   // Max VFS size in bytes (default: 256MB)
   fsLimitBytes: 128 * 1024 * 1024,
 
-  // Path to shell parser WASM (default: ${wasmDir}/codepod-shell.wasm)
-  shellWasmPath: './wasm/codepod-shell.wasm',
-
   // Network access policy (disabled by default)
   network: { allowedHosts: ['api.example.com'] },
 

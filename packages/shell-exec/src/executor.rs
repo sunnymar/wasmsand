@@ -4690,6 +4690,19 @@ mod tests {
         assert_eq!(state.local_var_stack.len(), 0); // should be popped
     }
 
+    #[test]
+    fn local_assignment_expands_positional_params() {
+        let host = MockHost::new().with_spawn_handler(make_handler());
+        let mut state = ShellState::new_default();
+
+        // Define function: greet() { local name="$1"; echo "$name"; }
+        // Then call: greet world
+        let script = r#"greet() { local name="$1"; echo "$name"; }; greet world"#;
+        let (exit_code, stdout) = exec_capture(&mut state, &host, script);
+        assert_eq!(exit_code, 0);
+        assert_eq!(stdout.trim(), "world");
+    }
+
     // ====================================================================
     // DoubleBracket tests
     // ====================================================================

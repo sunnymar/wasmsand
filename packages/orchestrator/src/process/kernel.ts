@@ -95,14 +95,14 @@ export class ProcessKernel {
   }
 
   /** Attach a running promise and WasiHost to a previously registered pending process. */
-  attachProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost): void {
+  attachProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost | null): void {
     const entry = this.processTable.get(pid);
     if (!entry) return;
     entry.promise = promise;
     entry.wasiHost = wasiHost;
     const onExit = () => {
       entry.state = 'exited';
-      entry.exitCode = wasiHost.getExitCode() ?? 0;
+      entry.exitCode = wasiHost?.getExitCode() ?? 0;
       // Close the child's fds (decrements pipe refcounts, signals EOF).
       this.cleanupFds(pid);
       for (const waiter of entry.waiters) waiter(entry.exitCode);

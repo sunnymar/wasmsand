@@ -96,7 +96,7 @@ describe('Extension commands', () => {
     });
     const result = await sandbox.run('which myext');
     expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toBe('/bin/myext');
+    expect(result.stdout.trim()).toBe('/usr/bin/myext');
   });
 
   it('extension output can be redirected to file', async () => {

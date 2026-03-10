@@ -292,8 +292,11 @@ impl Parser {
                 Some(Token::Assignment(_, _)) => {
                     seen_word = true;
                     if let Token::Assignment(name, value) = self.advance() {
-                        let text = format!("{name}={value}");
-                        words.push(Word::literal(&text));
+                        // Build a word that preserves $-expansion in the value.
+                        // Without this, `local name="$1"` would not expand $1.
+                        let mut parts = vec![WordPart::Literal(format!("{name}="))];
+                        parts.extend(parse_raw_dollar_string(&value));
+                        words.push(Word { parts });
                     }
                 }
                 Some(Token::Word(_)) => {
@@ -641,6 +644,164 @@ impl Parser {
     }
 }
 
+/// Parse a raw string for `$`-expansion patterns, returning `WordPart`s.
+///
+/// This is used when converting assignment-style tokens (e.g. `name="$1"`)
+/// that appear after the first word in a command (like `local`, `export`).
+/// The lexer flattens the value to a raw string; this re-parses it so that
+/// variable references, command substitutions, etc. are properly expanded.
+fn parse_raw_dollar_string(raw: &str) -> Vec<WordPart> {
+    let chars: Vec<char> = raw.chars().collect();
+    let len = chars.len();
+    let mut parts: Vec<WordPart> = Vec::new();
+    let mut literal = String::new();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '\\' && i + 1 < len {
+            literal.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+
+        if chars[i] == '$' && i + 1 < len {
+            if !literal.is_empty() {
+                parts.push(WordPart::Literal(std::mem::take(&mut literal)));
+            }
+
+            if chars[i + 1] == '(' {
+                if i + 2 < len && chars[i + 2] == '(' {
+                    // $((expr))
+                    let start = i + 3;
+                    let mut depth = 1;
+                    let mut j = start;
+                    while j < len && depth > 0 {
+                        if j + 1 < len && chars[j] == '(' && chars[j + 1] == '(' {
+                            depth += 1;
+                            j += 2;
+                        } else if j + 1 < len && chars[j] == ')' && chars[j + 1] == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            j += 2;
+                        } else {
+                            j += 1;
+                        }
+                    }
+                    let expr: String = chars[start..j].iter().collect();
+                    parts.push(WordPart::ArithmeticExpansion(expr));
+                    i = if j + 1 < len { j + 2 } else { j };
+                } else {
+                    // $(cmd)
+                    let start = i + 2;
+                    let mut depth = 1;
+                    let mut j = start;
+                    while j < len && depth > 0 {
+                        if chars[j] == '(' {
+                            depth += 1;
+                        } else if chars[j] == ')' {
+                            depth -= 1;
+                        }
+                        if depth > 0 {
+                            j += 1;
+                        }
+                    }
+                    let cmd: String = chars[start..j].iter().collect();
+                    parts.push(WordPart::CommandSub(cmd));
+                    i = j + 1;
+                }
+            } else if chars[i + 1] == '{' {
+                // ${...}
+                let start = i + 2;
+                let mut depth = 1;
+                let mut j = start;
+                while j < len && depth > 0 {
+                    if chars[j] == '{' {
+                        depth += 1;
+                    } else if chars[j] == '}' {
+                        depth -= 1;
+                    }
+                    if depth > 0 {
+                        j += 1;
+                    }
+                }
+                let inner: String = chars[start..j].iter().collect();
+                // Parse operators in ${var:-default}, ${var%%pattern}, etc.
+                let part = parse_param_expansion(&inner);
+                parts.push(part);
+                i = j + 1;
+            } else {
+                // $VAR or $1, $?, $#, $@, $*, $$, $!
+                let start = i + 1;
+                let mut j = start;
+                if j < len
+                    && (chars[j] == '?'
+                        || chars[j] == '#'
+                        || chars[j] == '@'
+                        || chars[j] == '*'
+                        || chars[j] == '$'
+                        || chars[j] == '!'
+                        || chars[j].is_ascii_digit())
+                {
+                    j += 1;
+                } else {
+                    while j < len && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                        j += 1;
+                    }
+                }
+                if j > start {
+                    let name: String = chars[start..j].iter().collect();
+                    parts.push(WordPart::Variable(name));
+                } else {
+                    literal.push('$');
+                }
+                i = j;
+            }
+        } else {
+            literal.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    if !literal.is_empty() {
+        parts.push(WordPart::Literal(literal));
+    }
+
+    parts
+}
+
+/// Parse `${...}` inner content into a WordPart.
+fn parse_param_expansion(inner: &str) -> WordPart {
+    // ${#var} -- length
+    if inner.starts_with('#') && inner.len() > 1 && !inner.contains(':') {
+        return WordPart::ParamExpansion {
+            var: inner[1..].to_string(),
+            op: "#".to_string(),
+            default: String::new(),
+        };
+    }
+
+    let ops = [
+        "%%", "##", "^^", ",,", ":-", ":=", ":+", ":?", "^", "/", "%", "#", ":",
+    ];
+    for op in ops {
+        if let Some(pos) = inner.find(op) {
+            if pos > 0 {
+                let var = &inner[..pos];
+                let default = &inner[pos + op.len()..];
+                return WordPart::ParamExpansion {
+                    var: var.to_string(),
+                    op: op.to_string(),
+                    default: default.to_string(),
+                };
+            }
+        }
+    }
+
+    WordPart::Variable(inner.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,6 +1093,38 @@ mod tests {
                 _ => panic!("expected Subshell"),
             },
             _ => panic!("expected Background list"),
+        }
+    }
+
+    #[test]
+    fn local_assignment_preserves_dollar_expansion() {
+        // `local name="$1"` should parse $1 as a Variable, not literal text
+        let cmd = parse("local name=\"$1\"");
+        match cmd {
+            Command::Simple { words, .. } => {
+                assert_eq!(words.len(), 2);
+                // words[1] should be "name=" + Variable("1")
+                assert_eq!(words[1].parts.len(), 2);
+                assert_eq!(words[1].parts[0], WordPart::Literal("name=".to_string()));
+                assert_eq!(words[1].parts[1], WordPart::Variable("1".to_string()));
+            }
+            _ => panic!("expected Simple command"),
+        }
+    }
+
+    #[test]
+    fn local_assignment_with_command_sub() {
+        let cmd = parse("local val=$(echo hi)");
+        match cmd {
+            Command::Simple { words, .. } => {
+                assert_eq!(words.len(), 2);
+                assert_eq!(words[1].parts[0], WordPart::Literal("val=".to_string()));
+                assert_eq!(
+                    words[1].parts[1],
+                    WordPart::CommandSub("echo hi".to_string())
+                );
+            }
+            _ => panic!("expected Simple command"),
         }
     }
 }

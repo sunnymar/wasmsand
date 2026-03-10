@@ -767,7 +767,7 @@ function spawnAsyncProcess(
         kernel.registerExited(pid, 1);
       }
     })();
-    kernel.attachProcess(pid, promise, null as unknown as WasiHost);
+    kernel.attachProcess(pid, promise, null);
     return pid;
   }
 

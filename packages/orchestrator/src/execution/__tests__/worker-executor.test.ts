@@ -26,7 +26,10 @@ async function waitForRunning(exec: WorkerExecutor, intervalMs = 5, maxMs = 1000
   }
 }
 
-describe('WorkerExecutor', () => {
+// Worker threads require Node.js — skip entire suite when running under Deno.
+const _describe = typeof (globalThis as any).Deno !== 'undefined' ? describe.skip : describe;
+
+_describe('WorkerExecutor', () => {
   let executor: WorkerExecutor;
   let vfs: VFS;
 

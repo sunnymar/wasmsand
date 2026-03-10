@@ -294,10 +294,10 @@ describe('Security MVP acceptance', () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
-      security: { limits: { fileCount: 200 } },
+      security: { limits: { fileCount: 250 } },
     });
     let threw = false;
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 250; i++) {
       try {
         sb.writeFile(`/tmp/f${i}.txt`, new TextEncoder().encode('x'));
       } catch {
