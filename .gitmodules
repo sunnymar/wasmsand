@@ -1,9 +1,9 @@
 [submodule "packages/numpy-rust"]
 	path = packages/numpy-rust
-	url = https://github.com/codepod-sandbox/numpy-rust.git
+	url = git@github.com:codepod-sandbox/numpy-rust.git
 [submodule "packages/pillow-rust"]
 	path = packages/pillow-rust
-	url = https://github.com/codepod-sandbox/pillow-rust.git
+	url = git@github.com:codepod-sandbox/pillow-rust.git
 [submodule "packages/matplotlib-py"]
 	path = packages/matplotlib-py
-	url = https://github.com/codepod-sandbox/matplotlib-py.git
+	url = git@github.com:codepod-sandbox/matplotlib-py.git
