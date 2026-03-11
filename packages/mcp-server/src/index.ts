@@ -81,6 +81,7 @@ async function createSandboxInstance(label?: string): Promise<{ id: string; sand
     fsLimitBytes: config.fsLimitBytes,
     shellExecWasmPath: config.shellWasm,
     network,
+    packages: config.packages,
     security: {
       limits: {
         stdoutBytes: 1 * 1024 * 1024,
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
   log(`  timeoutMs:  ${config.timeoutMs}`);
   log(`  fsLimit:    ${config.fsLimitBytes}`);
   log(`  mounts:     ${config.mounts.length}`);
+  log(`  packages:   ${config.packages.join(', ') || '(none)'}`);
 
   const server = new McpServer({
     name: 'codepod',

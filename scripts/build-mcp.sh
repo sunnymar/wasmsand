@@ -29,7 +29,7 @@ fi
 OUT_DIR="${OUT_DIR:-dist}"
 TARGET_FLAG=""
 REBUILD_PYTHON=false
-PYTHON_FEATURES="${PYTHON_FEATURES:-numpy}"
+PYTHON_FEATURES="${PYTHON_FEATURES:-numpy,pil}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -147,6 +147,7 @@ cat > "$MCP_JSON" <<MCPEOF
       "args": [
         "--wasm-dir", "$WASM_DIR",
         "--shell-wasm", "$WASM_DIR/codepod-shell-exec.wasm",
+        "--packages", "$PYTHON_FEATURES",
         "--mount", "$CODEPOD_ROOT:/mnt/src:ro",
         "--network-allow", "*"
       ]

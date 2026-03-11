@@ -1,0 +1,11 @@
+[package]
+name = "codepod-sips"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sips"
+path = "src/main.rs"
+
+[dependencies]
+pil-rust-core = { path = "../pillow-rust/crates/pil-rust-core" }

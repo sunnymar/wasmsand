@@ -30,6 +30,7 @@ export interface McpConfig {
   fsLimitBytes: number;
   wasmDir: string;
   shellWasm: string;
+  packages: string[];
 }
 
 interface JsonConfig {
@@ -76,6 +77,25 @@ export function parseMount(s: string): MountEntry {
 // CLI argument parsing
 // ---------------------------------------------------------------------------
 
+/** Map Cargo feature names to PackageRegistry names. */
+const FEATURE_TO_PACKAGE: Record<string, string> = {
+  numpy: 'numpy',
+  pil: 'PIL',
+  matplotlib: 'matplotlib',
+  sklearn: 'sklearn',
+  sqlite3: 'sqlite3',
+  pandas: 'pandas',
+};
+
+/** Default packages — must match PYTHON_FEATURES default in build-mcp.sh. */
+const DEFAULT_PACKAGES = ['numpy', 'PIL'];
+
+function featuresToPackages(features: string): string[] {
+  return features.split(',').map(f => f.trim()).filter(Boolean)
+    .map(f => FEATURE_TO_PACKAGE[f])
+    .filter((p): p is string => p !== undefined);
+}
+
 interface CliResult {
   mounts?: MountEntry[];
   networkAllow?: string[];
@@ -85,6 +105,7 @@ interface CliResult {
   fsLimitBytes?: number;
   wasmDir?: string;
   shellWasm?: string;
+  packages?: string[];
 }
 
 export function parseCli(argv: string[]): CliResult {
@@ -141,6 +162,11 @@ export function parseCli(argv: string[]): CliResult {
         result.shellWasm = next;
         i++;
         break;
+      case '--packages':
+        if (!next) throw new Error('--packages requires a value');
+        result.packages = featuresToPackages(next);
+        i++;
+        break;
       default:
         // Ignore unknown args
         break;
@@ -166,6 +192,7 @@ interface EnvResult {
   fsLimitBytes?: number;
   wasmDir?: string;
   shellWasm?: string;
+  packages?: string[];
 }
 
 export function parseEnv(env: Record<string, string | undefined>): EnvResult {
@@ -193,6 +220,7 @@ export function parseEnv(env: Record<string, string | undefined>): EnvResult {
   if (env.CODEPOD_FS_LIMIT_BYTES) result.fsLimitBytes = Number(env.CODEPOD_FS_LIMIT_BYTES);
   if (env.CODEPOD_WASM_DIR) result.wasmDir = env.CODEPOD_WASM_DIR;
   if (env.CODEPOD_SHELL_WASM) result.shellWasm = env.CODEPOD_SHELL_WASM;
+  if (env.CODEPOD_PACKAGES) result.packages = featuresToPackages(env.CODEPOD_PACKAGES);
 
   return result;
 }
@@ -246,6 +274,7 @@ export function loadConfig(argv: string[], defaults: McpDefaults): McpConfig {
   const fsLimitBytes = cli.fsLimitBytes ?? env.fsLimitBytes ?? json.fsLimitBytes ?? defaults.fsLimitBytes;
   const wasmDir = cli.wasmDir ?? env.wasmDir ?? json.wasmDir ?? defaults.wasmDir;
   const shellWasm = cli.shellWasm ?? env.shellWasm ?? json.shellWasm ?? defaults.shellWasm;
+  const packages = cli.packages ?? env.packages ?? DEFAULT_PACKAGES;
 
-  return { mounts, network, timeoutMs, fsLimitBytes, wasmDir, shellWasm };
+  return { mounts, network, timeoutMs, fsLimitBytes, wasmDir, shellWasm, packages };
 }
