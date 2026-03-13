@@ -5,6 +5,26 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::process;
 
+enum Output {
+    File(File),
+    Stdout(io::Stdout),
+}
+
+impl Write for Output {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Output::File(f) => f.write(buf),
+            Output::Stdout(s) => s.write(buf),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Output::File(f) => f.flush(),
+            Output::Stdout(s) => s.flush(),
+        }
+    }
+}
+
 struct DdOptions {
     input_file: Option<String>,
     output_file: Option<String>,
@@ -139,7 +159,7 @@ fn run() -> i32 {
         None => Box::new(io::stdin()),
     };
 
-    let mut output: Box<dyn Write> = match &opts.output_file {
+    let mut output: Output = match &opts.output_file {
         Some(path) => {
             let file = if opts.conv_notrunc {
                 OpenOptions::new()
@@ -155,14 +175,14 @@ fn run() -> i32 {
                     .open(path)
             };
             match file {
-                Ok(f) => Box::new(f),
+                Ok(f) => Output::File(f),
                 Err(e) => {
                     eprintln!("dd: failed to open '{}': {}", path, e);
                     return 1;
                 }
             }
         }
-        None => Box::new(io::stdout()),
+        None => Output::Stdout(io::stdout()),
     };
 
     // Skip input blocks
@@ -179,18 +199,20 @@ fn run() -> i32 {
     // Seek output blocks
     if opts.seek > 0 {
         let seek_bytes = (opts.seek * opts.obs) as u64;
-        // Try seeking if possible; for files this works, for stdout we write zeros
-        if let Some(f) = (&mut output as &mut dyn std::any::Any).downcast_mut::<File>() {
-            if let Err(e) = f.seek(SeekFrom::Start(seek_bytes)) {
-                eprintln!("dd: seek error: {e}");
-                return 1;
-            }
-        } else {
-            let zeros = vec![0u8; opts.obs];
-            for _ in 0..opts.seek {
-                if let Err(e) = output.write_all(&zeros) {
-                    eprintln!("dd: seek write error: {e}");
+        match &mut output {
+            Output::File(f) => {
+                if let Err(e) = f.seek(SeekFrom::Start(seek_bytes)) {
+                    eprintln!("dd: seek error: {e}");
                     return 1;
+                }
+            }
+            Output::Stdout(_) => {
+                let zeros = vec![0u8; opts.obs];
+                for _ in 0..opts.seek {
+                    if let Err(e) = output.write_all(&zeros) {
+                        eprintln!("dd: seek write error: {e}");
+                        return 1;
+                    }
                 }
             }
         }

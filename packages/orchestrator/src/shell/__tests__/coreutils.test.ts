@@ -34,6 +34,7 @@ const TOOLS = [
   'split', 'strings', 'od', 'cksum', 'truncate',
   'tree', 'patch', 'file', 'column', 'cmp', 'timeout', 'numfmt', 'csplit', 'zip', 'unzip',
   'rg',
+  'dd',
 ];
 
 /** Map tool name to wasm filename (true/false use special names). */
@@ -2120,6 +2121,79 @@ describe('Coreutils Integration', () => {
     it('assignment with single-quoted value', async () => {
       const result = await runner.run("FOO='hello world'; echo $FOO");
       expect(result.stdout).toBe('hello world\n');
+    });
+  });
+
+  // ── dd ──────────────────────────────────────────────────────────────
+
+  describe('dd', () => {
+    it('copies stdin to stdout', async () => {
+      const r = await runner.run('echo hello | dd 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe('hello\n');
+    });
+
+    it('copies file to file', async () => {
+      vfs.writeFile('/home/user/src.txt', new TextEncoder().encode('abcdef'));
+      const r = await runner.run('dd if=/home/user/src.txt of=/home/user/dst.txt 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      const dst = new TextDecoder().decode(vfs.readFile('/home/user/dst.txt'));
+      expect(dst).toBe('abcdef');
+    });
+
+    it('count limits blocks copied', async () => {
+      vfs.writeFile('/home/user/data.txt', new TextEncoder().encode('aabbccdd'));
+      const r = await runner.run('dd if=/home/user/data.txt of=/home/user/out.txt bs=2 count=2 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      const out = new TextDecoder().decode(vfs.readFile('/home/user/out.txt'));
+      expect(out).toBe('aabb');
+    });
+
+    it('seek=N positions output at byte offset N*obs', async () => {
+      // Write a 4-byte file, then dd 2 bytes with seek=1 bs=2
+      // Expected: 2 zero bytes (seek gap) + "hi"
+      vfs.writeFile('/home/user/input.bin', new TextEncoder().encode('hi'));
+      const r = await runner.run('dd if=/home/user/input.bin of=/home/user/out.bin bs=2 seek=1 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      const out = vfs.readFile('/home/user/out.bin');
+      // File should be 4 bytes: 2 zeros (from seek) + "hi"
+      expect(out.length).toBe(4);
+      expect(out[0]).toBe(0);
+      expect(out[1]).toBe(0);
+      expect(out[2]).toBe(0x68); // 'h'
+      expect(out[3]).toBe(0x69); // 'i'
+    });
+
+    it('seek=N with larger offset works correctly', async () => {
+      vfs.writeFile('/home/user/payload.bin', new TextEncoder().encode('XY'));
+      const r = await runner.run('dd if=/home/user/payload.bin of=/home/user/seeked.bin bs=1 seek=5 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      const out = vfs.readFile('/home/user/seeked.bin');
+      // 5 zero bytes (seek gap) + "XY"
+      expect(out.length).toBe(7);
+      for (let i = 0; i < 5; i++) expect(out[i]).toBe(0);
+      expect(out[5]).toBe(0x58); // 'X'
+      expect(out[6]).toBe(0x59); // 'Y'
+    });
+
+    it('skip=N skips input blocks', async () => {
+      vfs.writeFile('/home/user/skip.txt', new TextEncoder().encode('aabbcc'));
+      const r = await runner.run('dd if=/home/user/skip.txt of=/home/user/out.txt bs=2 skip=1 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      const out = new TextDecoder().decode(vfs.readFile('/home/user/out.txt'));
+      expect(out).toBe('bbcc');
+    });
+
+    it('conv=ucase converts to uppercase', async () => {
+      const r = await runner.run('echo hello | dd conv=ucase 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe('HELLO\n');
+    });
+
+    it('conv=lcase converts to lowercase', async () => {
+      const r = await runner.run('echo HELLO | dd conv=lcase 2>/dev/null');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe('hello\n');
     });
   });
 });
