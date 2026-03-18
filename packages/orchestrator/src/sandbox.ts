@@ -458,7 +458,7 @@ export class Sandbox {
 
     this.running = true;
     try {
-    this.audit('command.start', { command });
+      this.audit('command.start', { command });
 
     // Emit pkg audit events before execution
     const pkgMatch = command.match(/^pkg\s+install\s+(\S+)/);
