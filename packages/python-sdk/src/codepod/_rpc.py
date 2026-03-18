@@ -17,6 +17,7 @@ class RpcClient:
         self._proc: subprocess.Popen | None = None
         self._next_id = 1
         self._extension_handlers: dict[str, Callable] = {}
+        self._output_handlers: dict[int | str, dict[str, Callable]] = {}
 
     def start(self) -> None:
         self._proc = subprocess.Popen(
@@ -25,6 +26,20 @@ class RpcClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+
+    def register_output_handler(
+        self, request_id: int, on_stdout: Callable | None, on_stderr: Callable | None
+    ) -> None:
+        handlers: dict[str, Callable] = {}
+        if on_stdout:
+            handlers["stdout"] = on_stdout
+        if on_stderr:
+            handlers["stderr"] = on_stderr
+        if handlers:
+            self._output_handlers[request_id] = handlers
+
+    def unregister_output_handler(self, request_id: int) -> None:
+        self._output_handlers.pop(request_id, None)
 
     def register_extension_handler(self, name: str, handler: Callable) -> None:
         """Register a handler for extension callback requests from the server."""
@@ -46,6 +61,18 @@ class RpcClient:
             if not resp_line:
                 raise RuntimeError("Server closed connection")
             msg = json.loads(resp_line)
+
+            # Output streaming notification (no id, method = "output")
+            if "method" in msg and msg["method"] == "output" and "id" not in msg:
+                params = msg.get("params", {})
+                rid = params.get("request_id")
+                handlers = self._output_handlers.get(rid, {})
+                stream_type = params.get("stream")
+                data = params.get("data", "")
+                handler = handlers.get(stream_type)
+                if handler:
+                    handler(data)
+                continue
 
             # Callback request from server? (id starts with 'cb_' and has a method)
             if (
