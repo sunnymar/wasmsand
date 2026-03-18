@@ -18,8 +18,11 @@ import {
   WASI_EBADF,
   WASI_EINVAL,
   WASI_ENOSYS,
+  WASI_ENOTSUP,
   WASI_EPIPE,
   WASI_ESUCCESS,
+  WASI_CLOCK_REALTIME,
+  WASI_CLOCK_MONOTONIC,
   WASI_FDFLAGS_APPEND,
   WASI_FILETYPE_CHARACTER_DEVICE,
   WASI_FILETYPE_DIRECTORY,
@@ -33,6 +36,11 @@ import {
   WASI_WHENCE_CUR,
   WASI_WHENCE_END,
   WASI_WHENCE_SET,
+  WASI_EVENTTYPE_CLOCK,
+  WASI_EVENTTYPE_FD_READ,
+  WASI_EVENTTYPE_FD_WRITE,
+  WASI_SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME,
+  WASI_EVENTRWFLAGS_FD_READWRITE_HANGUP,
 } from './types.js';
 
 export class WasiExitError extends Error {
@@ -316,17 +324,17 @@ export class WasiHost {
         fd_pread: this.fdPread.bind(this),
         fd_pwrite: this.fdPwrite.bind(this),
         // Stubs that must remain ENOSYS (masking bugs or unimplemented semantics)
-        fd_renumber: this.stub.bind(this),
-        path_link: this.stub.bind(this),
+        fd_renumber: this.fdRenumber.bind(this),
+        path_link: this.pathLink.bind(this),
         path_readlink: this.pathReadlink.bind(this),
         path_symlink: this.pathSymlink.bind(this),
-        poll_oneoff: this.stub.bind(this),
+        poll_oneoff: this.pollOneoff.bind(this),
         proc_raise: this.stub.bind(this),
         sock_accept: this.stub.bind(this),
         sock_recv: this.stub.bind(this),
         sock_send: this.stub.bind(this),
         sock_shutdown: this.stub.bind(this),
-        clock_res_get: this.stub.bind(this),
+        clock_res_get: this.clockResGet.bind(this),
       },
     };
   }
@@ -1140,6 +1148,242 @@ export class WasiHost {
     } catch (err) {
       return fdErrorToWasi(err);
     }
+  }
+
+  private clockResGet(clockId: number, resPtr: number): number {
+    const view = this.getView();
+    switch (clockId) {
+      case WASI_CLOCK_REALTIME:
+      case WASI_CLOCK_MONOTONIC:
+        // Date.now() precision is 1ms = 1,000,000 nanoseconds
+        view.setBigUint64(resPtr, BigInt(1_000_000), true);
+        return WASI_ESUCCESS;
+      default:
+        return WASI_EINVAL;
+    }
+  }
+
+  private pathLink(): number {
+    return WASI_ENOTSUP;
+  }
+
+  private fdRenumber(fromFd: number, toFd: number): number {
+    // Cannot renumber stdio/custom I/O fds
+    if (this.ioFds.has(fromFd) || this.ioFds.has(toFd)) {
+      return WASI_EBADF;
+    }
+
+    // Handle dirFd sources
+    const fromDirPath = this.dirFds.get(fromFd);
+    if (fromDirPath !== undefined) {
+      if (this.dirFds.has(toFd)) {
+        this.dirFds.delete(toFd);
+      }
+      if (this.fdTable.isOpen(toFd)) {
+        try { this.fdTable.close(toFd); } catch { /* ignore */ }
+      }
+      this.dirFds.set(toFd, fromDirPath);
+      this.dirFds.delete(fromFd);
+      return WASI_ESUCCESS;
+    }
+
+    // Handle regular fd sources
+    if (!this.fdTable.isOpen(fromFd)) {
+      return WASI_EBADF;
+    }
+
+    try {
+      if (this.dirFds.has(toFd)) {
+        this.dirFds.delete(toFd);
+      }
+      this.fdTable.renumber(fromFd, toFd);
+      return WASI_ESUCCESS;
+    } catch (err) {
+      return fdErrorToWasi(err);
+    }
+  }
+
+  private pollOneoff(
+    inPtr: number,
+    outPtr: number,
+    nsubscriptions: number,
+    neventsPtr: number,
+  ): number | Promise<number> {
+    this.checkDeadline();
+
+    if (nsubscriptions === 0) {
+      return WASI_EINVAL;
+    }
+
+    const view = this.getView();
+    const events: Array<{
+      userdata: bigint;
+      error: number;
+      type: number;
+      nbytes: bigint;
+      flags: number;
+    }> = [];
+
+    let earliestClockDeadlineMs = Infinity;
+    let hasClockSub = false;
+    const clockSubs: Array<{ userdata: bigint; deadlineMs: number }> = [];
+
+    // Parse all subscriptions (48 bytes each)
+    for (let i = 0; i < nsubscriptions; i++) {
+      const base = inPtr + i * 48;
+      const userdata = view.getBigUint64(base, true);
+      const type = view.getUint8(base + 8);
+
+      if (type === WASI_EVENTTYPE_CLOCK) {
+        hasClockSub = true;
+        const timeout = view.getBigUint64(base + 24, true);
+        const flags = view.getUint16(base + 40, true);
+        const isAbsolute = (flags & WASI_SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME) !== 0;
+
+        let deadlineMs: number;
+        if (isAbsolute) {
+          deadlineMs = Number(timeout / BigInt(1_000_000));
+        } else {
+          deadlineMs = Date.now() + Number(timeout / BigInt(1_000_000));
+        }
+
+        clockSubs.push({ userdata, deadlineMs });
+        if (deadlineMs < earliestClockDeadlineMs) {
+          earliestClockDeadlineMs = deadlineMs;
+        }
+      } else if (type === WASI_EVENTTYPE_FD_READ || type === WASI_EVENTTYPE_FD_WRITE) {
+        const fd = view.getUint32(base + 16, true);
+        const target = this.ioFds.get(fd);
+
+        let ready = false;
+        let hangup = false;
+        let nbytes = BigInt(0);
+
+        if (target) {
+          if (type === WASI_EVENTTYPE_FD_READ && target.type === 'pipe_read') {
+            ready = target.pipe.hasData;
+            hangup = target.pipe.closed;
+          } else if (type === WASI_EVENTTYPE_FD_WRITE && target.type === 'pipe_write') {
+            ready = target.pipe.hasCapacity;
+            hangup = target.pipe.closed;
+          } else if (target.type === 'static') {
+            ready = true;
+            nbytes = BigInt(target.data.byteLength - target.offset);
+          } else if (target.type === 'null') {
+            ready = true;
+          } else if (target.type === 'buffer') {
+            ready = type === WASI_EVENTTYPE_FD_WRITE;
+          }
+        } else if (this.fdTable.isOpen(fd)) {
+          ready = true; // VFS-backed fds are always ready
+        } else {
+          events.push({ userdata, error: WASI_EBADF, type, nbytes: BigInt(0), flags: 0 });
+          continue;
+        }
+
+        if (ready) {
+          events.push({
+            userdata,
+            error: WASI_ESUCCESS,
+            type,
+            nbytes,
+            flags: hangup ? WASI_EVENTRWFLAGS_FD_READWRITE_HANGUP : 0,
+          });
+        }
+      }
+    }
+
+    // If any fd events are ready, return immediately
+    if (events.length > 0) {
+      return this.writePollEvents(outPtr, neventsPtr, events);
+    }
+
+    // Wait for earliest clock subscription
+    if (hasClockSub) {
+      const now = Date.now();
+
+      for (const sub of clockSubs) {
+        if (sub.deadlineMs <= now) {
+          events.push({
+            userdata: sub.userdata,
+            error: WASI_ESUCCESS,
+            type: WASI_EVENTTYPE_CLOCK,
+            nbytes: BigInt(0),
+            flags: 0,
+          });
+        }
+      }
+
+      if (events.length > 0) {
+        return this.writePollEvents(outPtr, neventsPtr, events);
+      }
+
+      // Clamp to sandbox deadline
+      const waitMs = Math.max(0, Math.min(
+        earliestClockDeadlineMs - now,
+        this.deadlineMs - now,
+      ));
+
+      return new Promise<number>((resolve) => {
+        setTimeout(() => {
+          this.checkDeadline();
+          const afterWait = Date.now();
+          for (const sub of clockSubs) {
+            if (sub.deadlineMs <= afterWait) {
+              events.push({
+                userdata: sub.userdata,
+                error: WASI_ESUCCESS,
+                type: WASI_EVENTTYPE_CLOCK,
+                nbytes: BigInt(0),
+                flags: 0,
+              });
+            }
+          }
+          if (events.length === 0) {
+            events.push({
+              userdata: clockSubs[0].userdata,
+              error: WASI_ESUCCESS,
+              type: WASI_EVENTTYPE_CLOCK,
+              nbytes: BigInt(0),
+              flags: 0,
+            });
+          }
+          resolve(this.writePollEvents(outPtr, neventsPtr, events));
+        }, waitMs);
+      });
+    }
+
+    return WASI_EINVAL;
+  }
+
+  /** Write poll events to WASM memory and return ESUCCESS. */
+  private writePollEvents(
+    outPtr: number,
+    neventsPtr: number,
+    events: Array<{
+      userdata: bigint;
+      error: number;
+      type: number;
+      nbytes: bigint;
+      flags: number;
+    }>,
+  ): number {
+    const view = this.getView();
+    for (let i = 0; i < events.length; i++) {
+      const base = outPtr + i * 32;
+      const ev = events[i];
+      view.setBigUint64(base, ev.userdata, true);
+      view.setUint16(base + 8, ev.error, true);
+      view.setUint8(base + 10, ev.type);
+      view.setUint8(base + 11, 0);
+      view.setUint32(base + 12, 0, true);
+      view.setBigUint64(base + 16, ev.nbytes, true);
+      view.setUint16(base + 24, ev.flags, true);
+      view.setUint16(base + 26, 0, true);
+      view.setUint32(base + 28, 0, true);
+    }
+    view.setUint32(neventsPtr, events.length, true);
+    return WASI_ESUCCESS;
   }
 
   private stub(): number {
