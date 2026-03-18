@@ -50,14 +50,32 @@ export interface RpcError {
 /** Maximum number of concurrent forked sandboxes. */
 const MAX_FORKS = 16;
 
+/** Maximum number of named sandboxes in multi-sandbox mode. */
+const MAX_SANDBOXES = 64;
+
+interface SandboxEntry {
+  sandbox: SandboxLike;
+  label?: string;
+  createdAt: string;
+}
+
 export class Dispatcher {
-  private sandbox: SandboxLike;
+  private sandbox: SandboxLike | null;
   private killed = false;
   private forks: Map<string, SandboxLike> = new Map();
   private nextForkId = 1;
+  private sandboxes: Map<string, SandboxEntry> = new Map();
+  private nextSandboxId = 1;
+  private pool?: { checkout(opts?: { label?: string }): Promise<SandboxLike>; release(sb: SandboxLike): void; drain(): Promise<void> };
+  private sandboxOptions?: unknown;
 
-  constructor(sandbox: SandboxLike) {
+  constructor(
+    sandbox: SandboxLike | null,
+    options?: { pool?: any; sandboxOptions?: any },
+  ) {
     this.sandbox = sandbox;
+    this.pool = options?.pool;
+    this.sandboxOptions = options?.sandboxOptions;
   }
 
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -82,7 +100,7 @@ export class Dispatcher {
         case 'env.get':
           return this.envGet(params);
         case 'kill':
-          return this.kill();
+          return await this.kill();
         case 'snapshot.create':
           return this.snapshotCreate(params);
         case 'snapshot.restore':
@@ -91,6 +109,12 @@ export class Dispatcher {
           return await this.sandboxFork(params);
         case 'sandbox.destroy':
           return this.sandboxDestroy(params);
+        case 'sandbox.create':
+          return await this.sandboxCreate(params);
+        case 'sandbox.list':
+          return this.sandboxList();
+        case 'sandbox.remove':
+          return await this.sandboxRemove(params);
         case 'persistence.export':
           return this.persistenceExport(params);
         case 'persistence.import':
@@ -134,11 +158,21 @@ export class Dispatcher {
 
   private resolveSandbox(params: Record<string, unknown>): SandboxLike {
     const id = params.sandboxId;
-    if (id === undefined || id === null) return this.sandbox;
+    if (id === undefined || id === null) {
+      // No sandboxId specified — return root sandbox if set
+      if (this.sandbox !== null) return this.sandbox;
+      // Fall back to 'default' in sandboxes map
+      const defaultEntry = this.sandboxes.get('default');
+      if (defaultEntry) return defaultEntry.sandbox;
+      throw this.rpcError(-32602, 'No root sandbox available');
+    }
     if (typeof id !== 'string') throw this.rpcError(-32602, 'sandboxId must be a string');
+    // Check sandboxes map first, then forks map
+    const entry = this.sandboxes.get(id);
+    if (entry) return entry.sandbox;
     const fork = this.forks.get(id);
-    if (!fork) throw this.rpcError(-32602, `Unknown sandboxId: ${id}`);
-    return fork;
+    if (fork) return fork;
+    throw this.rpcError(-32602, `Unknown sandboxId: ${id}`);
   }
 
   /** Extract the basename from a path (last segment after '/'). */
@@ -238,12 +272,33 @@ export class Dispatcher {
     return { value: value ?? null };
   }
 
-  private kill() {
+  private async kill() {
+    // Destroy all named sandboxes
+    for (const entry of this.sandboxes.values()) {
+      if (this.pool) {
+        this.pool.release(entry.sandbox as any);
+      } else {
+        entry.sandbox.destroy();
+      }
+    }
+    this.sandboxes.clear();
+
+    // Destroy all forks
     for (const fork of this.forks.values()) {
       fork.destroy();
     }
     this.forks.clear();
-    this.sandbox.destroy();
+
+    // Destroy root sandbox if set
+    if (this.sandbox !== null) {
+      this.sandbox.destroy();
+    }
+
+    // Drain pool if set
+    if (this.pool) {
+      await this.pool.drain();
+    }
+
     this.killed = true;
     return { ok: true };
   }
@@ -278,6 +333,54 @@ export class Dispatcher {
     if (!fork) throw this.rpcError(-32602, `Unknown sandboxId: ${id}`);
     fork.destroy();
     this.forks.delete(id);
+    return { ok: true };
+  }
+
+  private async sandboxCreate(params: Record<string, unknown>) {
+    if (this.sandboxes.size >= MAX_SANDBOXES) {
+      throw this.rpcError(-32602, `Maximum of ${MAX_SANDBOXES} concurrent sandboxes reached`);
+    }
+    const label = typeof params.label === 'string' ? params.label : undefined;
+
+    let sb: SandboxLike;
+    if (this.pool) {
+      sb = await this.pool.checkout({ label });
+    } else if (this.sandboxOptions) {
+      const { Sandbox } = await import('@codepod/sandbox');
+      sb = await Sandbox.create(this.sandboxOptions as any);
+    } else {
+      throw this.rpcError(-32602, 'No pool or sandboxOptions configured for sandbox.create');
+    }
+
+    const sandboxId = String(this.nextSandboxId++);
+    this.sandboxes.set(sandboxId, {
+      sandbox: sb,
+      label,
+      createdAt: new Date().toISOString(),
+    });
+    return { sandboxId };
+  }
+
+  private sandboxList() {
+    const entries = Array.from(this.sandboxes.entries()).map(([sandboxId, entry]) => ({
+      sandboxId,
+      label: entry.label,
+      createdAt: entry.createdAt,
+    }));
+    return entries;
+  }
+
+  private async sandboxRemove(params: Record<string, unknown>) {
+    const sandboxId = this.requireString(params, 'sandboxId');
+    const entry = this.sandboxes.get(sandboxId);
+    if (!entry) throw this.rpcError(-32602, `Unknown sandboxId: ${sandboxId}`);
+
+    if (this.pool) {
+      this.pool.release(entry.sandbox as any);
+    } else {
+      entry.sandbox.destroy();
+    }
+    this.sandboxes.delete(sandboxId);
     return { ok: true };
   }
 

@@ -452,6 +452,99 @@ describe('Dispatcher', () => {
     expect(result).not.toHaveProperty('errorClass');
   });
 
+  describe('multi-sandbox (sandbox.create / sandbox.list / sandbox.remove)', () => {
+    let pool: {
+      checkout: ReturnType<typeof mock>;
+      release: ReturnType<typeof mock>;
+      drain: ReturnType<typeof mock>;
+    };
+    let poolDispatcher: Dispatcher;
+
+    beforeEach(() => {
+      pool = {
+        checkout: mock(async (_opts?: { label?: string }) => createMockSandbox()),
+        release: mock((_sb: SandboxLike) => {}),
+        drain: mock(async () => {}),
+      };
+      poolDispatcher = new Dispatcher(null, { pool });
+    });
+
+    it('sandbox.create returns a sandboxId', async () => {
+      const result = await poolDispatcher.dispatch('sandbox.create', {});
+      expect(result).toHaveProperty('sandboxId');
+      expect(typeof (result as { sandboxId: string }).sandboxId).toBe('string');
+      expect(pool.checkout).toHaveBeenCalled();
+    });
+
+    it('sandbox.create with label passes label to pool.checkout', async () => {
+      await poolDispatcher.dispatch('sandbox.create', { label: 'my-sandbox' });
+      expect(pool.checkout).toHaveBeenCalledWith({ label: 'my-sandbox' });
+    });
+
+    it('sandbox.list returns created sandboxes', async () => {
+      await poolDispatcher.dispatch('sandbox.create', { label: 'alpha' });
+      await poolDispatcher.dispatch('sandbox.create', { label: 'beta' });
+      const list = await poolDispatcher.dispatch('sandbox.list', {}) as Array<{ sandboxId: string; label?: string; createdAt: string }>;
+      expect(list).toHaveLength(2);
+      expect(list[0]).toHaveProperty('sandboxId');
+      expect(list[0]).toHaveProperty('createdAt');
+      const labels = list.map((e) => e.label);
+      expect(labels).toContain('alpha');
+      expect(labels).toContain('beta');
+    });
+
+    it('sandbox.remove releases the sandbox via pool and removes from list', async () => {
+      const { sandboxId } = await poolDispatcher.dispatch('sandbox.create', {}) as { sandboxId: string };
+      const result = await poolDispatcher.dispatch('sandbox.remove', { sandboxId });
+      expect(result).toEqual({ ok: true });
+      expect(pool.release).toHaveBeenCalled();
+      const list = await poolDispatcher.dispatch('sandbox.list', {}) as unknown[];
+      expect(list).toHaveLength(0);
+    });
+
+    it('sandbox.remove throws for unknown sandboxId', async () => {
+      await expect(
+        poolDispatcher.dispatch('sandbox.remove', { sandboxId: '999' }),
+      ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('Unknown sandboxId') });
+    });
+
+    it('sandbox.remove requires sandboxId param', async () => {
+      await expect(
+        poolDispatcher.dispatch('sandbox.remove', {}),
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+
+    it('routes run to a created sandbox via sandboxId', async () => {
+      const { sandboxId } = await poolDispatcher.dispatch('sandbox.create', {}) as { sandboxId: string };
+      await poolDispatcher.dispatch('run', { command: 'echo test', sandboxId });
+      const createdSb = await (pool.checkout as ReturnType<typeof mock>).mock.results[0].value;
+      expect(createdSb.run).toHaveBeenCalledWith('echo test');
+    });
+
+    it('routes files.read to a created sandbox via sandboxId', async () => {
+      const { sandboxId } = await poolDispatcher.dispatch('sandbox.create', {}) as { sandboxId: string };
+      await poolDispatcher.dispatch('files.read', { path: '/tmp/test.txt', sandboxId });
+      const createdSb = await (pool.checkout as ReturnType<typeof mock>).mock.results[0].value;
+      expect(createdSb.readFile).toHaveBeenCalledWith('/tmp/test.txt');
+    });
+
+    it('kill destroys all sandboxes and drains pool', async () => {
+      await poolDispatcher.dispatch('sandbox.create', {});
+      await poolDispatcher.dispatch('sandbox.create', {});
+      await poolDispatcher.dispatch('kill', {});
+      expect(poolDispatcher.isKilled()).toBe(true);
+      expect(pool.release).toHaveBeenCalledTimes(2);
+      expect(pool.drain).toHaveBeenCalled();
+    });
+
+    it('sandbox.create throws when no pool or sandboxOptions', async () => {
+      const noPoolDispatcher = new Dispatcher(null);
+      await expect(
+        noPoolDispatcher.dispatch('sandbox.create', {}),
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+  });
+
   describe('mount', () => {
     it('decodes base64 files and calls sandbox.mount()', async () => {
       const files = {
