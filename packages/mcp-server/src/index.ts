@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Sandbox } from '@codepod/sandbox';
+import { Sandbox, SandboxPool } from '@codepod/sandbox';
 import type { NetworkPolicy } from '@codepod/sandbox';
 import { NodeAdapter, HostFsProvider } from '@codepod/sandbox/node';
 import { loadConfig } from './config.js';
@@ -45,6 +45,9 @@ const config = loadConfig(process.argv.slice(2), {
     ?? resolve(__dirname, '../../orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm'),
 });
 
+// --- Sandbox pool (optional) ---
+let pool: SandboxPool | null = null;
+
 // --- Sandbox registry ---
 interface SandboxEntry {
   sandbox: Sandbox;
@@ -61,11 +64,7 @@ function getSandbox(id: string): Sandbox {
   return entry.sandbox;
 }
 
-async function createSandboxInstance(label?: string): Promise<{ id: string; sandbox: Sandbox }> {
-  if (sandboxes.size >= MAX_SANDBOXES) {
-    throw new Error(`Maximum of ${MAX_SANDBOXES} concurrent sandboxes reached`);
-  }
-
+function buildSandboxOptions() {
   const hasNetwork = config.network.allow.length > 0 || config.network.block.length > 0;
   const network: NetworkPolicy | undefined = hasNetwork
     ? {
@@ -74,7 +73,7 @@ async function createSandboxInstance(label?: string): Promise<{ id: string; sand
       }
     : undefined;
 
-  const sandbox = await Sandbox.create({
+  return {
     wasmDir: config.wasmDir,
     adapter: new NodeAdapter(),
     timeoutMs: config.timeoutMs,
@@ -89,12 +88,24 @@ async function createSandboxInstance(label?: string): Promise<{ id: string; sand
         commandBytes: 65536,
       },
     },
-  });
+  };
+}
 
-  // Mount host directories
-  for (const mount of config.mounts) {
-    const provider = new HostFsProvider(mount.hostPath, { writable: mount.writable });
-    sandbox.mount(mount.sandboxPath, provider);
+async function createSandboxInstance(label?: string): Promise<{ id: string; sandbox: Sandbox }> {
+  if (sandboxes.size >= MAX_SANDBOXES) {
+    throw new Error(`Maximum of ${MAX_SANDBOXES} concurrent sandboxes reached`);
+  }
+
+  let sandbox: Sandbox;
+  if (pool) {
+    sandbox = await pool.checkout();
+  } else {
+    sandbox = await Sandbox.create(buildSandboxOptions());
+    // Mount host directories (pool sandboxes are pre-created without mounts)
+    for (const mount of config.mounts) {
+      const provider = new HostFsProvider(mount.hostPath, { writable: mount.writable });
+      sandbox.mount(mount.sandboxPath, provider);
+    }
   }
 
   const id = sandbox.sessionId;
@@ -126,6 +137,26 @@ async function main(): Promise<void> {
   log(`  fsLimit:    ${config.fsLimitBytes}`);
   log(`  mounts:     ${config.mounts.length}`);
   log(`  packages:   ${config.packages.join(', ') || '(none)'}`);
+
+  // Initialize sandbox pool if configured
+  if (config.pool) {
+    log(`  pool:       min=${config.pool.minSize} max=${config.pool.maxSize}`);
+    pool = new SandboxPool(
+      { minSize: config.pool.minSize, maxSize: config.pool.maxSize },
+      buildSandboxOptions(),
+    );
+    await pool.init();
+    log('Sandbox pool initialized.');
+  }
+
+  // Graceful shutdown: drain pool on SIGINT/SIGTERM
+  const shutdown = async () => {
+    log('Shutting down...');
+    if (pool) await pool.drain();
+    process.exit(0);
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
 
   const server = new McpServer({
     name: 'codepod',
@@ -174,7 +205,11 @@ async function main(): Promise<void> {
       const entry = sandboxes.get(sandbox_id);
       if (!entry) return errorResult(`Unknown sandbox_id: ${sandbox_id}`);
       try {
-        entry.sandbox.destroy();
+        if (pool) {
+          pool.release(entry.sandbox);
+        } else {
+          entry.sandbox.destroy();
+        }
       } catch {
         // already destroyed or error during cleanup — proceed
       }

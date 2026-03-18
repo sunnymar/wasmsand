@@ -109,6 +109,20 @@ describe('parseCli', () => {
   it('throws when --mount has no value', () => {
     expect(() => parseCli(['--mount'])).toThrow('--mount requires a value');
   });
+
+  it('parses --pool-min and --pool-max', () => {
+    const result = parseCli(['--pool-min', '2', '--pool-max', '8']);
+    expect(result.poolMin).toBe(2);
+    expect(result.poolMax).toBe(8);
+  });
+
+  it('throws when --pool-min has no value', () => {
+    expect(() => parseCli(['--pool-min'])).toThrow('--pool-min requires a value');
+  });
+
+  it('throws when --pool-max has no value', () => {
+    expect(() => parseCli(['--pool-max'])).toThrow('--pool-max requires a value');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -247,6 +261,49 @@ describe('loadConfig', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('pool config from CLI args', () => {
+    const config = loadConfig(['--pool-min', '2', '--pool-max', '8'], defaults);
+    expect(config.pool).toEqual({ minSize: 2, maxSize: 8 });
+  });
+
+  it('pool config from JSON file', () => {
+    const tmpDir = join(tmpdir(), `config-pool-json-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    const configPath = join(tmpDir, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ pool: { minSize: 1, maxSize: 4 } }));
+
+    try {
+      const config = loadConfig(['--config', configPath], defaults);
+      expect(config.pool).toEqual({ minSize: 1, maxSize: 4 });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('CLI pool args override JSON pool config', () => {
+    const tmpDir = join(tmpdir(), `config-pool-override-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    const configPath = join(tmpDir, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ pool: { minSize: 1, maxSize: 4 } }));
+
+    try {
+      const config = loadConfig(['--config', configPath, '--pool-min', '3', '--pool-max', '10'], defaults);
+      expect(config.pool).toEqual({ minSize: 3, maxSize: 10 });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('no pool config when pool args not provided', () => {
+    const config = loadConfig([], defaults);
+    expect(config.pool).toBeUndefined();
+  });
+
+  it('no pool when only pool-min provided without pool-max', () => {
+    const config = loadConfig(['--pool-min', '2'], defaults);
+    expect(config.pool).toBeUndefined();
   });
 
   it('CLI args override JSON config', () => {

@@ -31,6 +31,7 @@ export interface McpConfig {
   wasmDir: string;
   shellWasm: string;
   packages: string[];
+  pool?: { minSize: number; maxSize: number };
 }
 
 interface JsonConfig {
@@ -40,6 +41,7 @@ interface JsonConfig {
   fsLimitBytes?: number;
   wasmDir?: string;
   shellWasm?: string;
+  pool?: { minSize?: number; maxSize?: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +108,8 @@ interface CliResult {
   wasmDir?: string;
   shellWasm?: string;
   packages?: string[];
+  poolMin?: number;
+  poolMax?: number;
 }
 
 export function parseCli(argv: string[]): CliResult {
@@ -165,6 +169,16 @@ export function parseCli(argv: string[]): CliResult {
       case '--packages':
         if (!next) throw new Error('--packages requires a value');
         result.packages = featuresToPackages(next);
+        i++;
+        break;
+      case '--pool-min':
+        if (!next) throw new Error('--pool-min requires a value');
+        result.poolMin = Number(next);
+        i++;
+        break;
+      case '--pool-max':
+        if (!next) throw new Error('--pool-max requires a value');
+        result.poolMax = Number(next);
         i++;
         break;
       default:
@@ -276,5 +290,16 @@ export function loadConfig(argv: string[], defaults: McpDefaults): McpConfig {
   const shellWasm = cli.shellWasm ?? env.shellWasm ?? json.shellWasm ?? defaults.shellWasm;
   const packages = cli.packages ?? env.packages ?? DEFAULT_PACKAGES;
 
-  return { mounts, network, timeoutMs, fsLimitBytes, wasmDir, shellWasm, packages };
+  // --- Pool: CLI > JSON ---
+  const poolMinCli = cli.poolMin;
+  const poolMaxCli = cli.poolMax;
+  const poolMinJson = json.pool?.minSize;
+  const poolMaxJson = json.pool?.maxSize;
+  const poolMin = poolMinCli ?? poolMinJson;
+  const poolMax = poolMaxCli ?? poolMaxJson;
+  const pool = (poolMin !== undefined && poolMax !== undefined)
+    ? { minSize: poolMin, maxSize: poolMax }
+    : undefined;
+
+  return { mounts, network, timeoutMs, fsLimitBytes, wasmDir, shellWasm, packages, pool };
 }
