@@ -14,15 +14,16 @@ interface MockState {
   results: MockResult[];
 }
 
-interface MockFn {
-  (...args: unknown[]): unknown;
+interface MockFn<F extends (...args: never[]) => unknown = (...args: unknown[]) => unknown> {
+  (...args: Parameters<F>): ReturnType<F>;
   mock: MockState;
-  mockImplementation(impl: (...args: unknown[]) => unknown): void;
+  mockImplementation(impl: F): void;
   mockRejectedValue(value: unknown): void;
 }
 
-export function mock(impl?: (...args: unknown[]) => unknown): MockFn {
-  let currentImpl = impl ?? (() => undefined);
+// deno-lint-ignore no-explicit-any
+export function mock<F extends (...args: any[]) => any>(impl?: F): MockFn<F> {
+  let currentImpl: (...args: unknown[]) => unknown = (impl as (...args: unknown[]) => unknown) ?? (() => undefined);
   const state: MockState = { calls: [], results: [] };
 
   // Create the fn()-based mock so expect().toHaveBeenCalled() etc. work
@@ -51,10 +52,10 @@ export function mock(impl?: (...args: unknown[]) => unknown): MockFn {
     }
   });
 
-  const mockFn = baseMock as unknown as MockFn;
+  const mockFn = baseMock as unknown as MockFn<F>;
   mockFn.mock = state;
-  mockFn.mockImplementation = (newImpl: (...args: unknown[]) => unknown) => {
-    currentImpl = newImpl;
+  mockFn.mockImplementation = (newImpl: F) => {
+    currentImpl = newImpl as (...args: unknown[]) => unknown;
   };
   mockFn.mockRejectedValue = (value: unknown) => {
     currentImpl = () => Promise.reject(value);

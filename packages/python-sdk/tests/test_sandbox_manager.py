@@ -1,4 +1,3 @@
-import pytest
 from codepod import Sandbox
 
 

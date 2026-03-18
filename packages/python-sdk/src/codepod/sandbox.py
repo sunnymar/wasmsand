@@ -210,7 +210,7 @@ class Sandbox:
     def __enter__(self) -> "Sandbox":
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *_exc: object) -> None:
         if self._sandbox_id is not None:
             try:
                 self.destroy()

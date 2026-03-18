@@ -19,7 +19,7 @@ function createMockSandbox(): SandboxLike {
       { name: 'sub', type: 'dir' as const },
     ]),
     mkdir: mock((_path: string) => {}),
-    stat: mock((path: string) => ({
+    stat: mock((_path: string) => ({
       type: 'file' as const,
       size: 12,
       permissions: 0o644,
@@ -368,14 +368,14 @@ describe('Dispatcher', () => {
     it('routes run to forked sandbox via sandboxId', async () => {
       const forkResult = await dispatcher.dispatch('sandbox.fork', {}) as { sandboxId: string };
       await dispatcher.dispatch('run', { command: 'echo hello', sandboxId: forkResult.sandboxId });
-      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value;
+      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
       expect(forkedSandbox.run).toHaveBeenCalledWith('echo hello');
     });
 
     it('routes files.read to forked sandbox via sandboxId', async () => {
       const forkResult = await dispatcher.dispatch('sandbox.fork', {}) as { sandboxId: string };
       await dispatcher.dispatch('files.read', { path: '/tmp/test.txt', sandboxId: forkResult.sandboxId });
-      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value;
+      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
       expect(forkedSandbox.readFile).toHaveBeenCalledWith('/tmp/test.txt');
     });
 
@@ -419,11 +419,11 @@ describe('Dispatcher', () => {
     });
 
     it('kill destroys all forks', async () => {
-      const forkResult = await dispatcher.dispatch('sandbox.fork', {}) as { sandboxId: string };
+      await dispatcher.dispatch('sandbox.fork', {});
       await dispatcher.dispatch('kill', {});
       expect(dispatcher.isKilled()).toBe(true);
       expect(sandbox.destroy).toHaveBeenCalled();
-      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value;
+      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
       expect(forkedSandbox.destroy).toHaveBeenCalled();
     });
   });
@@ -517,14 +517,14 @@ describe('Dispatcher', () => {
     it('routes run to a created sandbox via sandboxId', async () => {
       const { sandboxId } = await poolDispatcher.dispatch('sandbox.create', {}) as { sandboxId: string };
       await poolDispatcher.dispatch('run', { command: 'echo test', sandboxId });
-      const createdSb = await (pool.checkout as ReturnType<typeof mock>).mock.results[0].value;
+      const createdSb = await (pool.checkout as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
       expect(createdSb.run).toHaveBeenCalledWith('echo test');
     });
 
     it('routes files.read to a created sandbox via sandboxId', async () => {
       const { sandboxId } = await poolDispatcher.dispatch('sandbox.create', {}) as { sandboxId: string };
       await poolDispatcher.dispatch('files.read', { path: '/tmp/test.txt', sandboxId });
-      const createdSb = await (pool.checkout as ReturnType<typeof mock>).mock.results[0].value;
+      const createdSb = await (pool.checkout as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
       expect(createdSb.readFile).toHaveBeenCalledWith('/tmp/test.txt');
     });
 
@@ -576,7 +576,7 @@ describe('Dispatcher', () => {
       const forkResult = await dispatcher.dispatch('sandbox.fork', {}) as { sandboxId: string };
       const files = { 'test.txt': Buffer.from('hi').toString('base64') };
       await dispatcher.dispatch('mount', { path: '/mnt/x', files, sandboxId: forkResult.sandboxId });
-      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value;
+      const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
       expect(forkedSandbox.mount).toHaveBeenCalledWith('/mnt/x', expect.any(Object));
     });
   });
