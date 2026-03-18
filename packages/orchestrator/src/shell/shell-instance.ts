@@ -332,7 +332,57 @@ export class ShellInstance implements ShellLike {
         return 0;
       },
       sched_yield: () => 0,
-      poll_oneoff: () => 0,
+      poll_oneoff: async (inPtr: number, outPtr: number, nsubscriptions: number, neventsPtr: number): Promise<number> => {
+        // WASI_EVENTTYPE_CLOCK = 0
+        // WASI_SUBCLOCKFLAGS_SUBSCRIPTION_CLOCK_ABSTIME = 1
+        // Subscriptions are 48 bytes each; events are 32 bytes each.
+        if (nsubscriptions === 0) return 28; // WASI_EINVAL
+        const mem = getMemory();
+        const view = new DataView(mem.buffer);
+        let earliestDeadlineMs = Infinity;
+        let earliestUserdata = 0n;
+        for (let i = 0; i < nsubscriptions; i++) {
+          const base = inPtr + i * 48;
+          const userdata = view.getBigUint64(base, true);
+          const type = view.getUint8(base + 8);
+          if (type === 0 /* CLOCK */) {
+            const timeout = view.getBigUint64(base + 24, true);
+            const flags = view.getUint16(base + 40, true);
+            const isAbsolute = (flags & 1) !== 0;
+            let deadlineMs: number;
+            if (isAbsolute) {
+              deadlineMs = Number(timeout / 1_000_000n);
+            } else {
+              deadlineMs = Date.now() + Number(timeout / 1_000_000n);
+            }
+            if (deadlineMs < earliestDeadlineMs) {
+              earliestDeadlineMs = deadlineMs;
+              earliestUserdata = userdata;
+            }
+          }
+        }
+        if (earliestDeadlineMs !== Infinity) {
+          const waitMs = Math.max(0, earliestDeadlineMs - Date.now());
+          if (waitMs > 0) {
+            await new Promise<void>(res => setTimeout(res, waitMs));
+          }
+          // Write one clock event
+          const mem2 = getMemory();
+          const view2 = new DataView(mem2.buffer);
+          view2.setBigUint64(outPtr, earliestUserdata, true);
+          view2.setUint16(outPtr + 8, 0, true);   // error: ESUCCESS
+          view2.setUint8(outPtr + 10, 0);           // type: CLOCK
+          view2.setUint8(outPtr + 11, 0);
+          view2.setUint32(outPtr + 12, 0, true);
+          view2.setBigUint64(outPtr + 16, 0n, true);
+          view2.setUint16(outPtr + 24, 0, true);
+          view2.setUint16(outPtr + 26, 0, true);
+          view2.setUint32(outPtr + 28, 0, true);
+          view2.setUint32(neventsPtr, 1, true);
+          return 0; // ESUCCESS
+        }
+        return 28; // WASI_EINVAL
+      },
       path_open: () => 44, // ENOSYS
       path_remove_directory: () => 44,
       path_unlink_file: () => 44,
@@ -343,9 +393,10 @@ export class ShellInstance implements ShellLike {
       path_readlink: () => 44,
     };
 
-    // JSPI: Wrap WASI fd_read/fd_write for pipe suspension.
+    // JSPI: Wrap WASI fd_read/fd_write/poll_oneoff for pipe suspension and sleep.
     // When a WASM process reads from an empty pipe or writes to a full pipe,
     // the host returns a Promise that resolves when data is available.
+    // poll_oneoff also returns a Promise when sleeping (clock subscription).
     // This requires the WASI functions to be JSPI-Suspending.
     if (typeof WebAssembly.Suspending === 'function') {
       wasiImports.fd_read = new WebAssembly.Suspending(
@@ -353,6 +404,9 @@ export class ShellInstance implements ShellLike {
       ) as unknown as WebAssembly.ImportValue;
       wasiImports.fd_write = new WebAssembly.Suspending(
         wasiImports.fd_write as (...args: number[]) => number,
+      ) as unknown as WebAssembly.ImportValue;
+      wasiImports.poll_oneoff = new WebAssembly.Suspending(
+        wasiImports.poll_oneoff as (...args: number[]) => Promise<number>,
       ) as unknown as WebAssembly.ImportValue;
     }
 
