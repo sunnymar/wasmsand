@@ -9,6 +9,11 @@ import { VFS } from './vfs/vfs.js';
 import { ProcessManager } from './process/manager.js';
 import { ShellInstance } from './shell/shell-instance.js';
 import type { ShellLike } from './shell/shell-like.js';
+/** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
+export interface StreamCallbacks {
+  onStdout?: (chunk: string) => void;
+  onStderr?: (chunk: string) => void;
+}
 import type { RunResult } from './shell/shell-types.js';
 import type { HistoryEntry } from './shell/history.js';
 import type { PlatformAdapter } from './platform/adapter.js';
@@ -422,7 +427,7 @@ export class Sandbox {
     });
   }
 
-  async run(command: string): Promise<RunResult> {
+  async run(command: string, callbacks?: StreamCallbacks): Promise<RunResult> {
     this.assertAlive();
 
     // Check command size limit
@@ -451,6 +456,20 @@ export class Sandbox {
       this.audit('package.install.start', { url: pkgMatch[1], host: pkgHost });
     }
 
+    // Set up streaming callbacks on pid 0 stdout/stderr buffer targets
+    if (callbacks?.onStdout || callbacks?.onStderr) {
+      const stdoutDecoder = callbacks.onStdout ? new TextDecoder() : null;
+      const stderrDecoder = callbacks.onStderr ? new TextDecoder() : null;
+      this.runner.setOutputCallbacks?.({
+        onStdout: callbacks.onStdout ? (data: Uint8Array) => {
+          callbacks.onStdout!(stdoutDecoder!.decode(data, { stream: true }));
+        } : undefined,
+        onStderr: callbacks.onStderr ? (data: Uint8Array) => {
+          callbacks.onStderr!(stderrDecoder!.decode(data, { stream: true }));
+        } : undefined,
+      });
+    }
+
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
     const startTime = performance.now();
 
@@ -458,6 +477,9 @@ export class Sandbox {
 
     if (this.workerExecutor) {
       // Worker-based execution (Node) — hard kill on timeout via worker.terminate()
+      if (callbacks?.onStdout || callbacks?.onStderr) {
+        console.warn('[codepod] Streaming callbacks not supported with worker executor (security.hardKill). Output will be returned in result only.');
+      }
       const workerResult = await this.workerExecutor.run(command, this.runner.getEnvMap(), effectiveTimeout);
 
       // Sync env changes from Worker back to main-thread runner
@@ -485,6 +507,11 @@ export class Sandbox {
           throw e;
         }
       }
+    }
+
+    // Clear streaming callbacks
+    if (callbacks?.onStdout || callbacks?.onStderr) {
+      this.runner.setOutputCallbacks?.(null);
     }
 
     const executionTimeMs = performance.now() - startTime;

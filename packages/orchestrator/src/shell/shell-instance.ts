@@ -16,7 +16,7 @@ import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { RunResult } from './shell-types.js';
 import type { HistoryEntry } from './history.js';
-import type { ShellLike } from './shell-like.js';
+import type { ShellLike, StreamCallbacks } from './shell-like.js';
 import { createShellImports } from '../host-imports/shell-imports.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
 import { ProcessKernel, type SpawnRequest } from '../process/kernel.js';
@@ -717,6 +717,15 @@ export class ShellInstance implements ShellLike {
       ...(truncated ? { truncated } : {}),
       ...(errorClass ? { errorClass } : {}),
     };
+  }
+
+  /** Set or clear streaming callbacks on pid 0 stdout/stderr buffer targets. */
+  setOutputCallbacks(callbacks: StreamCallbacks | null): void {
+    if (!this.kernel) return;
+    const stdoutTarget = this.kernel.getFdTarget(0, 1);
+    const stderrTarget = this.kernel.getFdTarget(0, 2);
+    if (stdoutTarget?.type === 'buffer') stdoutTarget.onChunk = callbacks?.onStdout ?? undefined;
+    if (stderrTarget?.type === 'buffer') stderrTarget.onChunk = callbacks?.onStderr ?? undefined;
   }
 
   /** Release the WASM instance (will be GC'd). */

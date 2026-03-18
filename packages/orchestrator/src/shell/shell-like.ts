@@ -8,8 +8,16 @@
 import type { RunResult } from './shell-types.js';
 import type { HistoryEntry } from './history.js';
 
+export interface StreamCallbacks {
+  onStdout?: (data: Uint8Array) => void;
+  onStderr?: (data: Uint8Array) => void;
+}
+
 export interface ShellLike {
   run(command: string): Promise<RunResult>;
+
+  /** Set or clear streaming callbacks on pid 0 stdout/stderr buffer targets. */
+  setOutputCallbacks?(callbacks: StreamCallbacks | null): void;
 
   // Environment
   getEnv(name: string): string | undefined;
