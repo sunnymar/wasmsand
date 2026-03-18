@@ -225,6 +225,7 @@ export class ShellInstance implements ShellLike {
                 const remaining = target.limit - target.total;
                 const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
                 target.buf.push(slice);
+                target.onChunk?.(slice);
                 if (data.byteLength > remaining) target.truncated = true;
               } else {
                 target.truncated = true;
