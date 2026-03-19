@@ -6,6 +6,8 @@
  * returns (or throws) the response payload.
  */
 
+import { Buffer } from 'node:buffer';
+
 /** Minimal interface for a sandbox, matching the methods we call. */
 export interface SandboxLike {
   run(command: string, callbacks?: {

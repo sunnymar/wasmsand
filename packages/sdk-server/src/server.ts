@@ -8,6 +8,7 @@
  * All debug/error output goes to stderr — stdout is reserved for JSON-RPC.
  */
 
+import { Buffer } from 'node:buffer';
 import { createInterface } from 'node:readline';
 import { Sandbox, SandboxPool } from '@codepod/sandbox';
 import type { ExtensionConfig, ExtensionInvokeArgs, ExtensionInvokeResult, StorageCallbacks } from '@codepod/sandbox';
