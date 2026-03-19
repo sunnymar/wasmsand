@@ -420,6 +420,28 @@ await sandbox.loadState();  // explicit load
 
 Storage backends are auto-detected: `IndexedDB` in the browser, filesystem in Node.js. You can provide a custom `PersistenceBackend` for other storage systems.
 
+### Offloading to external storage
+
+For applications managing many sandboxes, offload inactive ones to free memory and rehydrate them later:
+
+```typescript
+const sandbox = await Sandbox.create({
+  wasmDir: './wasm',
+  storage: {
+    save: async (id, state) => await s3.put(id, state),
+    load: async (id) => await s3.get(id),
+  },
+});
+
+await sandbox.run('echo hello > /tmp/work.txt');
+await sandbox.offload();       // exports state → save callback → frees VFS content
+// ... sandbox is dormant, memory freed ...
+await sandbox.rehydrate();     // load callback → restores state
+await sandbox.run('cat /tmp/work.txt');  // "hello\n"
+```
+
+The shell runner and WASM modules stay alive — only file content buffers are freed. Any method call while offloaded throws until `rehydrate()` is called. Both `offload()` and `rehydrate()` are idempotent.
+
 ## Snapshots and forking
 
 ### Snapshots
@@ -532,6 +554,8 @@ sandbox.destroy();
 | `restore(id)` | `void` | Restore a snapshot |
 | `exportState()` | `Uint8Array` | Serialize sandbox state |
 | `importState(blob)` | `void` | Restore serialized state |
+| `offload()` | `Promise<void>` | Save state to storage callbacks, free VFS content |
+| `rehydrate()` | `Promise<void>` | Load state from storage callbacks, restore VFS |
 | `saveState()` | `Promise<void>` | Save to persistence backend |
 | `loadState()` | `Promise<boolean>` | Load from persistence backend |
 | `clearPersistedState()` | `Promise<void>` | Delete persisted state |

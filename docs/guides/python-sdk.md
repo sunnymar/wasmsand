@@ -170,6 +170,27 @@ When mounted, the VFS is walked and serialized to the sandbox. Files are snapsho
 
 See [Mounting Files](mounting-files.md) for detailed examples and patterns.
 
+## Offloading to external storage
+
+For applications managing many sandboxes, offload inactive ones to free memory:
+
+```python
+def on_save(sandbox_id: str, state: bytes) -> None:
+    redis.set(f"sandbox:{sandbox_id}", state)
+
+def on_load(sandbox_id: str) -> bytes:
+    return redis.get(f"sandbox:{sandbox_id}")
+
+with Sandbox(storage={"save": on_save, "load": on_load}) as sb:
+    sb.commands.run("echo hello > /tmp/work.txt")
+    sb.offload()       # exports state → save callback → frees memory
+    # ... sandbox is dormant ...
+    sb.rehydrate()     # load callback → restores state
+    sb.commands.run("cat /tmp/work.txt")  # "hello\n"
+```
+
+The shell runner stays alive — only file content is freed. Any method call while offloaded throws until `rehydrate()` is called.
+
 ## API reference
 
 ### `Sandbox`
@@ -189,6 +210,8 @@ See [Mounting Files](mounting-files.md) for detailed examples and patterns.
 | `sb.restore(snapshot_id)` | Restore to a previous snapshot. |
 | `sb.export_state() -> bytes` | Export full state as a binary blob. |
 | `sb.import_state(blob)` | Import a previously exported state. |
+| `sb.offload()` | Save state to storage callbacks, free VFS content. |
+| `sb.rehydrate()` | Load state from storage callbacks, restore VFS. |
 | `sb.fork() -> Sandbox` | Create an independent forked sandbox. |
 | `sb.destroy()` | Destroy a forked sandbox. |
 | `sb.kill()` | Shut down the RPC server (root sandbox only). |
