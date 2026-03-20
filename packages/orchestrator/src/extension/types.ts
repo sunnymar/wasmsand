@@ -23,6 +23,9 @@ export interface PythonPackageSpec {
 export interface ExtensionConfig {
   name: string;
   description?: string;
+  usage?: string;
+  examples?: string[];
+  category?: string;
   command?: ExtensionHandler;
   pythonPackage?: PythonPackageSpec;
 }

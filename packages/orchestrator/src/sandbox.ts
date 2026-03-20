@@ -175,6 +175,11 @@ export class Sandbox {
           mgr.registerHostCommand(ext.name, ext.command, ext.description);
         }
       }
+      // Register built-in discovery command after all user extensions are loaded
+      if (options.extensions.length > 0) {
+        const builtin = extensionRegistry.registerBuiltinDiscovery();
+        mgr.registerHostCommand(builtin.name, builtin.command!);
+      }
     }
 
     // Process host mounts before shell so files are available immediately

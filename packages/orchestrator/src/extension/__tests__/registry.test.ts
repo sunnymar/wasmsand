@@ -3,6 +3,8 @@ import { expect } from '@std/expect';
 import { ExtensionRegistry } from '../registry.js';
 import type { ExtensionConfig, ExtensionInvokeArgs } from '../types.js';
 
+const INPUT: ExtensionInvokeArgs = { args: [], stdin: '', env: {}, cwd: '/' };
+
 function makeHandler(stdout: string) {
   return async (_input: ExtensionInvokeArgs) => ({ stdout, exitCode: 0 });
 }
@@ -81,5 +83,77 @@ describe('ExtensionRegistry', () => {
     await expect(reg.invoke('pkg', {
       args: [], stdin: '', env: {}, cwd: '/',
     })).rejects.toThrow('Extension "pkg" not found or has no command handler');
+  });
+});
+
+describe('ExtensionRegistry – built-in discovery', () => {
+  function makeReg() {
+    const reg = new ExtensionRegistry();
+    reg.register({ name: 'search', description: 'Search docs', category: 'search', usage: 'search <q>', examples: ['search foo'] });
+    reg.register({ name: 'fetch', description: 'Fetch doc', category: 'search', command: makeHandler('') });
+    reg.register({ name: 'upload', description: 'Upload file', category: 'files', command: makeHandler('') });
+    reg.registerBuiltinDiscovery();
+    return reg;
+  }
+
+  it('list() does not include the built-in extensions command', () => {
+    const reg = makeReg();
+    expect(reg.list().map((e) => e.name)).not.toContain('extensions');
+  });
+
+  it('extensions list shows all user extensions', async () => {
+    const reg = makeReg();
+    const result = await reg.invoke('extensions', { args: ['list'], stdin: '', env: {}, cwd: '/' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('search');
+    expect(result.stdout).toContain('fetch');
+    expect(result.stdout).toContain('upload');
+  });
+
+  it('extensions list --category filters results', async () => {
+    const reg = makeReg();
+    const result = await reg.invoke('extensions', { args: ['list', '--category', 'search'], stdin: '', env: {}, cwd: '/' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('search');
+    expect(result.stdout).toContain('fetch');
+    expect(result.stdout).not.toContain('upload');
+  });
+
+  it('extensions list --json returns JSON array', async () => {
+    const reg = makeReg();
+    const result = await reg.invoke('extensions', { args: ['list', '--json'], stdin: '', env: {}, cwd: '/' });
+    expect(result.exitCode).toBe(0);
+    const data = JSON.parse(result.stdout!);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.some((e: { name: string }) => e.name === 'search')).toBe(true);
+  });
+
+  it('extensions info shows extension details', async () => {
+    const reg = makeReg();
+    const result = await reg.invoke('extensions', { args: ['info', 'search'], stdin: '', env: {}, cwd: '/' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('search <q>');
+    expect(result.stdout).toContain('search foo');
+  });
+
+  it('extensions info returns exit 1 for unknown name', async () => {
+    const reg = makeReg();
+    const result = await reg.invoke('extensions', { args: ['info', 'nope'], stdin: '', env: {}, cwd: '/' });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown extension');
+  });
+
+  it('extensions --help returns help text', async () => {
+    const reg = makeReg();
+    const result = await reg.invoke('extensions', { args: ['--help'], stdin: '', env: {}, cwd: '/' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Subcommands');
+  });
+
+  it('extensions unknown subcommand returns exit 1', async () => {
+    const reg = makeReg();
+    const result = await reg.invoke('extensions', { args: ['bogus'], stdin: '', env: {}, cwd: '/' });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown subcommand');
   });
 });

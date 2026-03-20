@@ -6,7 +6,7 @@ import shutil
 from typing import Callable
 from codepod._rpc import RpcClient
 from codepod.commands import Commands
-from codepod.extension import Extension
+from codepod.extension import Extension, _make_extensions_command
 from codepod.files import Files
 from codepod.sandbox_manager import SandboxManager
 from codepod.vfs import VirtualFileSystem, _encode_files_for_rpc
@@ -145,6 +145,15 @@ class Sandbox:
                     self._client.register_extension_handler(ext.name, ext.async_command)
                 elif ext.command is not None:
                     self._client.register_extension_handler(ext.name, ext.command)
+
+            # Register built-in discovery command (not shown in extensions list)
+            builtin = _make_extensions_command(extensions)
+            ext_specs.append({
+                "name": builtin.name,
+                "description": builtin.description,
+                "hasCommand": True,
+            })
+            self._client.register_extension_handler(builtin.name, builtin.command)  # type: ignore[arg-type]
 
             create_params["extensions"] = ext_specs
 
