@@ -99,6 +99,25 @@ describe('document tools', { sanitizeResources: false, sanitizeOps: false }, () 
     expect(result.stdout).toContain('Meta Fixture');
   });
 
+  it('pdfinfo keeps the first positional argument as the input file', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    sandbox.writeFile('/tmp/positional.pdf', buildPdf(1, 'Positional Fixture'));
+
+    const result = await sandbox.run('pdfinfo /tmp/positional.pdf -box');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('File name: positional.pdf');
+    expect(result.stdout).not.toContain('MediaBox');
+  });
+
+  it('pdfinfo reports invalid page-range values clearly', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    sandbox.writeFile('/tmp/invalid-range.pdf', buildPdf(1, 'Invalid Range Fixture'));
+
+    const result = await sandbox.run('pdfinfo -f nope /tmp/invalid-range.pdf');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("option '-f' requires a valid number");
+  });
+
   it('pdfunite merges PDFs in order', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.writeFile('/tmp/a.pdf', buildPdf(1, 'A'));
@@ -184,6 +203,18 @@ describe('document tools', { sanitizeResources: false, sanitizeOps: false }, () 
     const result = await sandbox.run('xlsx2csv /tmp/default.xlsx');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('x,y\n1,2\n');
+  });
+
+  it('xlsx2csv -nl appends a newline when writing to stdout', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    sandbox.writeFile('/tmp/stdout-nl.csv', encode('a,b\n1,2\n'));
+
+    const create = await sandbox.run('csv2xlsx -i /tmp/stdout-nl.csv /tmp/stdout-nl.xlsx Sheet1');
+    expect(create.exitCode).toBe(0);
+
+    const result = await sandbox.run('xlsx2csv -nl /tmp/stdout-nl.xlsx Sheet1');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('a,b\n1,2\n\n');
   });
 
   it('csv2xlsx accepts stdin input', async () => {

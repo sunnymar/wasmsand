@@ -278,13 +278,13 @@ pub fn merge_documents(docs: Vec<Document>) -> Result<Document, String> {
             if first_object.is_none() {
                 first_object = Some(object_id);
                 display = format!("Page {page_num}");
-                page_num += 1;
             }
             let object = doc
                 .get_object(object_id)
                 .map_err(|err| format!("failed to read page object: {err}"))?
                 .to_owned();
             documents_pages.insert(object_id, object);
+            page_num += 1;
         }
 
         documents_objects.extend(doc.objects);
@@ -385,10 +385,120 @@ pub fn merge_documents(docs: Vec<Document>) -> Result<Document, String> {
     document.adjust_zero_pages();
 
     if let Some(outline_id) = document.build_outline() {
-        if let Ok(Object::Dictionary(dict)) = document.get_object_mut(catalog_id) {
-            dict.set("Outlines", Object::Reference(outline_id));
+        if let Ok(Object::Reference(new_catalog_id)) = document.trailer.get(b"Root").cloned() {
+            if let Ok(Object::Dictionary(dict)) = document.get_object_mut(new_catalog_id) {
+                dict.set("Outlines", Object::Reference(outline_id));
+            }
         }
     }
 
     Ok(document)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_test_pdf(page_count: usize) -> Document {
+        let mut pdf = "%PDF-1.4\n".to_string();
+        let mut objects: Vec<(usize, String)> = Vec::new();
+        let mut page_ids = Vec::new();
+
+        objects.push((1, "<< /Type /Catalog /Pages 2 0 R >>".to_string()));
+
+        let mut next_id = 3;
+        for _ in 0..page_count {
+            page_ids.push(next_id);
+            next_id += 1;
+        }
+
+        let kids = page_ids
+            .iter()
+            .map(|id| format!("{id} 0 R"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        objects.push((
+            2,
+            format!("<< /Type /Pages /Kids [{kids}] /Count {page_count} >>"),
+        ));
+
+        for page_id in page_ids {
+            objects.push((
+                page_id,
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_string(),
+            ));
+        }
+
+        let mut offsets = BTreeMap::new();
+        for (id, body) in &objects {
+            offsets.insert(*id, pdf.len());
+            pdf.push_str(&format!("{id} 0 obj\n{body}\nendobj\n"));
+        }
+
+        let xref_offset = pdf.len();
+        pdf.push_str(&format!("xref\n0 {next_id}\n"));
+        pdf.push_str("0000000000 65535 f \n");
+        for id in 1..next_id {
+            let offset = offsets.get(&id).copied().unwrap_or(0);
+            pdf.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        pdf.push_str("trailer\n");
+        pdf.push_str(&format!("<< /Size {next_id} /Root 1 0 R >>\n"));
+        pdf.push_str(&format!("startxref\n{xref_offset}\n%%EOF\n"));
+
+        Document::load_mem(pdf.as_bytes()).expect("test PDF should load")
+    }
+
+    #[test]
+    fn merge_documents_sets_outlines_on_the_renumbered_catalog() {
+        let merged = merge_documents(vec![build_test_pdf(1), build_test_pdf(1)])
+            .expect("merge should succeed");
+
+        let root_id = match merged.trailer.get(b"Root").expect("root in trailer") {
+            Object::Reference(id) => *id,
+            other => panic!("unexpected root object: {other:?}"),
+        };
+        let catalog = merged
+            .get_object(root_id)
+            .expect("catalog object")
+            .as_dict()
+            .expect("catalog dict");
+
+        assert!(
+            catalog.get(b"Outlines").is_ok(),
+            "merged PDF should retain outlines"
+        );
+    }
+
+    #[test]
+    fn merge_documents_labels_bookmarks_using_cumulative_page_numbers() {
+        let merged = merge_documents(vec![build_test_pdf(3), build_test_pdf(2)])
+            .expect("merge should succeed");
+
+        assert_eq!(
+            merged.bookmarks.len(),
+            1,
+            "table of contents bookmark should be the root"
+        );
+
+        let toc_id = merged.bookmarks[0];
+        let toc = merged.bookmark_table.get(&toc_id).expect("toc bookmark");
+        assert_eq!(
+            toc.children.len(),
+            2,
+            "expected one bookmark per input document"
+        );
+
+        let first_doc = merged
+            .bookmark_table
+            .get(&toc.children[0])
+            .expect("first document bookmark");
+        let second_doc = merged
+            .bookmark_table
+            .get(&toc.children[1])
+            .expect("second document bookmark");
+
+        assert_eq!(first_doc.title, "Page 1");
+        assert_eq!(second_doc.title, "Page 4");
+    }
 }

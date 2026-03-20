@@ -3,6 +3,7 @@ use codepod_xlsx_tools::{
     csv_writer_to, data_to_string, load_workbook, print_help, print_version, EXIT_INPUT, EXIT_OK,
     EXIT_OUTPUT,
 };
+use std::io::Write as _;
 
 fn main() {
     let mut args = std::env::args().skip(1).peekable();
@@ -157,17 +158,28 @@ fn main() {
         std::process::exit(EXIT_OUTPUT);
     }
 
-    if add_newline && !output_to_stdout {
-        use std::io::Write as _;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
+    if add_newline {
+        let newline = if use_crlf {
+            b"\r\n".as_slice()
+        } else {
+            b"\n".as_slice()
+        };
+        if output_to_stdout {
+            if let Err(err) = std::io::stdout().write_all(newline) {
+                if !quiet {
+                    eprintln!("xlsx2csv: failed to write trailing newline: {err}");
+                }
+                std::process::exit(EXIT_OUTPUT);
+            }
+        } else if let Err(err) = std::fs::OpenOptions::new()
             .append(true)
             .open(output_path.as_deref().unwrap())
+            .and_then(|mut file| file.write_all(newline))
         {
-            let _ = if use_crlf {
-                file.write_all(b"\r\n")
-            } else {
-                file.write_all(b"\n")
-            };
+            if !quiet {
+                eprintln!("xlsx2csv: failed to append trailing newline: {err}");
+            }
+            std::process::exit(EXIT_OUTPUT);
         }
     }
 }

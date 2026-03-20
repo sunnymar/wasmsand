@@ -2,6 +2,15 @@ use codepod_pdf_tools::{
     info_output, load_document, print_help, print_version, EXIT_INPUT, EXIT_OK, EXIT_PERMISSION,
 };
 
+fn parse_u32_option(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u32, String> {
+    let Some(value) = args.next() else {
+        return Err(format!("pdfinfo: option '{flag}' requires a number"));
+    };
+    value
+        .parse::<u32>()
+        .map_err(|_| format!("pdfinfo: option '{flag}' requires a valid number"))
+}
+
 fn main() {
     let mut args = std::env::args().skip(1).peekable();
     let mut first = None;
@@ -12,8 +21,20 @@ fn main() {
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "-f" => first = args.next().and_then(|v| v.parse::<u32>().ok()),
-            "-l" => last = args.next().and_then(|v| v.parse::<u32>().ok()),
+            "-f" => match parse_u32_option(&mut args, "-f") {
+                Ok(value) => first = Some(value),
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(EXIT_INPUT);
+                }
+            },
+            "-l" => match parse_u32_option(&mut args, "-l") {
+                Ok(value) => last = Some(value),
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(EXIT_INPUT);
+                }
+            },
             "-box" => show_boxes = true,
             "-meta" => show_meta = true,
             "-isodates" | "-rawdates" => {}
@@ -49,9 +70,6 @@ fn main() {
             }
             other => {
                 input_path = Some(other.to_string());
-                for extra in args {
-                    input_path = Some(extra);
-                }
                 break;
             }
         }
