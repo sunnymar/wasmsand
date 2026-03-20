@@ -18,6 +18,8 @@ const BROWSER_TOOLS = [
   'gzip', 'gunzip', 'tar',
   'true', 'false',
   'bc', 'dc', 'sqlite3',
+  'pdfinfo', 'pdfunite', 'pdfseparate',
+  'xlsx2csv', 'csv2xlsx',
   'hostname', 'base64', 'sha256sum', 'md5sum', 'stat', 'xxd', 'rev', 'nproc',
   'fmt', 'fold', 'nl', 'expand', 'unexpand', 'paste', 'comm', 'join',
   'split', 'strings', 'od', 'cksum', 'truncate',

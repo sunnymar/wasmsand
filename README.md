@@ -18,6 +18,32 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 - **MCP server** — plug into Claude Code, Claude Desktop, or any MCP client
 - **Runs everywhere** — same code works server-side (Deno/Node.js) and in the browser
 
+## Document commands
+
+codepod ships document-oriented commands as native WASM executables, so they behave like the rest of the built-in shell toolchain instead of host-side extensions.
+
+- **PDF** — `pdfinfo`, `pdfunite`, `pdfseparate`
+- **Spreadsheet** — `xlsx2csv`, `csv2xlsx`
+
+These follow familiar real-world CLI names and mostly familiar flags, which matters for LLMs: models already know how to reach for `pdfinfo` or `xlsx2csv` in the same way they reach for `awk`, `sed`, or `sqlite3`.
+
+```bash
+# Inspect a PDF
+pdfinfo report.pdf
+
+# Merge multiple PDFs
+pdfunite part1.pdf part2.pdf merged.pdf
+
+# Split a PDF into one file per page
+pdfseparate input.pdf page-%d.pdf
+
+# Export the first worksheet to CSV
+xlsx2csv workbook.xlsx
+
+# Create an XLSX workbook from CSV
+csv2xlsx -i data.csv output.xlsx Sheet1
+```
+
 ## Install
 
 **TypeScript:**
@@ -71,7 +97,7 @@ with Sandbox() as sb:
 |-------|-------------|
 | [TypeScript SDK](docs/guides/typescript-sdk.md) | Full TypeScript API, browser/Node setup, configuration |
 | [Python SDK](docs/guides/python-sdk.md) | Python API, file operations, error handling, VirtualFileSystem |
-| [Shell & Commands Reference](docs/guides/shell-reference.md) | All 100+ commands, shell features, virtual `/dev` and `/proc` |
+| [Shell & Commands Reference](docs/guides/shell-reference.md) | All 100+ commands, including PDF and spreadsheet tools, plus shell features and virtual `/dev` and `/proc` |
 | [MCP Server](docs/guides/mcp-server.md) | Claude Code/Desktop setup, tools, configuration |
 | [Mounting Files](docs/guides/mounting-files.md) | Host mounts, MemoryFS, custom VirtualFileSystem implementations |
 | [Extensions](docs/guides/extensions.md) | Custom shell commands and Python packages backed by host handlers |
