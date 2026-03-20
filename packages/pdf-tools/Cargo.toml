@@ -1,0 +1,19 @@
+[package]
+name = "codepod-pdf-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pdfinfo"
+path = "src/bin/pdfinfo.rs"
+
+[[bin]]
+name = "pdfunite"
+path = "src/bin/pdfunite.rs"
+
+[[bin]]
+name = "pdfseparate"
+path = "src/bin/pdfseparate.rs"
+
+[dependencies]
+lopdf = { version = "0.40", default-features = false }

@@ -1,6 +1,6 @@
 # codepod
 
-A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 95+ commands, and a Python runtime — no containers, no kernel, no hardware emulation. Ships with an [MCP server](docs/guides/mcp-server.md) so Claude can use it directly as a tool.
+A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 100+ commands, and a Python runtime — no containers, no kernel, no hardware emulation. Ships with an [MCP server](docs/guides/mcp-server.md) so Claude can use it directly as a tool.
 
 **[Try it in your browser](https://codepod-sandbox.github.io/codepod/)**
 
@@ -9,7 +9,8 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 ## What it does
 
 - **Shell execution** — pipes, redirects, variables, globbing, control flow, functions, subshells, background jobs (`&`), aliases, arrays, process substitution
-- **95+ commands** — cat, grep, sed, awk, find, sort, jq, tar, curl, sqlite3, and more
+- **100+ commands** — cat, grep, sed, awk, find, sort, jq, tar, curl, sqlite3, `pdfinfo`, `pdfunite`, `pdfseparate`, `xlsx2csv`, `csv2xlsx`, and more
+- **Native document tools** — inspect and transform PDFs and spreadsheets with familiar real-world CLI names
 - **Python 3** via RustPython compiled to WASI, with **numpy** support (native Rust implementation)
 - **Virtual filesystem** — in-memory POSIX VFS with optional persistence
 - **Host mounts** — inject files into the VFS at arbitrary paths
@@ -70,7 +71,7 @@ with Sandbox() as sb:
 |-------|-------------|
 | [TypeScript SDK](docs/guides/typescript-sdk.md) | Full TypeScript API, browser/Node setup, configuration |
 | [Python SDK](docs/guides/python-sdk.md) | Python API, file operations, error handling, VirtualFileSystem |
-| [Shell & Commands Reference](docs/guides/shell-reference.md) | All 95+ commands, shell features, virtual `/dev` and `/proc` |
+| [Shell & Commands Reference](docs/guides/shell-reference.md) | All 100+ commands, shell features, virtual `/dev` and `/proc` |
 | [MCP Server](docs/guides/mcp-server.md) | Claude Code/Desktop setup, tools, configuration |
 | [Mounting Files](docs/guides/mounting-files.md) | Host mounts, MemoryFS, custom VirtualFileSystem implementations |
 | [Extensions](docs/guides/extensions.md) | Custom shell commands and Python packages backed by host handlers |

@@ -30,8 +30,8 @@ rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca6389
 codepod-host-native = { path = "crates/codepod-host" }
 
 # Native package crates (optional, gated by features)
-numpy-rust-python = { path = "../numpy-rust/crates/numpy-rust-python", optional = true }
+numpy-rust-python = { path = "crates/numpy-rust-python", optional = true }
 pandas-native = { path = "crates/pandas", optional = true }
-pil-native = { package = "pil-rust-python", path = "../pillow-rust/crates/pil-rust-python", optional = true }
+pil-native = { package = "pil-rust-python", path = "crates/pil-rust-python", optional = true }
 sklearn-native = { path = "crates/sklearn", optional = true }
 sqlite3-native = { path = "crates/sqlite3", optional = true }

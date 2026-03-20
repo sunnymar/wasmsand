@@ -1,0 +1,17 @@
+[package]
+name = "codepod-xlsx-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "xlsx2csv"
+path = "src/bin/xlsx2csv.rs"
+
+[[bin]]
+name = "csv2xlsx"
+path = "src/bin/csv2xlsx.rs"
+
+[dependencies]
+calamine = { version = "0.34", default-features = false }
+csv = "1.4"
+rust_xlsxwriter = { version = "0.94", default-features = false }
