@@ -142,6 +142,9 @@ async function main(): Promise<void> {
           extensions?: Array<{
             name: string;
             description?: string;
+            usage?: string;
+            examples?: string[];
+            category?: string;
             hasCommand?: boolean;
             pythonPackage?: { version: string; summary?: string; files: Record<string, string> };
           }>;
@@ -179,6 +182,9 @@ async function main(): Promise<void> {
         const extensionConfigs: ExtensionConfig[] | undefined = extensionSpecs?.map((ext) => ({
           name: ext.name,
           description: ext.description,
+          usage: ext.usage,
+          examples: ext.examples,
+          category: ext.category,
           command: ext.hasCommand ? async (input: ExtensionInvokeArgs): Promise<ExtensionInvokeResult> => {
             const result = await sendCallback('extension.invoke', {
               name: ext.name,
