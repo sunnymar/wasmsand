@@ -34,7 +34,17 @@ export async function initSandbox(): Promise<Sandbox> {
     wasmDir: WASM_BASE,
   });
 
-  sandbox.mkdir('/src');
+  // Create directories needed for VFS paths (Sandbox.create() only provides /tmp, /etc, etc.)
+  const dirs = new Set<string>();
+  for (const path of Object.keys(vfsPaths)) {
+    const parts = path.split('/').filter(Boolean);
+    for (let i = 1; i < parts.length; i++) {
+      dirs.add('/' + parts.slice(0, i).join('/'));
+    }
+  }
+  for (const dir of [...dirs].sort()) {
+    try { sandbox.mkdir(dir); } catch { /* already exists */ }
+  }
 
   const enc = new TextEncoder();
   for (const [path, content] of Object.entries(vfsPaths)) {
