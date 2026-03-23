@@ -15,6 +15,6 @@ export interface ChatMessage {
 }
 
 export type BootState =
-  | { phase: 'booting'; modelProgress: number; modelText: string }
+  | { phase: 'booting'; modelProgress: number; modelText: string; crossOriginIsolated: boolean }
   | { phase: 'ready' }
   | { phase: 'error'; message: string };
