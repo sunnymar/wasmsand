@@ -46,5 +46,12 @@ export default defineConfig({
   // Vitest config (co-located to avoid a separate vitest.config.ts)
   test: {
     environment: 'node',
+    server: {
+      deps: {
+        // web-llm's transitive dep web-xgrammar uses require() in an ESM context;
+        // inline it so Vite can transform it instead of letting Node import it raw.
+        inline: ['@mlc-ai/web-llm'],
+      },
+    },
   },
 });
