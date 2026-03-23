@@ -4,13 +4,12 @@ export const MODEL_ID = 'Llama-3.2-1B-Instruct-q4f32_1-MLC';
 
 export type ProgressCallback = (progress: number, text: string) => void;
 
-export async function initEngine(onProgress: ProgressCallback): Promise<webllm.MLCEngine> {
-  const engine = await webllm.CreateMLCEngine(MODEL_ID, {
-    initProgressCallback: (report) => {
-      onProgress(report.progress, report.text);
-    },
-  });
-  return engine;
+export async function initEngine(onProgress: ProgressCallback): Promise<webllm.MLCEngineInterface> {
+  return webllm.CreateWebWorkerMLCEngine(
+    new Worker(new URL('./llm.worker.ts', import.meta.url), { type: 'module' }),
+    MODEL_ID,
+    { initProgressCallback: (report) => onProgress(report.progress, report.text) },
+  );
 }
 
 export const BASH_TOOL: webllm.ChatCompletionTool = {
