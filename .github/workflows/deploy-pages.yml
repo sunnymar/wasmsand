@@ -28,17 +28,20 @@ jobs:
 
       - run: bun install
 
+      - name: Install llm demo deps
+        run: cd examples/llm && bun install
+
       - name: Copy WASM binaries to web public dir
-        run: cd examples/web-cli && bash copy-wasm.sh
+        run: cd examples/llm && bash copy-wasm.sh
 
       - name: Build web app
-        run: cd examples/web-cli && VITE_BASE=/codepod/ bun run build
+        run: cd examples/llm && VITE_BASE=/codepod/ bun run build
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: examples/web-cli/dist
+          path: examples/llm/dist
 
   deploy:
     needs: build
