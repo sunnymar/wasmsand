@@ -15,7 +15,7 @@ export function ModelLoader({ progress, text, crossOriginIsolated }: ModelLoader
       <div style={{ fontSize: '0.85rem', color: '#a6adc8', maxWidth: 320, textAlign: 'center' }}>{text || 'Initialising…'}</div>
       {pct === 0 && (
         <div style={{ fontSize: '0.75rem', color: '#6c7086', maxWidth: 320, textAlign: 'center' }}>
-          First load downloads ~800 MB of model weights — cached in your browser after that.
+          First load downloads ~4 GB of model weights — cached in your browser after that.
         </div>
       )}
       {text.includes('Finish loading') && (

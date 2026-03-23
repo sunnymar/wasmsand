@@ -78,7 +78,7 @@ export function Chat({ engine, sandbox, sandboxReady }: ChatProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1e1e2e', color: '#cdd6f4', fontFamily: 'system-ui, sans-serif' }}>
       <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #313244', color: '#cba6f7', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span>codepod — LLM demo <span style={{ fontSize: '0.75rem', color: '#6c7086', fontWeight: 400 }}>(Llama 3.2 1B · WebGPU)</span></span>
+        <span>codepod — LLM demo <span style={{ fontSize: '0.75rem', color: '#6c7086', fontWeight: 400 }}>(Hermes-3 8B · WebGPU)</span></span>
         {!sandboxReady && <span style={{ fontSize: '0.72rem', color: '#f9e2af', fontWeight: 400 }}>sandbox loading…</span>}
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>

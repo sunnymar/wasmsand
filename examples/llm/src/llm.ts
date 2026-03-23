@@ -1,6 +1,6 @@
 import * as webllm from '@mlc-ai/web-llm';
 
-export const MODEL_ID = 'Llama-3.2-1B-Instruct-q4f32_1-MLC';
+export const MODEL_ID = 'Hermes-3-Llama-3.1-8B-q4f16_1-MLC';
 
 export type ProgressCallback = (progress: number, text: string) => void;
 
