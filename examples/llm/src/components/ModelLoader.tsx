@@ -17,6 +17,11 @@ export function ModelLoader({ progress, text }: ModelLoaderProps) {
           First load downloads ~1.8 GB of model weights — cached in your browser after that.
         </div>
       )}
+      {text.includes('Finish loading') && (
+        <div style={{ fontSize: '0.75rem', color: '#f9e2af', maxWidth: 320, textAlign: 'center' }}>
+          Compiling GPU shaders — one-time cost, a few minutes on first run.
+        </div>
+      )}
     </div>
   );
 }
