@@ -34,6 +34,8 @@ export async function initSandbox(): Promise<Sandbox> {
     wasmDir: WASM_BASE,
   });
 
+  sandbox.mkdir('/src');
+
   const enc = new TextEncoder();
   for (const [path, content] of Object.entries(vfsPaths)) {
     // writeFile is synchronous (in-memory VFS mutation) — no await needed
