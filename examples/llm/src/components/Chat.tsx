@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import type { Part, ChatMessage } from '../types.js';
 import { ToolCall } from './ToolCall.js';
 import { runChat } from '../chat.js';
+import type { RunBlock } from '../chat.js';
+import type { CodeBlock } from '../parse.js';
 import type { Sandbox } from '@codepod/sandbox';
 import { runBash } from '../sandbox.js';
 
@@ -56,25 +58,26 @@ export function Chat({ engine, sandbox, sandboxReady }: ChatProps) {
     setInput('');
     setGenerating(true);
 
-    const execBash = (cmd: string) =>
-      sandbox ? runBash(sandbox, cmd) : Promise.resolve({ stdout: '', stderr: 'Sandbox not ready yet — please wait and retry.', exitCode: 1 });
+    const runBlock: RunBlock = async (block: CodeBlock) => {
+      if (!sandbox) return { stdout: '', stderr: 'Sandbox not ready yet — please wait and retry.', exitCode: 1 };
+      if (block.lang === 'python') {
+        sandbox.writeFile('/tmp/_cp.py', new TextEncoder().encode(block.code));
+        return runBash(sandbox, 'python3 /tmp/_cp.py');
+      }
+      return runBash(sandbox, block.code);
+    };
 
-    // Write conversation history to /session.txt so the agent can read it if needed.
-    if (messages.length > 0) {
+    // Write conversation history to ~/session.txt so the agent can read it if needed.
+    if (messages.length > 0 && sandbox) {
       const historyText = messages
         .map(m => `${m.role === 'user' ? 'USER' : 'ASSISTANT'}: ${m.content}`)
         .join('\n\n---\n\n');
-      // Base64-encode to avoid shell quoting issues with arbitrary content.
-      const bytes = new TextEncoder().encode(historyText);
-      let binary = '';
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      const encoded = btoa(binary);
-      await execBash(`python3 -c "import base64; open('~/session.txt','w').write(base64.b64decode('${encoded}').decode())"`);
+      sandbox.writeFile('/root/session.txt', new TextEncoder().encode(historyText));
     }
 
     await runChat(
       engine as never,
-      execBash,
+      runBlock,
       input,
       (part) => {
         setMessages(prev => prev.map(m => {

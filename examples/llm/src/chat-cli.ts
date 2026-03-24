@@ -19,7 +19,7 @@
 import Anthropic from 'npm:@anthropic-ai/sdk';
 import OpenAI from 'npm:openai';
 import { runChat } from './chat.ts';
-import type { Engine, LLMChunk } from './chat.ts';
+import type { Engine, LLMChunk, RunBlock } from './chat.ts';
 import type { Part } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -96,6 +96,14 @@ async function runBash(command: string): Promise<{ stdout: string; stderr: strin
     exitCode: code,
   };
 }
+
+const runBlock: RunBlock = async (block) => {
+  if (block.lang === 'python') {
+    await Deno.writeTextFile('/tmp/_cp.py', block.code);
+    return runBash('python3 /tmp/_cp.py');
+  }
+  return runBash(block.code);
+};
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -221,7 +229,7 @@ console.error(`${BOLD}${YELLOW}[${label}]${RESET} ${question}\n`);
 
 await runChat(
   engine,
-  runBash,
+  runBlock,
   question,
   renderPart,
 );

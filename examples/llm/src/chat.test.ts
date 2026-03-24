@@ -1,12 +1,13 @@
 /**
  * Integration tests for the full runChat loop.
- * Uses a mock engine (no WebLLM / browser needed) and a mock bash runner.
+ * Uses a mock engine (no WebLLM / browser needed) and a mock block runner.
  *
  *   deno test src/chat.test.ts
  */
-import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
+import { assertEquals } from 'jsr:@std/assert';
 import { runChat, MAX_TOOL_CALLS } from './chat.ts';
-import type { Engine, LLMChunk, RunBash } from './chat.ts';
+import type { Engine, LLMChunk, RunBlock } from './chat.ts';
+import type { CodeBlock } from './parse.ts';
 import type { Part } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -33,27 +34,27 @@ function mockEngine(responses: string[]): Engine {
 /** Collect all parts from runChat into an array. */
 async function collect(
   engine: Engine,
-  bash: RunBash,
+  runBlock: RunBlock,
   question: string,
 ): Promise<Part[]> {
   const parts: Part[] = [];
-  await runChat(engine, bash, question, (p) => parts.push(p));
+  await runChat(engine, runBlock, question, (p) => parts.push(p));
   return parts;
 }
 
-const noBash: RunBash = async () => ({ stdout: '', stderr: '', exitCode: 0 });
+const noBlock: RunBlock = async () => ({ stdout: '', stderr: '', exitCode: 0 });
 
 // ---------------------------------------------------------------------------
 // Plain text (no tool calls)
 // ---------------------------------------------------------------------------
 
 Deno.test('plain text response — no tool calls', async () => {
-  const parts = await collect(mockEngine(['The answer is 42.']), noBash, 'What is 6 * 7?');
+  const parts = await collect(mockEngine(['The answer is 42.']), noBlock, 'What is 6 * 7?');
   assertEquals(parts, [{ kind: 'text', text: 'The answer is 42.' }]);
 });
 
 Deno.test('multiline plain text response', async () => {
-  const parts = await collect(mockEngine(['Line one.\nLine two.']), noBash, 'Give me two lines.');
+  const parts = await collect(mockEngine(['Line one.\nLine two.']), noBlock, 'Give me two lines.');
   assertEquals(parts.length, 1);
   assertEquals((parts[0] as { kind: string; text: string }).text, 'Line one.\nLine two.');
 });
@@ -63,13 +64,13 @@ Deno.test('multiline plain text response', async () => {
 // ---------------------------------------------------------------------------
 
 Deno.test('bash block — executes command, feeds result back', async () => {
-  const called: string[] = [];
+  const called: CodeBlock[] = [];
   const parts = await collect(
     mockEngine(['```bash\necho hello\n```', 'The output was: hello']),
-    async (cmd) => { called.push(cmd); return { stdout: 'hello\n', stderr: '', exitCode: 0 }; },
+    async (block) => { called.push(block); return { stdout: 'hello\n', stderr: '', exitCode: 0 }; },
     'Say hello',
   );
-  assertEquals(called, ['echo hello']);
+  assertEquals(called, [{ lang: 'bash', code: 'echo hello' }]);
   const tc = parts.find((p) => p.kind === 'tool-call') as Extract<Part, { kind: 'tool-call' }>;
   assertEquals(tc.command, 'echo hello');
   const tr = parts.find((p) => p.kind === 'tool-result') as Extract<Part, { kind: 'tool-result' }>;
@@ -92,7 +93,7 @@ Deno.test('multiple sequential bash turns', async () => {
   const called: string[] = [];
   const parts = await collect(
     mockEngine(['```bash\necho step1\n```', '```bash\necho step2\n```', 'Done.']),
-    async (cmd) => { called.push(cmd); return { stdout: cmd.replace('echo ', '') + '\n', stderr: '', exitCode: 0 }; },
+    async (block) => { called.push(block.code); return { stdout: block.code.replace('echo ', '') + '\n', stderr: '', exitCode: 0 }; },
     'Run two steps',
   );
   assertEquals(called, ['echo step1', 'echo step2']);
@@ -100,30 +101,30 @@ Deno.test('multiple sequential bash turns', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Python blocks (base64-encoded python3 -c)
+// Python blocks — lang: 'python', passed as CodeBlock to runBlock
 // ---------------------------------------------------------------------------
 
-Deno.test('python3 block — run via python3 -c', async () => {
-  const called: string[] = [];
+Deno.test('python3 block — passed as python CodeBlock', async () => {
+  const called: CodeBlock[] = [];
   const parts = await collect(
     mockEngine(['```python3\nimport math\nprint(math.pi)\n```', 'Pi is ~3.14.']),
-    async (cmd) => { called.push(cmd); return { stdout: '3.14\n', stderr: '', exitCode: 0 }; },
+    async (block) => { called.push(block); return { stdout: '3.14\n', stderr: '', exitCode: 0 }; },
     'What is pi?',
   );
-  assertStringIncludes(called[0], 'python3 -c');
-  assertStringIncludes(called[0], 'base64');
+  assertEquals(called[0], { lang: 'python', code: 'import math\nprint(math.pi)' });
   const tc = parts.find((p) => p.kind === 'tool-call') as Extract<Part, { kind: 'tool-call' }>;
-  assertStringIncludes(tc.command, 'python3 -c');
+  assertEquals(tc.command, 'import math\nprint(math.pi)');
 });
 
-Deno.test('Python3 (mixed case) also wrapped', async () => {
-  const called: string[] = [];
+Deno.test('Python3 (mixed case) also lang: python', async () => {
+  const called: CodeBlock[] = [];
   await collect(
     mockEngine(['```Python3\nprint(42)\n```', 'Done.']),
-    async (cmd) => { called.push(cmd); return { stdout: '42\n', stderr: '', exitCode: 0 }; },
+    async (block) => { called.push(block); return { stdout: '42\n', stderr: '', exitCode: 0 }; },
     'Print 42',
   );
-  assertStringIncludes(called[0], 'python3 -c');
+  assertEquals(called[0].lang, 'python');
+  assertEquals(called[0].code, 'print(42)');
 });
 
 // ---------------------------------------------------------------------------
@@ -169,7 +170,7 @@ Deno.test('llm "query" triggers recursive sub-agent', async () => {
   };
 
   const parts: Part[] = [];
-  await runChat(engine, noBash, 'Delegate', (p) => parts.push(p));
+  await runChat(engine, noBlock, 'Delegate', (p) => parts.push(p));
 
   assertEquals(callIdx, 3);
   const llmCall = parts.find(
@@ -210,7 +211,7 @@ Deno.test('sub-agent recursion depth limit blocks third level', async () => {
   };
 
   const parts: Part[] = [];
-  await runChat(engine, noBash, 'Start', (p) => parts.push(p));
+  await runChat(engine, noBlock, 'Start', (p) => parts.push(p));
 
   const depthError = parts.find(
     (p) =>

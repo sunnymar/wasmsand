@@ -1,57 +1,49 @@
-import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
+import { assertEquals } from 'jsr:@std/assert';
 import { extractCodeBlocks, parseLlmCommand } from './parse.ts';
-
-// Decode the base64 payload from a `python3 -c "..."` command back to source.
-function decodePythonCmd(cmd: string): string {
-  const m = cmd.match(/b64decode\('([A-Za-z0-9+/=]+)'\)/);
-  if (!m) throw new Error(`Not a base64 python3 -c command: ${cmd}`);
-  return atob(m[1]);
-}
 
 // ---------------------------------------------------------------------------
 // extractCodeBlocks
 // ---------------------------------------------------------------------------
 
 Deno.test('extracts a bash block', () => {
-  const text = '```bash\necho hello\n```';
-  assertEquals(extractCodeBlocks(text), ['echo hello']);
+  assertEquals(extractCodeBlocks('```bash\necho hello\n```'), [
+    { lang: 'bash', code: 'echo hello' },
+  ]);
 });
 
-Deno.test('wraps python block as python3 -c', () => {
-  const cmd = extractCodeBlocks('```python\nimport math; print(math.pi)\n```')[0];
-  assertStringIncludes(cmd, 'python3 -c');
-  assertEquals(decodePythonCmd(cmd), 'import math; print(math.pi)');
+Deno.test('extracts a python block', () => {
+  assertEquals(extractCodeBlocks('```python\nimport math; print(math.pi)\n```'), [
+    { lang: 'python', code: 'import math; print(math.pi)' },
+  ]);
 });
 
-Deno.test('wraps python3 block as python3 -c', () => {
-  const code = 'import numpy as np\nprint(np.e ** np.pi)';
-  const cmd = extractCodeBlocks(`\`\`\`python3\n${code}\n\`\`\``)[0];
-  assertStringIncludes(cmd, 'python3 -c');
-  assertEquals(decodePythonCmd(cmd), code);
+Deno.test('extracts a python3 block', () => {
+  assertEquals(extractCodeBlocks('```python3\nimport numpy as np\nprint(np.e ** np.pi)\n```'), [
+    { lang: 'python', code: 'import numpy as np\nprint(np.e ** np.pi)' },
+  ]);
 });
 
-Deno.test('wraps Python3 (mixed case) block as python3 -c', () => {
-  const code = 'import os\nprint(os.getcwd())';
-  const cmd = extractCodeBlocks(`\`\`\`Python3\n${code}\n\`\`\``)[0];
-  assertStringIncludes(cmd, 'python3 -c');
-  assertEquals(decodePythonCmd(cmd), code);
+Deno.test('extracts a Python3 (mixed case) block', () => {
+  assertEquals(extractCodeBlocks('```Python3\nimport os\nprint(os.getcwd())\n```'), [
+    { lang: 'python', code: 'import os\nprint(os.getcwd())' },
+  ]);
 });
 
-Deno.test('wraps py block as python3 -c', () => {
-  const cmd = extractCodeBlocks('```py\nprint(42)\n```')[0];
-  assertStringIncludes(cmd, 'python3 -c');
-  assertEquals(decodePythonCmd(cmd), 'print(42)');
+Deno.test('extracts a py block', () => {
+  assertEquals(extractCodeBlocks('```py\nprint(42)\n```'), [
+    { lang: 'python', code: 'print(42)' },
+  ]);
 });
 
 Deno.test('handles trailing whitespace after language tag', () => {
-  const cmd = extractCodeBlocks('```python3  \nimport math\n```')[0];
-  assertStringIncludes(cmd, 'python3 -c');
-  assertEquals(decodePythonCmd(cmd), 'import math');
+  assertEquals(extractCodeBlocks('```python3  \nimport math\n```'), [
+    { lang: 'python', code: 'import math' },
+  ]);
 });
 
 Deno.test('handles sh and shell tags', () => {
-  assertEquals(extractCodeBlocks('```sh\nls -la\n```'), ['ls -la']);
-  assertEquals(extractCodeBlocks('```shell\nls -la\n```'), ['ls -la']);
+  assertEquals(extractCodeBlocks('```sh\nls -la\n```'), [{ lang: 'bash', code: 'ls -la' }]);
+  assertEquals(extractCodeBlocks('```shell\nls -la\n```'), [{ lang: 'bash', code: 'ls -la' }]);
 });
 
 Deno.test('ignores non-executable language blocks', () => {
@@ -65,10 +57,10 @@ Deno.test('extracts multiple blocks in order', () => {
     'some text',
     '```python\nprint("step2")\n```',
   ].join('\n');
-  const blocks = extractCodeBlocks(text);
-  assertEquals(blocks[0], 'echo step1');
-  assertStringIncludes(blocks[1], 'python3 -c');
-  assertEquals(decodePythonCmd(blocks[1]), 'print("step2")');
+  assertEquals(extractCodeBlocks(text), [
+    { lang: 'bash', code: 'echo step1' },
+    { lang: 'python', code: 'print("step2")' },
+  ]);
 });
 
 Deno.test('skips empty blocks', () => {
@@ -76,11 +68,10 @@ Deno.test('skips empty blocks', () => {
 });
 
 Deno.test('stops at first complete block (early-break simulation)', () => {
-  // Simulate the stream arriving incrementally: only first block present
   const partial = '```bash\necho hi\n```';
   const blocks = extractCodeBlocks(partial);
   assertEquals(blocks.length, 1);
-  assertEquals(blocks[0], 'echo hi');
+  assertEquals(blocks[0], { lang: 'bash', code: 'echo hi' });
 });
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import type { Part } from './types.js';
 import { SYSTEM_PROMPT } from './prompts.js';
 import { extractCodeBlocks, parseLlmCommand } from './parse.js';
+import type { CodeBlock } from './parse.js';
 
 export const MAX_TOOL_CALLS = 15;
 export const MAX_DEPTH = 2;
@@ -15,7 +16,8 @@ export type Engine = {
   };
 };
 
-export type RunBash = (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+/** Execute a code block and return its output. */
+export type RunBlock = (block: CodeBlock) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
 type LLMMessage =
   | { role: 'system'; content: string }
@@ -25,7 +27,7 @@ type LLMMessage =
 
 export async function runChat(
   engine: Engine,
-  runBash: RunBash,
+  runBlock: RunBlock,
   query: string,
   onPart: (part: Part) => void,
   depth = 0,
@@ -54,33 +56,34 @@ export async function runChat(
       }
     }
 
-    const commands = extractCodeBlocks(fullText);
-    if (commands.length === 0) break;
+    const blocks = extractCodeBlocks(fullText);
+    if (blocks.length === 0) break;
 
     const resultLines: string[] = [];
-    for (const cmd of commands) {
+    for (const block of blocks) {
       if (toolCallCount >= MAX_TOOL_CALLS) {
         onPart({ kind: 'text', text: '\n\n_Tool call limit reached — stopping._' });
         return;
       }
 
       const callId = crypto.randomUUID();
-      const subQuery = parseLlmCommand(cmd);
+      // llm "..." is only valid as a bash command.
+      const subQuery = block.lang === 'bash' ? parseLlmCommand(block.code) : null;
 
       if (subQuery !== null) {
         // Recursive sub-agent call.
-        onPart({ kind: 'tool-call', callId, command: cmd });
+        onPart({ kind: 'tool-call', callId, command: block.code });
 
         if (depth >= MAX_DEPTH) {
           const err = 'Max recursion depth reached.';
           onPart({ kind: 'tool-result', callId, stdout: '', stderr: err, exitCode: 1 });
-          resultLines.push(`$ ${cmd}\nstderr: ${err}`);
+          resultLines.push(`$ ${block.code}\nstderr: ${err}`);
         } else {
           // Run sub-agent; accumulate its text, forward its tool calls.
           let subText = '';
           await runChat(
             engine,
-            runBash,
+            runBlock,
             subQuery,
             (part) => {
               if (part.kind === 'text') {
@@ -93,18 +96,18 @@ export async function runChat(
             depth + 1,
           );
           onPart({ kind: 'tool-result', callId, stdout: subText, stderr: '', exitCode: 0 });
-          resultLines.push(`$ ${cmd}\n${subText || '(no output)'}`);
+          resultLines.push(`$ ${block.code}\n${subText || '(no output)'}`);
         }
       } else {
-        // Normal bash / python command.
-        onPart({ kind: 'tool-call', callId, command: cmd });
-        const result = await runBash(cmd);
+        // Bash or Python block — execute via the runBlock callback.
+        onPart({ kind: 'tool-call', callId, command: block.code });
+        const result = await runBlock(block);
         onPart({ kind: 'tool-result', callId, ...result });
 
         const output = [result.stdout, result.stderr ? `stderr: ${result.stderr}` : '']
           .filter(Boolean)
           .join('\n');
-        resultLines.push(`$ ${cmd}\n${output || '(no output)'}`);
+        resultLines.push(`$ ${block.code}\n${output || '(no output)'}`);
       }
 
       toolCallCount++;
