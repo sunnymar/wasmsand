@@ -1,24 +1,34 @@
 import type { Part } from './types.js';
-import { BASH_TOOL, SYSTEM_PROMPT } from './llm.js';
+import { SYSTEM_PROMPT } from './llm.js';
 
 export const MAX_TOOL_CALLS = 15;
 
 type Engine = {
   chat: {
     completions: {
-      create: (opts: object) => Promise<AsyncIterable<{ choices: Array<{ delta: { content: string | null; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason: string | null }> }>>;
+      create: (opts: object) => Promise<AsyncIterable<{ choices: Array<{ delta: { content: string | null }; finish_reason: string | null }> }>>;
     };
   };
 };
 
 type RunBash = (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
-// OpenAI message format for the LLM (separate from display ChatMessage)
 type LLMMessage =
   | { role: 'system'; content: string }
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
-  | { role: 'tool'; tool_call_id: string; content: string };
+  | { role: 'assistant'; content: string };
+
+/** Extract all bash code block bodies from a model response. */
+function extractBashBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  const re = /```bash\n([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const cmd = m[1].trim();
+    if (cmd) blocks.push(cmd);
+  }
+  return blocks;
+}
 
 export async function runChat(
   engine: Engine,
@@ -36,87 +46,42 @@ export async function runChat(
   while (true) {
     const stream = await engine.chat.completions.create({
       messages: history,
-      tools: [BASH_TOOL],
-      tool_choice: 'auto',
       stream: true,
     });
 
-    let textBuffer = '';
-    let toolCallId = '';
-    let toolCallName = '';
-    let toolCallArgs = '';
-    let finishReason: string | null = null;
-
-    try {
-      for await (const chunk of stream) {
-        const choice = chunk.choices[0];
-        finishReason = choice.finish_reason ?? finishReason;
-        const delta = choice.delta;
-
-        if (delta.content) {
-          textBuffer += delta.content;
-          onPart({ kind: 'text', text: delta.content });
-        }
-
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (tc.id) toolCallId = tc.id;
-            if (tc.function?.name) toolCallName = tc.function.name;
-            if (tc.function?.arguments) toolCallArgs += tc.function.arguments;
-          }
-        }
+    let fullText = '';
+    for await (const chunk of stream) {
+      const content = (chunk as { choices: Array<{ delta: { content?: string | null } }> }).choices[0].delta.content;
+      if (content) {
+        fullText += content;
+        onPart({ kind: 'text', text: content });
       }
-    } catch (e: unknown) {
-      // WebLLM throws ToolCallOutputParseError when the model outputs plain text
-      // while tools are registered. Extract the text from the error message and
-      // treat it as a normal text response.
-      const msg = e instanceof Error ? e.message : String(e);
-      const match = msg.match(/Got outputMessage: ([\s\S]*?)(?:\nGot error:|$)/);
-      if (match) {
-        onPart({ kind: 'text', text: match[1].trim() });
-        break;
-      }
-      throw e;
     }
 
-    if (finishReason === 'tool_calls' && toolCallName === 'bash') {
-      let command = '';
-      try {
-        command = (JSON.parse(toolCallArgs) as { command: string }).command;
-      } catch {
-        command = toolCallArgs;
-      }
+    const commands = extractBashBlocks(fullText);
+    if (commands.length === 0) break;
 
-      onPart({ kind: 'tool-call', callId: toolCallId, command });
-
-      const result = await runBash(command);
-      onPart({ kind: 'tool-result', callId: toolCallId, ...result });
-
-      history.push({
-        role: 'assistant',
-        content: textBuffer || null,
-        tool_calls: [{ id: toolCallId, type: 'function', function: { name: 'bash', arguments: toolCallArgs } }],
-      });
-      history.push({
-        role: 'tool',
-        tool_call_id: toolCallId,
-        content: result.stdout + (result.stderr ? `\nstderr: ${result.stderr}` : ''),
-      });
-
-      toolCallCount++;
+    const resultLines: string[] = [];
+    for (const cmd of commands) {
       if (toolCallCount >= MAX_TOOL_CALLS) {
         onPart({ kind: 'text', text: '\n\n_Tool call limit reached — stopping._' });
-        break;
+        return;
       }
 
-      textBuffer = '';
-      toolCallId = '';
-      toolCallName = '';
-      toolCallArgs = '';
-      finishReason = null;
-      continue;
+      const callId = crypto.randomUUID();
+      onPart({ kind: 'tool-call', callId, command: cmd });
+
+      const result = await runBash(cmd);
+      onPart({ kind: 'tool-result', callId, ...result });
+
+      const output = [result.stdout, result.stderr ? `stderr: ${result.stderr}` : '']
+        .filter(Boolean)
+        .join('\n');
+      resultLines.push(`$ ${cmd}\n${output || '(no output)'}`);
+      toolCallCount++;
     }
 
-    break;
+    history.push({ role: 'assistant', content: fullText });
+    history.push({ role: 'user', content: resultLines.join('\n\n') });
   }
 }
