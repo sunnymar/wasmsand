@@ -3,15 +3,16 @@
  * No browser or sandbox dependencies — easily testable with Deno.
  */
 
-/** Encode Python code as a self-contained `python3 -c` command.
- *  Base64 encoding avoids heredoc stdin redirection, which hangs in WASM shells.
+/** Write Python code to a temp file and run it.
+ *  Base64 avoids heredoc stdin redirection (hangs in WASM shells).
+ *  Running as a file (not exec()) preserves correct line numbers in tracebacks.
  */
 function pythonCmd(code: string): string {
   const bytes = new TextEncoder().encode(code);
   let binary = '';
   for (const b of bytes) binary += String.fromCharCode(b);
   const encoded = btoa(binary);
-  return `python3 -c "import base64; exec(base64.b64decode('${encoded}').decode())"`;
+  return `python3 -c "open('/tmp/_cp.py','w').write(__import__('base64').b64decode('${encoded}').decode())" && python3 /tmp/_cp.py`;
 }
 
 /** Extract executable code blocks from a model response.
