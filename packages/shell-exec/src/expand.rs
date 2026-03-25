@@ -54,10 +54,39 @@ pub fn expand_words_with_splitting(
     for w in words {
         let expanded = expand_word(state, w, exec);
         if word_needs_splitting(w) {
-            let split: Vec<&str> = expanded.split_whitespace().collect();
+            let ifs = state.env.get("IFS").cloned();
+            let split: Vec<String> = match &ifs {
+                Some(ifs_val) if ifs_val.is_empty() => {
+                    // Empty IFS: no splitting
+                    vec![expanded.clone()]
+                }
+                Some(ifs_val) => {
+                    // Split on IFS characters
+                    let ifs_chars: Vec<char> = ifs_val.chars().collect();
+                    let mut parts = Vec::new();
+                    let mut current = String::new();
+                    for ch in expanded.chars() {
+                        if ifs_chars.contains(&ch) {
+                            if !current.is_empty() {
+                                parts.push(std::mem::take(&mut current));
+                            }
+                        } else {
+                            current.push(ch);
+                        }
+                    }
+                    if !current.is_empty() {
+                        parts.push(current);
+                    }
+                    parts
+                }
+                None => {
+                    // Default IFS: split on whitespace
+                    expanded.split_whitespace().map(|s| s.to_string()).collect()
+                }
+            };
             for s in split {
                 if !s.is_empty() {
-                    result.push(s.to_string());
+                    result.push(s);
                 }
             }
         } else {

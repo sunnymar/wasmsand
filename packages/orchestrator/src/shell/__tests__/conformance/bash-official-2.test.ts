@@ -6,10 +6,8 @@
  * function scoping, glob patterns, redirections, trap, type, varenv.
  *
  * Known gaps (tests removed, to be fixed later):
- * - Custom IFS in for-loop splitting (ifs.tests)
- * - IFS with read (read.tests) — read in pipe subshell doesn't propagate vars
- * - Recursive function with arithmetic in condition (func.tests)
  * - 2>&1 fd duplication in subshell pipe (redir.tests)
+ * - Recursive function with $(($1-1)) in condition (func.tests)
  */
 import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
@@ -60,6 +58,16 @@ describe('bash official test suite (part 2)', () => {
   // ifs.tests — IFS field splitting
   // ---------------------------------------------------------------------------
   describe('IFS splitting (ifs.tests)', () => {
+    it('custom IFS splits on colon', async () => {
+      const r = await runner.run('IFS=:; x=a:b:c; for i in $x; do echo $i; done');
+      expect(r.stdout).toBe('a\nb\nc\n');
+    });
+
+    it('custom IFS with read', async () => {
+      const r = await runner.run("echo 'a:b:c' | { IFS=: read x y z; echo $x $y $z; }");
+      expect(r.stdout).toBe('a b c\n');
+    });
+
     it('empty IFS prevents splitting', async () => {
       const r = await runner.run("IFS=''; x='a b c'; echo $x");
       expect(r.stdout).toBe('a b c\n');
@@ -169,6 +177,16 @@ describe('bash official test suite (part 2)', () => {
     it('backtick substitution', async () => {
       const r = await runner.run('echo `echo hello`');
       expect(r.stdout).toBe('hello\n');
+    });
+
+    it('read from pipe works', async () => {
+      const r = await runner.run('echo hello | { read x; echo $x; }');
+      expect(r.stdout).toBe('hello\n');
+    });
+
+    it('while read from pipe', async () => {
+      const r = await runner.run('echo hello | while read x; do echo got=$x; done');
+      expect(r.stdout).toBe('got=hello\n');
     });
 
     it('command sub in array', async () => {
