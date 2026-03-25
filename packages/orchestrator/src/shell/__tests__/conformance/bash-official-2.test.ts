@@ -6,8 +6,8 @@
  * function scoping, glob patterns, redirections, trap, type, varenv.
  *
  * Known gaps (tests removed, to be fixed later):
- * - 2>&1 fd duplication in subshell pipe (redir.tests)
- * - Recursive function with $(($1-1)) in condition (func.tests)
+ * - 2>&1 fd duplication in subshell pipe — requires AST support for
+ *   redirects on compound commands (Subshell, Group, etc.)
  */
 import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
