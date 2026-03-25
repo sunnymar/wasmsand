@@ -412,9 +412,78 @@ fn read_compound_word(chars: &[char], pos: &mut usize) -> Vec<WordPart> {
             continue;
         }
 
-        // $ — variable, command substitution, or arithmetic
+        // $ — variable, command substitution, arithmetic, or ANSI-C quoting
         if ch == '$' {
             *pos += 1;
+            // $'...' ANSI-C quoting: process escape sequences
+            if *pos < chars.len() && chars[*pos] == '\'' {
+                *pos += 1; // skip opening '
+                let mut s = String::new();
+                while *pos < chars.len() && chars[*pos] != '\'' {
+                    if chars[*pos] == '\\' && *pos + 1 < chars.len() {
+                        *pos += 1;
+                        match chars[*pos] {
+                            'n' => s.push('\n'),
+                            't' => s.push('\t'),
+                            'r' => s.push('\r'),
+                            'a' => s.push('\x07'),
+                            'b' => s.push('\x08'),
+                            'e' | 'E' => s.push('\x1b'),
+                            'f' => s.push('\x0c'),
+                            'v' => s.push('\x0b'),
+                            '\\' => s.push('\\'),
+                            '\'' => s.push('\''),
+                            '"' => s.push('"'),
+                            '0' => {
+                                // Octal: \0nnn
+                                let mut val = 0u32;
+                                let mut count = 0;
+                                while *pos + 1 < chars.len()
+                                    && count < 3
+                                    && chars[*pos + 1].is_ascii_digit()
+                                    && chars[*pos + 1] <= '7'
+                                {
+                                    *pos += 1;
+                                    val = val * 8 + (chars[*pos] as u32 - '0' as u32);
+                                    count += 1;
+                                }
+                                if let Some(c) = char::from_u32(val) {
+                                    s.push(c);
+                                }
+                            }
+                            'x' => {
+                                // Hex: \xHH
+                                let mut val = 0u32;
+                                let mut count = 0;
+                                while *pos + 1 < chars.len()
+                                    && count < 2
+                                    && chars[*pos + 1].is_ascii_hexdigit()
+                                {
+                                    *pos += 1;
+                                    let d = chars[*pos].to_digit(16).unwrap();
+                                    val = val * 16 + d;
+                                    count += 1;
+                                }
+                                if let Some(c) = char::from_u32(val) {
+                                    s.push(c);
+                                }
+                            }
+                            other => {
+                                s.push('\\');
+                                s.push(other);
+                            }
+                        }
+                    } else {
+                        s.push(chars[*pos]);
+                    }
+                    *pos += 1;
+                }
+                if *pos < chars.len() {
+                    *pos += 1; // skip closing '
+                }
+                parts.push(WordPart::Literal(s));
+                continue;
+            }
             if *pos < chars.len() && chars[*pos] == '(' {
                 if *pos + 1 < chars.len() && chars[*pos + 1] == '(' {
                     // Arithmetic: $((...))
@@ -1070,7 +1139,7 @@ fn parse_braced_var(content: &str) -> WordPart {
         }
     }
 
-    for op in &[":-", ":=", ":+", ":?", "##", "#", "%%", "%", "//", "/"] {
+    for op in &[":-", ":=", ":+", ":?", "##", "/#", "%%", "/%", "#", "%", "//", "/"] {
         if let Some(idx) = content.find(op) {
             return WordPart::ParamExpansion {
                 var: content[..idx].to_string(),

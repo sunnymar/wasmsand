@@ -782,6 +782,16 @@ fn expand_param(state: &mut ShellState, var: &str, op: &str, operand: &str) -> S
             Some(v) => replace_pattern(v, operand, true),
         },
 
+        "/#" => match &val {
+            None => String::new(),
+            Some(v) => replace_pattern_anchored(v, operand, true),
+        },
+
+        "/%" => match &val {
+            None => String::new(),
+            Some(v) => replace_pattern_anchored(v, operand, false),
+        },
+
         "^^" => val.unwrap_or_default().to_uppercase(),
 
         ",," => val.unwrap_or_default().to_lowercase(),
@@ -1187,6 +1197,38 @@ fn replace_pattern(val: &str, operand: &str, all: bool) -> String {
         }
         val.to_string()
     }
+}
+
+/// Anchored pattern replacement: `${var/#pat/rep}` (prefix) or `${var/%pat/rep}` (suffix).
+fn replace_pattern_anchored(val: &str, operand: &str, prefix: bool) -> String {
+    let slash_idx = operand.find('/');
+    let pattern = match slash_idx {
+        Some(idx) => &operand[..idx],
+        None => operand,
+    };
+    let replacement = match slash_idx {
+        Some(idx) => &operand[idx + 1..],
+        None => "",
+    };
+
+    let boundaries = char_boundaries(val);
+
+    if prefix {
+        // Try longest prefix match first
+        for &j in boundaries.iter().rev() {
+            if glob_matches(pattern, &val[..j]) {
+                return format!("{}{}", replacement, &val[j..]);
+            }
+        }
+    } else {
+        // Try longest suffix match first
+        for &i in boundaries.iter() {
+            if glob_matches(pattern, &val[i..]) {
+                return format!("{}{}", &val[..i], replacement);
+            }
+        }
+    }
+    val.to_string()
 }
 
 // ---------------------------------------------------------------------------

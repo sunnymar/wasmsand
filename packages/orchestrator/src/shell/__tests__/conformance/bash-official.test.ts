@@ -210,8 +210,22 @@ describe('bash official test suite', () => {
   // strip.tests — Parameter expansion stripping
   // Source: tests/strip.tests + tests/strip.right
   // ---------------------------------------------------------------------------
-  // NOTE: strip.tests (parameter stripping of trailing newlines in command
-  // substitution) is a known gap — backtick substitution doesn't trim yet.
+  describe('parameter stripping (strip.tests)', () => {
+    it('command substitution trims trailing newlines', async () => {
+      const r = await runner.run("v=$(echo ''); echo \"'$v'\"");
+      expect(r.stdout).toBe("''\n");
+    });
+
+    it('echo -n preserves trailing space in subst', async () => {
+      const r = await runner.run("v=$(echo -n ' ab '); echo \"'$v'\"");
+      expect(r.stdout).toBe("' ab '\n");
+    });
+
+    it('empty echo -n in subst', async () => {
+      const r = await runner.run("v=$(echo -n ''); echo \"'$v'\"");
+      expect(r.stdout).toBe("''\n");
+    });
+  });
 
   // ---------------------------------------------------------------------------
   // case.tests — Case statements
@@ -383,7 +397,11 @@ describe('bash official test suite', () => {
   // Source: tests/set-e.tests + tests/set-e.right
   // ---------------------------------------------------------------------------
   describe('set -e (set-e.tests)', () => {
-    // NOTE: set -e basic stop-on-error is a known gap
+    it('set -e stops on error', async () => {
+      const r = await runner.run('set -e; true; echo one; false; echo two');
+      expect(r.stdout).toBe('one\n');
+      expect(r.exitCode).not.toBe(0);
+    });
 
     it('set -e does not trigger in if condition', async () => {
       const r = await runner.run('set -e; if false; then echo x; fi; echo ok');
@@ -431,7 +449,15 @@ describe('bash official test suite', () => {
       expect(r.stdout).toBe('a$b\n');
     });
 
-    // NOTE: $'...' escape sequences are a known gap
+    it("dollar-single-quote $'\\n'", async () => {
+      const r = await runner.run("echo $'a\\nb'");
+      expect(r.stdout).toBe('a\nb\n');
+    });
+
+    it("dollar-single-quote $'\\t'", async () => {
+      const r = await runner.run("echo $'a\\tb'");
+      expect(r.stdout).toBe('a\tb\n');
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -449,8 +475,15 @@ describe('bash official test suite', () => {
       expect(r.stdout).toBe('XXbbXX\n');
     });
 
-    // NOTE: ${var/#pat/rep} prefix and ${var/%pat/rep} suffix replacement
-    // are known gaps
+    it('${var/#pattern/replacement} prefix', async () => {
+      const r = await runner.run('x=hello; echo ${x/#hel/HEL}');
+      expect(r.stdout).toBe('HELlo\n');
+    });
+
+    it('${var/%pattern/replacement} suffix', async () => {
+      const r = await runner.run('x=hello; echo ${x/%llo/LLO}');
+      expect(r.stdout).toBe('heLLO\n');
+    });
 
     it('${#array[@]} counts elements', async () => {
       const r = await runner.run('a=(one two three); echo ${#a[@]}');

@@ -933,16 +933,20 @@ pub fn exec_command(
             } else {
                 stdin_data.clone()
             };
-            // If there are stderr redirects, pipe-sink stderr so we can capture it.
+            // If there are stderr redirects that require capture, pipe-sink stderr.
+            // Note: StderrToStdout is handled by routing stderr_fd directly to
+            // spawn_stdout_fd (computed below), so it doesn't need a pipe.
             let has_stderr_redir = redirects.iter().any(|r| {
                 matches!(
                     &r.redirect_type,
                     RedirectType::StderrOverwrite(_)
                         | RedirectType::StderrAppend(_)
-                        | RedirectType::StderrToStdout
                         | RedirectType::BothOverwrite(_)
                 )
             });
+            let has_stderr_to_stdout = redirects
+                .iter()
+                .any(|r| matches!(&r.redirect_type, RedirectType::StderrToStdout));
             let stderr_sink = if has_stderr_redir {
                 if let Ok((r, w)) = host.pipe() {
                     Some((r, w))
@@ -952,7 +956,6 @@ pub fn exec_command(
             } else {
                 None
             };
-            let stderr_fd = if let Some((_, w)) = stderr_sink { w } else { 2 };
 
             // If there are stdout redirects and stdout_fd is 1 (not already a pipe),
             // pipe-sink stdout so we can capture it for redirect.
@@ -977,6 +980,14 @@ pub fn exec_command(
                 w
             } else {
                 state.stdout_fd
+            };
+            // 2>&1: route stderr directly to the same fd as stdout (no pipe needed).
+            let stderr_fd = if let Some((_, w)) = stderr_sink {
+                w
+            } else if has_stderr_to_stdout {
+                spawn_stdout_fd
+            } else {
+                2
             };
 
             let pid = host
@@ -1747,12 +1758,30 @@ pub fn exec_command(
 
         // ── List: ;, &&, || ────────────────────────────────────────────
         Command::List { left, op, right } => {
+            // For && and ||, suppress errexit during evaluation (bash spec)
+            let suppress_errexit = matches!(op, ListOp::And | ListOp::Or);
+            let had_errexit = suppress_errexit
+                && state.flags.contains(&crate::state::ShellFlag::Errexit);
+            if suppress_errexit && had_errexit {
+                state.flags.remove(&crate::state::ShellFlag::Errexit);
+            }
+
             let left_result = exec_command(state, host, left)?;
             let left_run = match left_result {
                 ControlFlow::Normal(r) => r,
-                other => return Ok(other),
+                other => {
+                    if had_errexit {
+                        state.flags.insert(crate::state::ShellFlag::Errexit);
+                    }
+                    return Ok(other);
+                }
             };
             state.last_exit_code = left_run.exit_code;
+
+            // Restore errexit before executing the right side
+            if had_errexit {
+                state.flags.insert(crate::state::ShellFlag::Errexit);
+            }
 
             match op {
                 ListOp::And => {
@@ -1777,7 +1806,22 @@ pub fn exec_command(
                         Ok(ControlFlow::Normal(left_run))
                     }
                 }
-                ListOp::Seq => exec_command(state, host, right),
+                ListOp::Seq => {
+                    // set -e (errexit): if the left side of a sequence failed,
+                    // stop executing and return the failing exit code.
+                    // Exception: suppress if left side was &&/|| (bash spec).
+                    let left_is_andor = matches!(
+                        left.as_ref(),
+                        Command::List { op: ListOp::And | ListOp::Or, .. }
+                    );
+                    if state.flags.contains(&crate::state::ShellFlag::Errexit)
+                        && left_run.exit_code != 0
+                        && !left_is_andor
+                    {
+                        return Ok(ControlFlow::Normal(left_run));
+                    }
+                    exec_command(state, host, right)
+                }
                 ListOp::Background => {
                     // Record background job
                     let job_id = state.next_job_id;
