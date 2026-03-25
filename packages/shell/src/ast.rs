@@ -102,10 +102,16 @@ pub enum Command {
         condition: Box<Command>,
         body: Box<Command>,
     },
-    /// Subshell: ( commands ).
-    Subshell { body: Box<Command> },
-    /// Brace group: { commands; }.
-    BraceGroup { body: Box<Command> },
+    /// Subshell: ( commands ) [redirects].
+    Subshell {
+        body: Box<Command>,
+        redirects: Vec<Redirect>,
+    },
+    /// Brace group: { commands; } [redirects].
+    BraceGroup {
+        body: Box<Command>,
+        redirects: Vec<Redirect>,
+    },
     /// Break out of a loop.
     Break,
     /// Continue to next loop iteration.

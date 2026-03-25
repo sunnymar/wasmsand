@@ -433,11 +433,19 @@ fn apply_output_redirects(
     for redir in redirects {
         match &redir.redirect_type {
             RedirectType::StdoutOverwrite(path) => {
-                let resolved = state.resolve_path(path);
-                host.write_file(&resolved, stdout, WriteMode::Truncate)
-                    .map_err(|e| ShellError::HostError(e.to_string()))?;
-                *stdout = String::new();
-                last_stdout_redirect_path = Some(resolved);
+                if path == "&2" {
+                    // >&2: redirect stdout to stderr
+                    stderr.push_str(stdout);
+                    *stdout = String::new();
+                } else if path == "&1" {
+                    // >&1: no-op (stdout already goes to stdout)
+                } else {
+                    let resolved = state.resolve_path(path);
+                    host.write_file(&resolved, stdout, WriteMode::Truncate)
+                        .map_err(|e| ShellError::HostError(e.to_string()))?;
+                    *stdout = String::new();
+                    last_stdout_redirect_path = Some(resolved);
+                }
             }
             RedirectType::StdoutAppend(path) => {
                 let resolved = state.resolve_path(path);
@@ -565,6 +573,45 @@ fn run_deferred_output_subs(
             state.pipeline_stdin = None;
         }
         let _ = host.remove(path, false);
+    }
+}
+
+/// Apply redirects on compound commands (Subshell, BraceGroup).
+/// Returns saved fd state for restoration.
+fn apply_compound_redirects(
+    state: &mut ShellState,
+    host: &dyn HostInterface,
+    redirects: &[codepod_shell::ast::Redirect],
+) -> Vec<(i32, Option<i32>)> {
+    use codepod_shell::token::RedirectType;
+    let mut saved = Vec::new();
+    for redir in redirects {
+        match &redir.redirect_type {
+            RedirectType::StderrToStdout => {
+                // 2>&1: dup stderr to wherever stdout currently points
+                let saved_fd2 = host.dup(2).ok();
+                saved.push((2, saved_fd2));
+                let _ = host.dup2(state.stdout_fd, 2);
+            }
+            RedirectType::BothOverwrite(_) => {
+                // &>file: redirect both stdout and stderr — dup stderr to stdout
+                let saved_fd2 = host.dup(2).ok();
+                saved.push((2, saved_fd2));
+                let _ = host.dup2(state.stdout_fd, 2);
+            }
+            _ => {} // Other redirect types not yet handled on compound commands
+        }
+    }
+    saved
+}
+
+/// Restore fds saved by apply_compound_redirects.
+fn restore_compound_redirects(host: &dyn HostInterface, saved: &[(i32, Option<i32>)]) {
+    for (fd, saved_fd) in saved.iter().rev() {
+        if let Some(orig) = saved_fd {
+            let _ = host.dup2(*orig, *fd);
+            let _ = host.close_fd(*orig);
+        }
     }
 }
 
@@ -863,6 +910,11 @@ pub fn exec_command(
                 let mut stdout = captured_stdout;
                 let mut stderr = String::new();
                 apply_output_redirects(state, host, redirects, &mut stdout, &mut stderr)?;
+
+                // Write remaining stderr to fd 2 (handles >&2 redirect)
+                if !stderr.is_empty() {
+                    let _ = host.write_fd(2, stderr.as_bytes());
+                }
 
                 // Restore fd 0 if we redirected stdin.
                 if let Some(fd) = stdin_pipe {
@@ -1995,7 +2047,7 @@ pub fn exec_command(
         }
 
         // ── Subshell ────────────────────────────────────────────────────
-        Command::Subshell { body } => {
+        Command::Subshell { body, redirects } => {
             let saved_env = state.env.clone();
             let saved_cwd = state.cwd.clone();
             let saved_functions = state.functions.clone();
@@ -2004,7 +2056,15 @@ pub fn exec_command(
             let saved_flags = state.flags.clone();
             let saved_traps = state.traps.clone();
             let saved_last_exit_code = state.last_exit_code;
+
+            // Apply redirects (e.g. 2>&1)
+            let saved_fds = apply_compound_redirects(state, host, redirects);
+
             let result = exec_command(state, host, body);
+
+            // Restore redirected fds
+            restore_compound_redirects(host, &saved_fds);
+
             state.env = saved_env;
             state.cwd = saved_cwd;
             state.functions = saved_functions;
@@ -2017,7 +2077,12 @@ pub fn exec_command(
         }
 
         // ── Brace group ─────────────────────────────────────────────────
-        Command::BraceGroup { body } => exec_command(state, host, body),
+        Command::BraceGroup { body, redirects } => {
+            let saved_fds = apply_compound_redirects(state, host, redirects);
+            let result = exec_command(state, host, body);
+            restore_compound_redirects(host, &saved_fds);
+            result
+        }
 
         // ── Negate ──────────────────────────────────────────────────────
         Command::Negate { body } => match exec_command(state, host, body)? {

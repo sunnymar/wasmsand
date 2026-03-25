@@ -217,8 +217,10 @@ impl Parser {
                 let body = self.parse_list();
                 self.skip_separators();
                 self.expect(&Token::RBrace);
+                let redirects = self.parse_trailing_redirects();
                 Command::BraceGroup {
                     body: Box::new(body),
+                    redirects,
                 }
             }
             Some(Token::DoubleBracket(_)) => {
@@ -538,9 +540,24 @@ impl Parser {
         self.skip_separators();
         self.expect(&Token::RParen);
 
+        // Collect trailing redirects: ( cmd ) 2>&1
+        let redirects = self.parse_trailing_redirects();
+
         Command::Subshell {
             body: Box::new(body),
+            redirects,
         }
+    }
+
+    /// Parse any trailing redirect tokens (e.g. `2>&1`, `>file`, `<file`).
+    fn parse_trailing_redirects(&mut self) -> Vec<Redirect> {
+        let mut redirects = Vec::new();
+        while let Some(Token::Redirect(_)) = self.peek() {
+            if let Token::Redirect(r) = self.advance() {
+                redirects.push(Redirect { redirect_type: r });
+            }
+        }
+        redirects
     }
 
     /// case_clause = CASE word IN (case_item)* ESAC
