@@ -14,7 +14,7 @@ export type Engine = {
       create: (opts: object) => Promise<AsyncIterable<LLMChunk>>;
     };
   };
-  interruptGenerate: () => void;
+  interruptGenerate: () => void | Promise<void>;
 };
 
 /** Execute a code block and return its output. */
@@ -65,8 +65,8 @@ export async function runChat(
     // so the engine is free for the next create() call.
     if (didBreak) {
       console.log('[chat] calling interruptGenerate');
-      engine.interruptGenerate();
-      console.log('[chat] interruptGenerate returned');
+      await engine.interruptGenerate();
+      console.log('[chat] interruptGenerate resolved');
     }
 
     const blocks = extractCodeBlocks(fullText);
