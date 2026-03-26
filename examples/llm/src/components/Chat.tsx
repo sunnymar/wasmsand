@@ -6,11 +6,14 @@ import type { RunBlock } from '../chat.js';
 import type { CodeBlock } from '../parse.js';
 import type { Sandbox } from '@codepod/sandbox';
 import { runBash } from '../sandbox.js';
+import { MODELS } from '../models.js';
 
 interface ChatProps {
   engine: unknown; // MLCEngine — typed as unknown to avoid importing webllm types here
   sandbox: Sandbox | null;
   sandboxReady: boolean;
+  modelId: string;
+  onModelChange: (modelId: string) => void;
 }
 
 function renderParts(parts: Part[]): React.ReactNode[] {
@@ -38,7 +41,7 @@ function renderParts(parts: Part[]): React.ReactNode[] {
   return nodes;
 }
 
-export function Chat({ engine, sandbox, sandboxReady }: ChatProps) {
+export function Chat({ engine, sandbox, sandboxReady, modelId, onModelChange }: ChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -95,8 +98,20 @@ export function Chat({ engine, sandbox, sandboxReady }: ChatProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1e1e2e', color: '#cdd6f4', fontFamily: 'system-ui, sans-serif' }}>
       <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #313244', color: '#cba6f7', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span>codepod — RLM demo <span style={{ fontSize: '0.75rem', color: '#6c7086', fontWeight: 400 }}>(Qwen2.5-Coder 3B · WebGPU)</span></span>
-        {!sandboxReady && <span style={{ fontSize: '0.72rem', color: '#f9e2af', fontWeight: 400 }}>sandbox loading…</span>}
+        <span>codepod — RLM demo</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {!sandboxReady && <span style={{ fontSize: '0.72rem', color: '#f9e2af', fontWeight: 400 }}>sandbox loading…</span>}
+          <select
+            value={modelId}
+            onChange={e => onModelChange(e.target.value)}
+            disabled={generating}
+            style={{ background: '#313244', color: '#cdd6f4', border: '1px solid #45475a', borderRadius: 4, padding: '0.25rem 0.4rem', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
+          >
+            {MODELS.map(m => (
+              <option key={m.id} value={m.id}>{m.label} ({m.size})</option>
+            ))}
+          </select>
+        </div>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {messages.length === 0 && (
