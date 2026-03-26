@@ -15,6 +15,7 @@ import { createKernelImports } from '../host-imports/kernel-imports.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
 import type { ExtensionHandler } from '../extension/types.js';
+import { NativeModuleRegistry } from './native-modules.js';
 
 export class ProcessManager {
   private vfs: VfsLike;
@@ -27,11 +28,15 @@ export class ProcessManager {
   private toolAllowlist: Set<string> | null = null;
   private extensionHandler: ((cmd: Record<string, unknown>) => Record<string, unknown>) | null = null;
 
+  /** Registry for dynamically loaded native Python module WASMs. */
+  readonly nativeModules: NativeModuleRegistry;
+
   constructor(vfs: VfsLike, adapter: PlatformAdapter, networkBridge?: NetworkBridgeLike, toolAllowlist?: string[]) {
     this.vfs = vfs;
     this.adapter = adapter;
     this.networkBridge = networkBridge ?? null;
     this.toolAllowlist = toolAllowlist ? new Set(toolAllowlist) : null;
+    this.nativeModules = new NativeModuleRegistry();
   }
 
   /** Register a tool name to a .wasm file path.
@@ -230,6 +235,7 @@ export class ProcessManager {
         memory: memoryProxy,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
+        nativeModules: this.nativeModules,
       });
     }
 
@@ -406,6 +412,7 @@ export class ProcessManager {
         memory: memoryProxy,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
+        nativeModules: this.nativeModules,
       });
     }
 
