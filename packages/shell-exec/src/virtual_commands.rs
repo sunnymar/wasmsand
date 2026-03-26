@@ -200,7 +200,7 @@ fn cmd_curl(
 
     if let Some(ref file) = output_file {
         let resolved = state.resolve_path(file);
-        if let Err(e) = host.write_file(&resolved, &result.body, WriteMode::Truncate) {
+        if let Err(e) = host.write_file(&resolved, result.body.as_bytes(), WriteMode::Truncate) {
             shell_eprint!("curl: failed to write {file}: {e}\n");
             return RunResult::exit(1);
         }
@@ -326,7 +326,7 @@ fn cmd_wget(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -
     };
 
     let resolved = state.resolve_path(&filename);
-    if let Err(e) = host.write_file(&resolved, &result.body, WriteMode::Truncate) {
+    if let Err(e) = host.write_file(&resolved, result.body.as_bytes(), WriteMode::Truncate) {
         shell_eprint!("wget: failed to write {filename}: {e}\n");
         return RunResult::exit(1);
     }
@@ -365,7 +365,7 @@ struct PipPolicy {
 }
 
 fn read_pip_policy(host: &dyn HostInterface) -> Option<PipPolicy> {
-    let json = host.read_file("/etc/codepod/pip-policy.json").ok()?;
+    let json = host.read_file_str("/etc/codepod/pip-policy.json").ok()?;
     serde_json::from_str(&json).ok()
 }
 
@@ -400,12 +400,12 @@ fn cmd_pkg(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) ->
 }
 
 fn read_pkg_policy(host: &dyn HostInterface) -> Option<PkgPolicy> {
-    let json = host.read_file("/etc/codepod/pkg-policy.json").ok()?;
+    let json = host.read_file_str("/etc/codepod/pkg-policy.json").ok()?;
     serde_json::from_str(&json).ok()
 }
 
 fn read_pkg_metadata(host: &dyn HostInterface) -> Vec<PkgInfo> {
-    host.read_file("/usr/share/pkg/packages.json")
+    host.read_file_str("/usr/share/pkg/packages.json")
         .ok()
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default()
@@ -413,7 +413,7 @@ fn read_pkg_metadata(host: &dyn HostInterface) -> Vec<PkgInfo> {
 
 fn write_pkg_metadata(host: &dyn HostInterface, packages: &[PkgInfo]) {
     if let Ok(json) = serde_json::to_string_pretty(packages) {
-        let _ = host.write_file("/usr/share/pkg/packages.json", &json, WriteMode::Truncate);
+        let _ = host.write_file("/usr/share/pkg/packages.json", json.as_bytes(), WriteMode::Truncate);
     }
 }
 
@@ -538,7 +538,7 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
 
     // Write binary to VFS
     let wasm_path = format!("/usr/share/pkg/bin/{name}.wasm");
-    if let Err(e) = host.write_file(&wasm_path, &result.body, WriteMode::Truncate) {
+    if let Err(e) = host.write_file(&wasm_path, result.body.as_bytes(), WriteMode::Truncate) {
         shell_eprint!("pkg install: failed to write binary: {e}\n");
         return RunResult::exit(1);
     }
@@ -727,12 +727,6 @@ struct RegistryPackage {
     #[serde(default)]
     #[allow(dead_code)]
     size_bytes: usize,
-    /// Native module WASM (loaded via bridge, not as a tool)
-    #[serde(default)]
-    native_wasm: Option<String>,
-    /// Bridge shim (_foo_native.py) for lean binary
-    #[serde(default)]
-    native_shim: Option<String>,
 }
 
 /// Default registry URL. Override with CODEPOD_REGISTRY env var.
@@ -744,7 +738,7 @@ fn fetch_registry_index(
     host: &dyn HostInterface,
 ) -> Result<RegistryIndex, String> {
     let cache_path = "/etc/codepod/registry-index.json";
-    if let Ok(cached) = host.read_file(cache_path) {
+    if let Ok(cached) = host.read_file_str(cache_path) {
         if let Ok(index) = serde_json::from_str::<RegistryIndex>(&cached) {
             return Ok(index);
         }
@@ -769,7 +763,7 @@ fn fetch_registry_index(
         .map_err(|e| format!("invalid registry index: {e}"))?;
 
     let _ = host.mkdir("/etc/codepod");
-    let _ = host.write_file(cache_path, &result.body, WriteMode::Truncate);
+    let _ = host.write_file(cache_path, result.body.as_bytes(), WriteMode::Truncate);
 
     Ok(index)
 }
@@ -835,14 +829,14 @@ fn cmd_pip(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) ->
 }
 
 fn read_pip_registry(host: &dyn HostInterface) -> Vec<PipRegistryEntry> {
-    host.read_file("/etc/codepod/pip-registry.json")
+    host.read_file_str("/etc/codepod/pip-registry.json")
         .ok()
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default()
 }
 
 fn read_pip_installed(host: &dyn HostInterface) -> Vec<PipInstalledEntry> {
-    host.read_file("/etc/codepod/pip-installed.json")
+    host.read_file_str("/etc/codepod/pip-installed.json")
         .ok()
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default()
@@ -852,14 +846,14 @@ fn write_pip_installed(host: &dyn HostInterface, installed: &[PipInstalledEntry]
     if let Ok(json) = serde_json::to_string(installed) {
         let _ = host.write_file(
             "/etc/codepod/pip-installed.json",
-            &json,
+            json.as_bytes(),
             WriteMode::Truncate,
         );
     }
 }
 
 fn read_extension_meta(host: &dyn HostInterface) -> Vec<ExtensionMeta> {
-    host.read_file("/etc/codepod/extensions.json")
+    host.read_file_str("/etc/codepod/extensions.json")
         .ok()
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default()
@@ -1023,7 +1017,7 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                 if let Some((parent, _)) = full_path.rsplit_once('/') {
                     let _ = host.mkdir(parent);
                 }
-                let _ = host.write_file(&full_path, content, WriteMode::Truncate);
+                let _ = host.write_file(&full_path, content.as_bytes(), WriteMode::Truncate);
             }
             new_installed.push(PipInstalledEntry {
                 name: local_pkg.name.clone(),
@@ -1053,10 +1047,7 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                 let dest = format!("/usr/share/pkg/bin/{pkg_name}.wasm");
                 // Write binary as raw bytes via base64 workaround — the body_bytes()
                 // decoded from base64 are the real WASM bytes. We need write_file to
-                // accept these. For now, write the UTF-8 body (works for non-binary
-                // but WASM needs proper binary write support).
-                let body_str = String::from_utf8_lossy(&wasm_bytes);
-                if let Err(e) = host.write_file(&dest, &body_str, WriteMode::Truncate) {
+                if let Err(e) = host.write_file(&dest, &wasm_bytes, WriteMode::Truncate) {
                     shell_eprint!("pip install: failed to write WASM: {e}\n");
                     return RunResult::exit(1);
                 }
@@ -1086,7 +1077,7 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                         if let Some((parent, _)) = full_path.rsplit_once('/') {
                             let _ = host.mkdir(parent);
                         }
-                        let _ = host.write_file(&full_path, &file.content, WriteMode::Truncate);
+                        let _ = host.write_file(&full_path, file.content.as_bytes(), WriteMode::Truncate);
                     }
                     shell_print!(
                         "  Installed {} files for {pkg_name}\n",
@@ -1095,51 +1086,6 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                 }
                 Err(e) => {
                     shell_eprint!("pip install: failed to extract wheel: {e}\n");
-                    return RunResult::exit(1);
-                }
-            }
-
-            // Download and load native module WASM if present
-            if let Some(ref native_path) = pkg.native_wasm {
-                let native_url = format!("{base_url}/{native_path}");
-                shell_print!("  Downloading native module...\n");
-                let result = host.fetch(&native_url, "GET", &[], None);
-                if result.error.is_some() || !result.ok {
-                    let err = result.error.unwrap_or_else(|| format!("status {}", result.status));
-                    shell_eprint!("pip install: failed to download native WASM: {err}\n");
-                    return RunResult::exit(1);
-                }
-                let native_bytes = result.body_bytes();
-                let _ = host.mkdir("/usr/share/pkg/native");
-                let dest = format!("/usr/share/pkg/native/{pkg_name}.wasm");
-                // Write raw bytes — use body (UTF-8 lossy) for now
-                // The host will read the VFS bytes to load the WASM module
-                let body_str = String::from_utf8_lossy(&native_bytes);
-                if let Err(e) = host.write_file(&dest, &body_str, WriteMode::Truncate) {
-                    shell_eprint!("pip install: failed to write native WASM: {e}\n");
-                    return RunResult::exit(1);
-                }
-                // Signal host to load as native module (not a tool)
-                let reg_name = format!("__native__{pkg_name}");
-                let _ = host.register_tool(&reg_name, &dest);
-                shell_print!("  Loaded native module {pkg_name}\n");
-            }
-
-            // Download and install native bridge shim if present
-            if let Some(ref shim_path) = pkg.native_shim {
-                let shim_url = format!("{base_url}/{shim_path}");
-                let result = host.fetch(&shim_url, "GET", &[], None);
-                if result.error.is_some() || !result.ok {
-                    let err = result.error.unwrap_or_else(|| format!("status {}", result.status));
-                    shell_eprint!("pip install: failed to download native shim: {err}\n");
-                    return RunResult::exit(1);
-                }
-                let _ = host.mkdir("/usr/lib/python");
-                // Extract filename from path (e.g. "packages/numpy/shims/_numpy_native.py" -> "_numpy_native.py")
-                let shim_filename = shim_path.rsplit('/').next().unwrap_or("_native.py");
-                let dest = format!("/usr/lib/python/{shim_filename}");
-                if let Err(e) = host.write_file(&dest, &result.body, WriteMode::Truncate) {
-                    shell_eprint!("pip install: failed to write native shim: {e}\n");
                     return RunResult::exit(1);
                 }
             }

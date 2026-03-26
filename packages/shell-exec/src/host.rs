@@ -112,9 +112,20 @@ pub trait HostInterface {
 
     fn stat(&self, path: &str) -> Result<StatInfo, HostError>;
 
-    fn read_file(&self, path: &str) -> Result<String, HostError>;
+    fn read_file(&self, path: &str) -> Result<Vec<u8>, HostError>;
 
-    fn write_file(&self, path: &str, data: &str, mode: WriteMode) -> Result<(), HostError>;
+    fn write_file(&self, path: &str, data: &[u8], mode: WriteMode) -> Result<(), HostError>;
+
+    /// Convenience: read a file as a UTF-8 string.
+    fn read_file_str(&self, path: &str) -> Result<String, HostError> {
+        let bytes = self.read_file(path)?;
+        String::from_utf8(bytes).map_err(|e| HostError::Other(format!("invalid UTF-8: {e}")))
+    }
+
+    /// Convenience: write a UTF-8 string to a file.
+    fn write_file_str(&self, path: &str, data: &str, mode: WriteMode) -> Result<(), HostError> {
+        self.write_file(path, data.as_bytes(), mode)
+    }
 
     fn readdir(&self, path: &str) -> Result<Vec<String>, HostError>;
 
@@ -472,13 +483,14 @@ impl HostInterface for WasmHost {
         serde_json::from_str(&output).map_err(|e| HostError::IoError(format!("stat {path}: {e}")))
     }
 
-    fn read_file(&self, path: &str) -> Result<String, HostError> {
-        call_with_outbuf(path, |out_ptr, out_cap| unsafe {
+    fn read_file(&self, path: &str) -> Result<Vec<u8>, HostError> {
+        let s = call_with_outbuf(path, |out_ptr, out_cap| unsafe {
             host_read_file(path.as_ptr(), path.len() as u32, out_ptr, out_cap)
-        })
+        })?;
+        Ok(s.into_bytes())
     }
 
-    fn write_file(&self, path: &str, data: &str, mode: WriteMode) -> Result<(), HostError> {
+    fn write_file(&self, path: &str, data: &[u8], mode: WriteMode) -> Result<(), HostError> {
         let mode_u32 = match mode {
             WriteMode::Truncate => 0,
             WriteMode::Append => 1,
