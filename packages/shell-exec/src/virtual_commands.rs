@@ -18,10 +18,10 @@ pub const VIRTUAL_COMMANDS: &[&str] = &["curl", "wget", "pkg", "pip"];
 /// Packages built into the sandbox runtime (compiled in or pre-installed as shims).
 /// These are always available regardless of pip install state.
 const BUILTIN_PACKAGES: &[(&str, &str)] = &[
-    ("numpy", "1.26.4"),
-    ("matplotlib", "3.8.0"),
-    ("Pillow", "10.4.0"),
-    ("requests", "2.32.0"),
+    ("numpy", "1.26.0+codepod.0.2.1"),
+    ("matplotlib", "3.8.0+codepod.0.2.1"),
+    ("Pillow", "10.0.0+codepod.0.2.1"),
+    ("requests", "2.32.0+codepod.0.1.0"),
 ];
 
 pub fn is_virtual_command(name: &str) -> bool {
@@ -1366,6 +1366,9 @@ fn pip_show(state: &ShellState, host: &dyn HostInterface, args: &[String]) -> Ru
     shell_eprint!("pip show: package '{name}' not found\n");
     RunResult::exit(1)
 }
+
+
+
 
 
 
