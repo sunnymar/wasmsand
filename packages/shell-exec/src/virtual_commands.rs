@@ -727,6 +727,14 @@ struct RegistryPackage {
     #[serde(default)]
     #[allow(dead_code)]
     size_bytes: usize,
+    /// Native module WASM path in registry (loaded via bridge, not as a tool).
+    /// When present, pip install downloads this WASM and generates a bridge shim.
+    #[serde(default)]
+    native_wasm: Option<String>,
+    /// The import name for the native module (e.g. "_numpy_native").
+    /// If omitted, defaults to "_{name}_native".
+    #[serde(default)]
+    native_module_name: Option<String>,
 }
 
 /// Default registry URL. Override with CODEPOD_REGISTRY env var.
@@ -1088,6 +1096,50 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                     shell_eprint!("pip install: failed to extract wheel: {e}\n");
                     return RunResult::exit(1);
                 }
+            }
+
+            // Download and load native module WASM if present
+            if let Some(ref native_path) = pkg.native_wasm {
+                let native_url = format!("{base_url}/{native_path}");
+                shell_print!("  Downloading native module...\n");
+                let result = host.fetch(&native_url, "GET", &[], None);
+                if result.error.is_some() || !result.ok {
+                    let err = result.error.unwrap_or_else(|| format!("status {}", result.status));
+                    shell_eprint!("pip install: failed to download native WASM: {err}\n");
+                    return RunResult::exit(1);
+                }
+                let native_bytes = result.body_bytes();
+                let _ = host.mkdir("/usr/share/pkg/native");
+                let dest = format!("/usr/share/pkg/native/{pkg_name}.wasm");
+                if let Err(e) = host.write_file(&dest, &native_bytes, WriteMode::Truncate) {
+                    shell_eprint!("pip install: failed to write native WASM: {e}\n");
+                    return RunResult::exit(1);
+                }
+                // Signal host to load as native module
+                let reg_name = format!("__native__{pkg_name}");
+                let _ = host.register_tool(&reg_name, &dest);
+
+                // Generate bridge shim: _<name>_native.py
+                // Uses module-level __getattr__ (PEP 562) to route ALL calls
+                let mod_name = pkg.native_module_name.as_deref()
+                    .unwrap_or_else(|| Box::leak(format!("_{pkg_name}_native").into_boxed_str()));
+                let shim = format!(
+                    "import _codepod, json\n\
+                     def __getattr__(name):\n\
+                     \x20   def _bridge(*args, **kwargs):\n\
+                     \x20       payload = list(args)\n\
+                     \x20       if kwargs: payload.append(kwargs)\n\
+                     \x20       r = json.loads(_codepod.native_call(\"{pkg_name}\", name, json.dumps(payload)))\n\
+                     \x20       if isinstance(r, dict) and 'ok' in r:\n\
+                     \x20           if not r['ok']: raise RuntimeError(r.get('error', name + ' failed'))\n\
+                     \x20           return r.get('result', r)\n\
+                     \x20       return r\n\
+                     \x20   return _bridge\n"
+                );
+                let _ = host.mkdir("/usr/lib/python");
+                let shim_path = format!("/usr/lib/python/{mod_name}.py");
+                let _ = host.write_file(&shim_path, shim.as_bytes(), WriteMode::Truncate);
+                shell_print!("  Generated bridge shim {mod_name}.py\n");
             }
 
             new_installed.push(PipInstalledEntry {
