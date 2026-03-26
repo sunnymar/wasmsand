@@ -28,7 +28,6 @@ function mockEngine(responses: string[]): Engine {
         },
       },
     },
-    interruptGenerate: () => {},
   };
 }
 
@@ -168,7 +167,6 @@ Deno.test('llm "query" triggers recursive sub-agent', async () => {
         },
       },
     },
-    interruptGenerate: () => {},
   };
 
   const parts: Part[] = [];
@@ -210,7 +208,6 @@ Deno.test('sub-agent recursion depth limit blocks third level', async () => {
         },
       },
     },
-    interruptGenerate: () => {},
   };
 
   const parts: Part[] = [];
@@ -243,7 +240,6 @@ Deno.test('tool output included in next turn user message', async () => {
         },
       },
     },
-    interruptGenerate: () => {},
   };
 
   await runChat(

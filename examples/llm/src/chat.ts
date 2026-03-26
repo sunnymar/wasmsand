@@ -14,7 +14,6 @@ export type Engine = {
       create: (opts: object) => Promise<AsyncIterable<LLMChunk>>;
     };
   };
-  interruptGenerate: () => void | Promise<void>;
 };
 
 /** Execute a code block and return its output. */
@@ -48,26 +47,22 @@ export async function runChat(
     });
     console.log('[chat] stream created');
 
-    // Stream and break as soon as a complete code block closes — execute immediately.
+    // Stream tokens. Once a complete code block closes, stop emitting to the UI
+    // but keep consuming so the WebLLM worker finishes naturally (breaking from
+    // for-await leaves the worker busy and blocks the next create() call).
     let fullText = '';
-    let didBreak = false;
+    let blockDetected = false;
     for await (const chunk of stream) {
       const content = (chunk as { choices: Array<{ delta: { content?: string | null } }> }).choices[0].delta.content;
       if (content) {
         fullText += content;
-        onPart({ kind: 'text', text: content });
-        if (extractCodeBlocks(fullText).length > 0) { didBreak = true; break; }
+        if (!blockDetected) {
+          onPart({ kind: 'text', text: content });
+          if (extractCodeBlocks(fullText).length > 0) blockDetected = true;
+        }
       }
     }
-    console.log('[chat] stream done, didBreak:', didBreak, 'fullText length:', fullText.length);
-
-    // If we broke out early (code block detected), interrupt the WebLLM worker
-    // so the engine is free for the next create() call.
-    if (didBreak) {
-      console.log('[chat] calling interruptGenerate');
-      await engine.interruptGenerate();
-      console.log('[chat] interruptGenerate resolved');
-    }
+    console.log('[chat] stream done, blockDetected:', blockDetected, 'fullText length:', fullText.length);
 
     const blocks = extractCodeBlocks(fullText);
     console.log('[chat] extracted blocks:', blocks.length);
