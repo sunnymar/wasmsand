@@ -3795,6 +3795,7 @@ mod tests {
                     status: 200,
                     headers: Default::default(),
                     body: "hello from curl".to_string(),
+                    body_base64: None,
                     error: None,
                 },
             )
@@ -4603,6 +4604,7 @@ mod tests {
         state.cwd = "/home/user".to_string();
         let cmd = Command::Subshell {
             body: Box::new(simple_cmd("true")),
+            redirects: vec![],
         };
         let result = exec_command(&mut state, &host, &cmd);
         assert!(matches!(result.unwrap(), ControlFlow::Normal(_)));
@@ -4616,6 +4618,7 @@ mod tests {
 
         let cmd = Command::Subshell {
             body: Box::new(simple_cmd("false")),
+            redirects: vec![],
         };
         let result = exec_command(&mut state, &host, &cmd);
         let ControlFlow::Normal(run) = result.unwrap() else {
@@ -4635,6 +4638,7 @@ mod tests {
 
         let cmd = Command::BraceGroup {
             body: Box::new(simple_cmd("echo-a")),
+            redirects: vec![],
         };
         let (exit_code, stdout) = exec_capture_cmd(&mut state, &host, &cmd);
         assert_eq!(stdout, "a\n");

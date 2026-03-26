@@ -16,7 +16,23 @@ pub struct FetchResult {
     #[serde(default)]
     pub headers: std::collections::HashMap<String, String>,
     pub body: String,
+    /// Base64-encoded response body for lossless binary content.
+    #[serde(default)]
+    pub body_base64: Option<String>,
     pub error: Option<String>,
+}
+
+impl FetchResult {
+    /// Decode the response body as raw bytes (lossless).
+    /// Uses body_base64 if available, falls back to body.as_bytes().
+    pub fn body_bytes(&self) -> Vec<u8> {
+        if let Some(ref b64) = self.body_base64 {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                .unwrap_or_else(|_| self.body.as_bytes().to_vec())
+        } else {
+            self.body.as_bytes().to_vec()
+        }
+    }
 }
 
 /// JSON-encoded fetch request sent to the host via `host_network_fetch`.
@@ -591,6 +607,7 @@ impl HostInterface for WasmHost {
                     status: 0,
                     headers: Default::default(),
                     body: String::new(),
+                    body_base64: None,
                     error: Some(format!("fetch: failed to serialize request: {e}")),
                 }
             }
@@ -604,6 +621,7 @@ impl HostInterface for WasmHost {
                 status: 0,
                 headers: Default::default(),
                 body: String::new(),
+                body_base64: None,
                 error: Some(format!("fetch: failed to deserialize response: {e}")),
             }),
             Err(e) => FetchResult {
@@ -611,6 +629,7 @@ impl HostInterface for WasmHost {
                 status: 0,
                 headers: Default::default(),
                 body: String::new(),
+                body_base64: None,
                 error: Some(format!("fetch: host error: {e}")),
             },
         }
@@ -854,3 +873,4 @@ pub fn read_from_fd(fd: i32, buf: &mut [u8]) -> Result<usize, HostError> {
     }
     Ok(nread as usize)
 }
+

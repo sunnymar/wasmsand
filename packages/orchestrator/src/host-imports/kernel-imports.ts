@@ -215,6 +215,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           status: result.status,
           headers: result.headers,
           body: result.body,
+          body_base64: result.body_base64 ?? null,
           error: result.error ?? null,
         });
       } catch (e: unknown) {

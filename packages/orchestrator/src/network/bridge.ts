@@ -23,6 +23,8 @@ const STATUS_ERROR = 3;
 export interface SyncFetchResult {
   status: number;
   body: string;
+  /** Base64-encoded response body for lossless binary transfer (wheels, WASM). */
+  body_base64?: string;
   headers: Record<string, string>;
   error?: string;
 }
@@ -178,10 +180,17 @@ export class NetworkBridge implements NetworkBridgeLike {
             return;
           }
         }
-        const body = await resp.text();
+        const buf = await resp.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        // body: UTF-8 text (lossy, for backwards compat with curl/wget)
+        const body = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+        // body_base64: lossless binary encoding for wheels, WASM, images
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        const body_base64 = btoa(binary);
         const headers = {};
         resp.headers.forEach((v, k) => { headers[k] = v; });
-        writeOk({ status: resp.status, body, headers });
+        writeOk({ status: resp.status, body, headers, body_base64 });
       }
 
       async function handleConnect(req) {
