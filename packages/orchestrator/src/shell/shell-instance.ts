@@ -142,6 +142,7 @@ export class ShellInstance implements ShellLike {
       callerPid: 0,
       kernel,
       networkBridge: options?.networkBridge,
+      nativeModules: mgr.nativeModules,
       spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>) => {
         if (options?.syncSpawn) {
           return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn);
@@ -928,6 +929,7 @@ function spawnAsyncProcess(
       kernel,
       networkBridge,
       extensionRegistry,
+      nativeModules: mgr.nativeModules,
       spawnProcess: (req2, fdTable2) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry),
     });
     imports.codepod = childKernelImports as unknown as Record<string, WebAssembly.ImportValue>;
