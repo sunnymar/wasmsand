@@ -249,7 +249,32 @@ fn cmd_wget(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -
             }
             "-q" | "--quiet" => quiet = true,
             _ => {
-                if !arg.starts_with('-') {
+                // Handle combined flags like -qO-
+                if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+                    let chars: Vec<char> = arg[1..].chars().collect();
+                    let mut j = 0;
+                    while j < chars.len() {
+                        match chars[j] {
+                            'q' => quiet = true,
+                            'O' => {
+                                // Rest of this arg is the output file
+                                let rest: String = chars[j + 1..].iter().collect();
+                                if !rest.is_empty() {
+                                    output_file = Some(rest);
+                                } else {
+                                    // Next arg is the output file
+                                    i += 1;
+                                    if i < args.len() {
+                                        output_file = Some(args[i].clone());
+                                    }
+                                }
+                                break;
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                } else if !arg.starts_with('-') {
                     url = Some(arg.clone());
                 }
             }
@@ -1006,4 +1031,5 @@ fn pip_show(host: &dyn HostInterface, args: &[String]) -> RunResult {
     shell_eprint!("pip show: package '{name}' not found\n");
     RunResult::exit(1)
 }
+
 

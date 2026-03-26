@@ -241,9 +241,12 @@ def request(method, url, **kwargs):
     # Route through _codepod.fetch (network gateway)
     if _codepod is not None:
         resp = _codepod.fetch(method.upper(), url, headers, body)
-        if not resp.get("ok"):
-            error_msg = resp.get("error", "request failed")
-            raise ConnectionError(f"requests.{method.lower()}() failed: {error_msg}")
+        # Only raise on connection/network errors, not HTTP error codes.
+        # HTTP 4xx/5xx should return a Response (like real requests).
+        if resp.get("error") and not resp.get("status"):
+            raise ConnectionError(
+                f"requests.{method.lower()}() failed: {resp.get('error')}"
+            )
         return Response(
             status_code=resp.get("status", 0),
             headers=resp.get("headers", {}),
