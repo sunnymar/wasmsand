@@ -42,6 +42,11 @@ export class ProcessManager {
   /** Register a tool name to a .wasm file path.
    *  Also creates an executable tool file at /usr/bin/<name> so that
    *  symlinks (e.g. `ln -s python3 /usr/bin/python`) resolve naturally. */
+  /** Register a native Python module WASM (loaded for _codepod.native_call bridge). */
+  async registerNativeModule(name: string, wasmBytes: Uint8Array): Promise<void> {
+    await this.nativeModules.loadModule(name, wasmBytes);
+  }
+
   registerTool(name: string, wasmPath: string): void {
     this.registry.set(name, wasmPath);
     // Create tool stub in /usr/bin — content is the wasm path, marked with S_TOOL.

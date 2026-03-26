@@ -368,6 +368,15 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
       const name = readString(memory, namePtr, nameLen);
       const path = readString(memory, pathPtr, pathLen);
       try {
+        // __native__ prefix: load as a native Python module (bridge), not a tool
+        if (name.startsWith('__native__')) {
+          const moduleName = name.slice('__native__'.length);
+          const wasmBytes = vfs.readFile(path);
+          // loadModule is async — fire and forget (module will be available
+          // by the time Python imports it, since import happens in a later command)
+          mgr.registerNativeModule(moduleName, wasmBytes).catch(() => {});
+          return 0;
+        }
         mgr.registerTool(name, path);
         return 0;
       } catch {

@@ -727,6 +727,12 @@ struct RegistryPackage {
     #[serde(default)]
     #[allow(dead_code)]
     size_bytes: usize,
+    /// Native module WASM (loaded via bridge, not as a tool)
+    #[serde(default)]
+    native_wasm: Option<String>,
+    /// Bridge shim (_foo_native.py) for lean binary
+    #[serde(default)]
+    native_shim: Option<String>,
 }
 
 /// Default registry URL. Override with CODEPOD_REGISTRY env var.
@@ -1089,6 +1095,51 @@ fn pip_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
                 }
                 Err(e) => {
                     shell_eprint!("pip install: failed to extract wheel: {e}\n");
+                    return RunResult::exit(1);
+                }
+            }
+
+            // Download and load native module WASM if present
+            if let Some(ref native_path) = pkg.native_wasm {
+                let native_url = format!("{base_url}/{native_path}");
+                shell_print!("  Downloading native module...\n");
+                let result = host.fetch(&native_url, "GET", &[], None);
+                if result.error.is_some() || !result.ok {
+                    let err = result.error.unwrap_or_else(|| format!("status {}", result.status));
+                    shell_eprint!("pip install: failed to download native WASM: {err}\n");
+                    return RunResult::exit(1);
+                }
+                let native_bytes = result.body_bytes();
+                let _ = host.mkdir("/usr/share/pkg/native");
+                let dest = format!("/usr/share/pkg/native/{pkg_name}.wasm");
+                // Write raw bytes — use body (UTF-8 lossy) for now
+                // The host will read the VFS bytes to load the WASM module
+                let body_str = String::from_utf8_lossy(&native_bytes);
+                if let Err(e) = host.write_file(&dest, &body_str, WriteMode::Truncate) {
+                    shell_eprint!("pip install: failed to write native WASM: {e}\n");
+                    return RunResult::exit(1);
+                }
+                // Signal host to load as native module (not a tool)
+                let reg_name = format!("__native__{pkg_name}");
+                let _ = host.register_tool(&reg_name, &dest);
+                shell_print!("  Loaded native module {pkg_name}\n");
+            }
+
+            // Download and install native bridge shim if present
+            if let Some(ref shim_path) = pkg.native_shim {
+                let shim_url = format!("{base_url}/{shim_path}");
+                let result = host.fetch(&shim_url, "GET", &[], None);
+                if result.error.is_some() || !result.ok {
+                    let err = result.error.unwrap_or_else(|| format!("status {}", result.status));
+                    shell_eprint!("pip install: failed to download native shim: {err}\n");
+                    return RunResult::exit(1);
+                }
+                let _ = host.mkdir("/usr/lib/python");
+                // Extract filename from path (e.g. "packages/numpy/shims/_numpy_native.py" -> "_numpy_native.py")
+                let shim_filename = shim_path.rsplit('/').next().unwrap_or("_native.py");
+                let dest = format!("/usr/lib/python/{shim_filename}");
+                if let Err(e) = host.write_file(&dest, &result.body, WriteMode::Truncate) {
+                    shell_eprint!("pip install: failed to write native shim: {e}\n");
                     return RunResult::exit(1);
                 }
             }
