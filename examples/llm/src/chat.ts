@@ -14,6 +14,7 @@ export type Engine = {
       create: (opts: object) => Promise<AsyncIterable<LLMChunk>>;
     };
   };
+  interruptGenerate: () => void;
 };
 
 /** Execute a code block and return its output. */
@@ -47,14 +48,19 @@ export async function runChat(
 
     // Stream and break as soon as a complete code block closes — execute immediately.
     let fullText = '';
+    let didBreak = false;
     for await (const chunk of stream) {
       const content = (chunk as { choices: Array<{ delta: { content?: string | null } }> }).choices[0].delta.content;
       if (content) {
         fullText += content;
         onPart({ kind: 'text', text: content });
-        if (extractCodeBlocks(fullText).length > 0) break;
+        if (extractCodeBlocks(fullText).length > 0) { didBreak = true; break; }
       }
     }
+
+    // If we broke out early (code block detected), interrupt the WebLLM worker
+    // so the engine is free for the next create() call.
+    if (didBreak) engine.interruptGenerate();
 
     const blocks = extractCodeBlocks(fullText);
     if (blocks.length === 0) break;
