@@ -15,6 +15,7 @@ import { createKernelImports } from '../host-imports/kernel-imports.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
 import type { ExtensionHandler } from '../extension/types.js';
+import { NativeModuleRegistry } from './native-modules.js';
 
 export class ProcessManager {
   private vfs: VfsLike;
@@ -27,16 +28,25 @@ export class ProcessManager {
   private toolAllowlist: Set<string> | null = null;
   private extensionHandler: ((cmd: Record<string, unknown>) => Record<string, unknown>) | null = null;
 
+  /** Registry for dynamically loaded native Python module WASMs. */
+  readonly nativeModules: NativeModuleRegistry;
+
   constructor(vfs: VfsLike, adapter: PlatformAdapter, networkBridge?: NetworkBridgeLike, toolAllowlist?: string[]) {
     this.vfs = vfs;
     this.adapter = adapter;
     this.networkBridge = networkBridge ?? null;
     this.toolAllowlist = toolAllowlist ? new Set(toolAllowlist) : null;
+    this.nativeModules = new NativeModuleRegistry();
   }
 
   /** Register a tool name to a .wasm file path.
    *  Also creates an executable tool file at /usr/bin/<name> so that
    *  symlinks (e.g. `ln -s python3 /usr/bin/python`) resolve naturally. */
+  /** Register a native Python module WASM (loaded for _codepod.native_call bridge). */
+  async registerNativeModule(name: string, wasmBytes: Uint8Array): Promise<void> {
+    await this.nativeModules.loadModule(name, wasmBytes);
+  }
+
   registerTool(name: string, wasmPath: string): void {
     this.registry.set(name, wasmPath);
     // Create tool stub in /usr/bin — content is the wasm path, marked with S_TOOL.
@@ -230,6 +240,7 @@ export class ProcessManager {
         memory: memoryProxy,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
+        nativeModules: this.nativeModules,
       });
     }
 
@@ -406,6 +417,7 @@ export class ProcessManager {
         memory: memoryProxy,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
+        nativeModules: this.nativeModules,
       });
     }
 

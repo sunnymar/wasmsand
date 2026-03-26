@@ -266,7 +266,7 @@ fn exec_path(
 
     // Read the file
     let text = host
-        .read_file(&resolved)
+        .read_file_str(&resolved)
         .map_err(|e| ShellError::HostError(format!("{}: {}", cmd_path, e)))?;
 
     let first_line = text.lines().next().unwrap_or("");
@@ -451,7 +451,7 @@ fn apply_output_redirects(
                     }
                 } else {
                     let resolved = state.resolve_path(path);
-                    host.write_file(&resolved, stdout, WriteMode::Truncate)
+                    host.write_file(&resolved, stdout.as_bytes(), WriteMode::Truncate)
                         .map_err(|e| ShellError::HostError(e.to_string()))?;
                     *stdout = String::new();
                     last_stdout_redirect_path = Some(resolved);
@@ -459,27 +459,27 @@ fn apply_output_redirects(
             }
             RedirectType::StdoutAppend(path) => {
                 let resolved = state.resolve_path(path);
-                host.write_file(&resolved, stdout, WriteMode::Append)
+                host.write_file(&resolved, stdout.as_bytes(), WriteMode::Append)
                     .map_err(|e| ShellError::HostError(e.to_string()))?;
                 *stdout = String::new();
                 last_stdout_redirect_path = Some(resolved);
             }
             RedirectType::StderrOverwrite(path) => {
                 let resolved = state.resolve_path(path);
-                host.write_file(&resolved, stderr, WriteMode::Truncate)
+                host.write_file(&resolved, stderr.as_bytes(), WriteMode::Truncate)
                     .map_err(|e| ShellError::HostError(e.to_string()))?;
                 *stderr = String::new();
             }
             RedirectType::StderrAppend(path) => {
                 let resolved = state.resolve_path(path);
-                host.write_file(&resolved, stderr, WriteMode::Append)
+                host.write_file(&resolved, stderr.as_bytes(), WriteMode::Append)
                     .map_err(|e| ShellError::HostError(e.to_string()))?;
                 *stderr = String::new();
             }
             RedirectType::StderrToStdout => {
                 if let Some(ref file_path) = last_stdout_redirect_path {
                     if !stderr.is_empty() {
-                        host.write_file(file_path, stderr, WriteMode::Append)
+                        host.write_file(file_path, stderr.as_bytes(), WriteMode::Append)
                             .map_err(|e| ShellError::HostError(e.to_string()))?;
                     }
                 } else {
@@ -490,7 +490,7 @@ fn apply_output_redirects(
             RedirectType::BothOverwrite(path) => {
                 let resolved = state.resolve_path(path);
                 let combined = format!("{stdout}{stderr}");
-                host.write_file(&resolved, &combined, WriteMode::Truncate)
+                host.write_file(&resolved, combined.as_bytes(), WriteMode::Truncate)
                     .map_err(|e| ShellError::HostError(e.to_string()))?;
                 *stdout = String::new();
                 *stderr = String::new();
@@ -545,7 +545,7 @@ fn resolve_process_subs(
                         state.substitution_depth -= 1;
                         let path = format!("/tmp/.proc_sub_{}", state.proc_sub_counter);
                         state.proc_sub_counter += 1;
-                        let _ = host.write_file(&path, &stdout, WriteMode::Truncate);
+                        let _ = host.write_file(&path, stdout.as_bytes(), WriteMode::Truncate);
                         WordPart::Literal(path)
                     }
                     WordPart::OutputProcessSub(cmd_str) => {
@@ -576,7 +576,7 @@ fn run_deferred_output_subs(
     deferred: &[(String, String)],
 ) {
     for (path, cmd_str) in deferred {
-        if let Ok(content) = host.read_file(path) {
+        if let Ok(content) = host.read_file_str(path) {
             state.pipeline_stdin = Some(content);
             let inner_cmd = codepod_shell::parser::parse(cmd_str);
             let _ = exec_command(state, host, &inner_cmd);
@@ -789,7 +789,7 @@ pub fn exec_command(
                     RedirectType::StdinFrom(path) => {
                         let resolved = state.resolve_path(path);
                         stdin_data = host
-                            .read_file(&resolved)
+                            .read_file_str(&resolved)
                             .map_err(|e| ShellError::HostError(e.to_string()))?;
                     }
                     RedirectType::Heredoc(content) => {
@@ -1237,7 +1237,7 @@ pub fn exec_command(
                                     RedirectType::StdinFrom(path) => {
                                         let resolved = state.resolve_path(path);
                                         effective_stdin = host
-                                            .read_file(&resolved)
+                                            .read_file_str(&resolved)
                                             .map_err(|e| ShellError::HostError(e.to_string()))?;
                                     }
                                     RedirectType::Heredoc(content) => {

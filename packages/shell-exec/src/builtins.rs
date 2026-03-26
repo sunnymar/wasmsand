@@ -1356,7 +1356,7 @@ fn builtin_source(
     }
 
     let path = state.resolve_path(&args[0]);
-    let content = match host.read_file(&path) {
+    let content = match host.read_file_str(&path) {
         Ok(c) => c,
         Err(e) => {
             shell_eprint!("source: {}: {}\n", args[0], e);

@@ -252,23 +252,22 @@ pub mod mock {
             }
         }
 
-        fn read_file(&self, path: &str) -> Result<String, HostError> {
+        fn read_file(&self, path: &str) -> Result<Vec<u8>, HostError> {
             match self.files.borrow().get(path) {
-                Some(data) => String::from_utf8(data.clone())
-                    .map_err(|e| HostError::IoError(format!("invalid UTF-8: {e}"))),
+                Some(data) => Ok(data.clone()),
                 None => Err(HostError::NotFound(path.to_string())),
             }
         }
 
-        fn write_file(&self, path: &str, data: &str, mode: WriteMode) -> Result<(), HostError> {
+        fn write_file(&self, path: &str, data: &[u8], mode: WriteMode) -> Result<(), HostError> {
             let mut files = self.files.borrow_mut();
             match mode {
                 WriteMode::Truncate => {
-                    files.insert(path.to_string(), data.as_bytes().to_vec());
+                    files.insert(path.to_string(), data.to_vec());
                 }
                 WriteMode::Append => {
                     let entry = files.entry(path.to_string()).or_default();
-                    entry.extend_from_slice(data.as_bytes());
+                    entry.extend_from_slice(data);
                 }
             }
             Ok(())

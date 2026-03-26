@@ -43,6 +43,15 @@ extern "C" {
 
     /// Close a socket. Returns 0 on success, negative on error.
     fn host_socket_close(req_ptr: *const u8, req_len: u32) -> i32;
+
+    /// Invoke a method on a dynamically loaded native module WASM.
+    /// module/method/args are passed separately (not wrapped in JSON).
+    fn host_native_invoke(
+        module_ptr: *const u8, module_len: u32,
+        method_ptr: *const u8, method_len: u32,
+        args_ptr: *const u8, args_len: u32,
+        out_ptr: *mut u8, out_cap: u32,
+    ) -> i32;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +412,86 @@ pub mod _codepod {
             Err(py_vm.new_exception_msg(
                 py_vm.ctx.exceptions.runtime_error.to_owned(),
                 "_codepod.extension_call() is only available inside a WASM sandbox".to_owned(),
+            ))
+        }
+    }
+
+    // ----- Native module bridge -----
+
+    /// Call a method on a dynamically loaded native module.
+    ///
+    /// Usage: `_codepod.native_call(module, method, args_json) -> str`
+    ///
+    /// Returns JSON response string from the native module.
+    #[pyfunction]
+    fn native_call(
+        module: vm::builtins::PyStrRef,
+        method: vm::builtins::PyStrRef,
+        args_json: vm::builtins::PyStrRef,
+        py_vm: &VirtualMachine,
+    ) -> PyResult<vm::PyObjectRef> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let module_bytes = module.as_str().as_bytes();
+            let method_bytes = method.as_str().as_bytes();
+            let args_bytes = args_json.as_str().as_bytes();
+
+            let mut out_buf = vec![0u8; 65536]; // 64KB initial
+            let rc = unsafe {
+                host_native_invoke(
+                    module_bytes.as_ptr(), module_bytes.len() as u32,
+                    method_bytes.as_ptr(), method_bytes.len() as u32,
+                    args_bytes.as_ptr(), args_bytes.len() as u32,
+                    out_buf.as_mut_ptr(), out_buf.len() as u32,
+                )
+            };
+
+            if rc < 0 {
+                return Err(py_vm.new_exception_msg(
+                    py_vm.ctx.exceptions.runtime_error.to_owned(),
+                    format!("native_call failed with error code {}", rc),
+                ));
+            }
+
+            let len = rc as usize;
+            if len > out_buf.len() {
+                // Retry with larger buffer
+                out_buf.resize(len, 0);
+                let rc2 = unsafe {
+                    host_native_invoke(
+                        module_bytes.as_ptr(), module_bytes.len() as u32,
+                        method_bytes.as_ptr(), method_bytes.len() as u32,
+                        args_bytes.as_ptr(), args_bytes.len() as u32,
+                        out_buf.as_mut_ptr(), out_buf.len() as u32,
+                    )
+                };
+                if rc2 < 0 {
+                    return Err(py_vm.new_exception_msg(
+                        py_vm.ctx.exceptions.runtime_error.to_owned(),
+                        format!("native_call retry failed: {}", rc2),
+                    ));
+                }
+                out_buf.truncate(rc2 as usize);
+            } else {
+                out_buf.truncate(len);
+            }
+
+            let result_str = String::from_utf8(out_buf).map_err(|e| {
+                py_vm.new_exception_msg(
+                    py_vm.ctx.exceptions.runtime_error.to_owned(),
+                    format!("invalid UTF-8 in native response: {}", e),
+                )
+            })?;
+
+            Ok(py_vm.ctx.new_str(result_str).into())
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (module, method, args_json);
+            Err(py_vm.new_exception_msg(
+                py_vm.ctx.exceptions.runtime_error.to_owned(),
+                "_codepod.native_call() is only available inside a WASM sandbox".to_owned(),
             ))
         }
     }

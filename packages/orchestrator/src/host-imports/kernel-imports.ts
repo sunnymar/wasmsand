@@ -18,6 +18,7 @@
 
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
+import type { NativeModuleRegistry } from '../process/native-modules.js';
 import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
 import type { FdTarget } from '../wasi/fd-target.js';
 import { createStaticTarget } from '../wasi/fd-target.js';
@@ -51,6 +52,9 @@ export interface KernelImportsOptions {
 
   /** Called by host_spawn to actually create and start a WASM process. */
   spawnProcess?: (req: SpawnRequest, fdTable: Map<number, FdTarget>) => number;
+
+  /** Registry of dynamically loaded native Python module WASMs. */
+  nativeModules?: NativeModuleRegistry;
 }
 
 export function createKernelImports(opts: KernelImportsOptions): Record<string, WebAssembly.ImportValue> {
@@ -221,6 +225,38 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         return fetchError(msg);
+      }
+    },
+
+    // ── Native module bridge ──
+
+    // host_native_invoke(module_ptr, module_len, method_ptr, method_len,
+    //                    args_ptr, args_len, out_ptr, out_cap) -> i32
+    // Calls invoke() on a dynamically loaded native Python module WASM.
+    host_native_invoke(
+      modulePtr: number, moduleLen: number,
+      methodPtr: number, methodLen: number,
+      argsPtr: number, argsLen: number,
+      outPtr: number, outCap: number,
+    ): number {
+      if (!opts.nativeModules) {
+        return writeJson(memory, outPtr, outCap, { error: 'native modules not available' });
+      }
+      const moduleName = readString(memory, modulePtr, moduleLen);
+      const method = readString(memory, methodPtr, methodLen);
+      const argsJson = readString(memory, argsPtr, argsLen);
+
+      try {
+        const result = opts.nativeModules.invoke(moduleName, method, argsJson);
+        const encoded = new TextEncoder().encode(result);
+        if (encoded.length > outCap) {
+          return encoded.length; // signal need more space
+        }
+        new Uint8Array(memory.buffer, outPtr, encoded.length).set(encoded);
+        return encoded.length;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return writeJson(memory, outPtr, outCap, { error: msg });
       }
     },
 
