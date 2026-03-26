@@ -392,6 +392,7 @@ fn cmd_pkg(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) ->
         "remove" => pkg_remove(state, host, sub_args),
         "list" => pkg_list(host),
         "info" => pkg_info(host, sub_args),
+        "search" => pkg_search(state, host),
         other => {
             shell_eprint!("pkg: unknown subcommand '{other}'\n");
             RunResult::exit(1)
@@ -454,13 +455,57 @@ fn pkg_name_from_url(url: &str) -> String {
         .to_string()
 }
 
+/// Pkg index from the remote codepod registry (pkg-index.json).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PkgIndex {
+    #[allow(dead_code)]
+    version: u32,
+    packages: std::collections::HashMap<String, PkgIndexEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PkgIndexEntry {
+    version: String,
+    summary: String,
+    tools: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    size_bytes: usize,
+}
+
+/// Fetch the pkg index from the registry.
+fn fetch_pkg_index(state: &ShellState, host: &dyn HostInterface) -> Result<PkgIndex, String> {
+    let cache_path = "/etc/codepod/pkg-index.json";
+    if let Ok(cached) = host.read_file_str(cache_path) {
+        if let Ok(index) = serde_json::from_str::<PkgIndex>(&cached) {
+            return Ok(index);
+        }
+    }
+    let base_url = state.env.get("CODEPOD_REGISTRY")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
+    let url = format!("{base_url}/pkg-index.json");
+    let result = host.fetch(&url, "GET", &[], None);
+    if let Some(ref err) = result.error {
+        return Err(format!("failed to fetch pkg index: {err}"));
+    }
+    if !result.ok {
+        return Err(format!("pkg index returned status {}", result.status));
+    }
+    let index: PkgIndex = serde_json::from_str(&result.body)
+        .map_err(|e| format!("invalid pkg index: {e}"))?;
+    let _ = host.mkdir("/etc/codepod");
+    let _ = host.write_file(cache_path, result.body.as_bytes(), WriteMode::Truncate);
+    Ok(index)
+}
+
 fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]) -> RunResult {
     if args.is_empty() {
-        shell_eprint!("{}", "pkg install: no URL specified\n");
+        shell_eprint!("{}", "pkg install: no package name or URL specified\n");
         return RunResult::exit(1);
     }
 
-    let url = &args[0];
+    let arg = &args[0];
 
     // Read policy
     let policy = match read_pkg_policy(host) {
@@ -475,6 +520,99 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
         shell_eprint!("{}", "pkg: package manager is disabled\n");
         return RunResult::exit(1);
     }
+
+    let mut packages = read_pkg_metadata(host);
+
+    // If arg is a package name (no ://), look up in registry
+    if !arg.contains("://") {
+        let name = arg;
+
+        // Check duplicate
+        if packages.iter().any(|p| p.name == *name) {
+            shell_print!("pkg: {name} is already installed\n");
+            return RunResult::empty();
+        }
+
+        // Fetch registry
+        let pkg_index = match fetch_pkg_index(state, host) {
+            Ok(idx) => idx,
+            Err(e) => {
+                shell_eprint!("pkg install: {e}\n");
+                return RunResult::exit(1);
+            }
+        };
+
+        let entry = match pkg_index.packages.get(name) {
+            Some(e) => e,
+            None => {
+                shell_eprint!("pkg install: package '{name}' not found in registry\n");
+                return RunResult::exit(1);
+            }
+        };
+
+        let base_url = state.env.get("CODEPOD_REGISTRY")
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
+
+        // Check max installed
+        if let Some(max) = policy.max_installed_packages {
+            if packages.len() >= max {
+                shell_eprint!("pkg install: Maximum of {max} packages reached\n");
+                return RunResult::exit(1);
+            }
+        }
+
+        // Download and install each tool in the package
+        let _ = host.mkdir("/usr/share/pkg");
+        let _ = host.mkdir("/usr/share/pkg/bin");
+        let mut total_size = 0;
+
+        for (tool_name, wasm_path) in &entry.tools {
+            let url = format!("{base_url}/{wasm_path}");
+            shell_print!("Downloading {tool_name}...\n");
+            let result = host.fetch(&url, "GET", &[], None);
+            if result.error.is_some() || !result.ok {
+                let err = result.error.unwrap_or_else(|| format!("status {}", result.status));
+                shell_eprint!("pkg install: failed to download {tool_name}: {err}\n");
+                return RunResult::exit(1);
+            }
+            let wasm_bytes = result.body_bytes();
+
+            // Check size limit
+            if let Some(max_bytes) = policy.max_package_bytes {
+                if wasm_bytes.len() > max_bytes {
+                    shell_eprint!("pkg install: {tool_name} size {} exceeds limit of {max_bytes}\n", wasm_bytes.len());
+                    return RunResult::exit(1);
+                }
+            }
+
+            let dest = format!("/usr/share/pkg/bin/{tool_name}.wasm");
+            if let Err(e) = host.write_file(&dest, &wasm_bytes, WriteMode::Truncate) {
+                shell_eprint!("pkg install: failed to write {tool_name}: {e}\n");
+                return RunResult::exit(1);
+            }
+            if let Err(e) = host.register_tool(tool_name, &dest) {
+                shell_eprint!("pkg install: failed to register {tool_name}: {e}\n");
+                return RunResult::exit(1);
+            }
+            total_size += wasm_bytes.len();
+        }
+
+        packages.push(PkgInfo {
+            name: name.clone(),
+            url: format!("registry:{name}"),
+            size: total_size,
+            installed_at: host.time() as u64,
+        });
+        write_pkg_metadata(host, &packages);
+
+        let tools: Vec<&str> = entry.tools.keys().map(|s| s.as_str()).collect();
+        shell_print!("Installed {name} ({})\n", tools.join(", "));
+        return RunResult::empty();
+    }
+
+    // URL-based install (existing behavior)
+    let url = arg;
 
     // Check host against allowedHosts
     if let Some(ref allowed) = policy.allowed_hosts {
@@ -491,7 +629,6 @@ fn pkg_install(state: &mut ShellState, host: &dyn HostInterface, args: &[String]
         }
     }
 
-    let mut packages = read_pkg_metadata(host);
     let name = pkg_name_from_url(url);
 
     // Check duplicate
@@ -666,6 +803,42 @@ fn pkg_info(host: &dyn HostInterface, args: &[String]) -> RunResult {
             RunResult::exit(1)
         }
     }
+}
+
+fn pkg_search(state: &ShellState, host: &dyn HostInterface) -> RunResult {
+    let pkg_index = match fetch_pkg_index(state, host) {
+        Ok(idx) => idx,
+        Err(e) => {
+            shell_eprint!("pkg search: {e}\n");
+            return RunResult::exit(1);
+        }
+    };
+    let installed = read_pkg_metadata(host);
+
+    let mut out = String::new();
+    let mut entries: Vec<(&str, &PkgIndexEntry)> = pkg_index.packages.iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect();
+    entries.sort_by_key(|(k, _)| *k);
+
+    for (name, entry) in &entries {
+        let status = if installed.iter().any(|p| p.name == *name) {
+            "installed"
+        } else {
+            "available"
+        };
+        let tools: Vec<&str> = entry.tools.keys().map(|s| s.as_str()).collect();
+        out.push_str(&format!(
+            "{name} ({}) — {} [{}]\n",
+            entry.version, entry.summary, status
+        ));
+        out.push_str(&format!("  tools: {}\n", tools.join(", ")));
+    }
+    if out.is_empty() {
+        out.push_str("No packages available in registry\n");
+    }
+    shell_print!("{}", out);
+    RunResult::empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -1366,6 +1539,7 @@ fn pip_show(state: &ShellState, host: &dyn HostInterface, args: &[String]) -> Ru
     shell_eprint!("pip show: package '{name}' not found\n");
     RunResult::exit(1)
 }
+
 
 
 
