@@ -294,7 +294,7 @@ describe('Security MVP acceptance', () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
-      security: { limits: { fileCount: 250 } },
+      security: { limits: { fileCount: 300 } },
     });
     let threw = false;
     for (let i = 0; i < 250; i++) {

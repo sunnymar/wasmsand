@@ -96,11 +96,9 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Init writes tool stubs to /bin and /usr/bin (each storing the full
-    // wasm path), plus pip/pkg config data. Total init overhead is ~550KB
-    // with long local paths. Use a limit that fits init + first file but
-    // not the second.
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 700_000 });
+    // Init overhead is ~2.5MB (pip registry JSON, python shims, etc.).
+    // Use a limit that fits init + first file (40KB) but not the second (200KB).
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 2_700_000 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(40_000));
     expect(() => {
       sandbox.writeFile('/tmp/b.txt', new Uint8Array(200_000));
@@ -411,9 +409,9 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
         adapter: new NodeAdapter(),
-        security: { limits: { fileCount: 250 } },
+        security: { limits: { fileCount: 300 } },
       });
-      // Default layout creates ~115 inodes (9 dirs + 95+ tools + config);
+      // Default layout creates ~256 inodes (dirs + python shims + config files);
       // try to fill up the remaining allocation
       let threw = false;
       for (let i = 0; i < 200; i++) {

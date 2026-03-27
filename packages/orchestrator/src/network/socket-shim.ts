@@ -41,9 +41,51 @@ export function getSslShimSource(): string {
   return readShim('ssl.py');
 }
 
-/** Get the sitecustomize.py source that injects shims at startup. */
+/**
+ * Build a sitecustomize.py that injects subprocess (always) and optionally
+ * socket + ssl (when networking is enabled).
+ *
+ * subprocess.py is always installed in /usr/lib/python, so injecting it here
+ * ensures `os.popen` is patched at interpreter start even without an explicit
+ * `import subprocess`.
+ */
+export function buildSiteCustomizeSource(opts: { networking?: boolean } = {}): string {
+  let src = `\
+"""
+Wasmsand sitecustomize — injects Python shims at interpreter startup.
+
+RustPython's frozen modules take priority over PYTHONPATH files.
+Loading our shims here (runs at interpreter startup) injects them into
+sys.modules before any other code can import the frozen versions.
+"""
+import sys
+import importlib.machinery
+import importlib.util
+
+
+def _inject_shim(name, path):
+    """Load a .py file and register it as a sys.modules entry."""
+    loader = importlib.machinery.SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_file_location(name, path, loader=loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    loader.exec_module(mod)
+
+
+_inject_shim("subprocess", "/usr/lib/python/subprocess.py")
+`;
+
+  if (opts.networking) {
+    src += `\n_inject_shim("socket", "/usr/lib/python/socket.py")\n`;
+    src += `_inject_shim("ssl", "/usr/lib/python/ssl.py")\n`;
+  }
+
+  return src;
+}
+
+/** Get the sitecustomize.py source with network shims (legacy alias). */
 export function getSiteCustomizeSource(): string {
-  return readShim('sitecustomize.py');
+  return buildSiteCustomizeSource({ networking: true });
 }
 
 /** Get the requests module shim (lightweight requests-compatible HTTP library). */

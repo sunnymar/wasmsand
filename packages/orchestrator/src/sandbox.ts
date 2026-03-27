@@ -27,7 +27,7 @@ import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge } from './network/bridge.js';
-import { getSocketShimSource, getSslShimSource, getSiteCustomizeSource, getRequestsShimSource } from './network/socket-shim.js';
+import { getSocketShimSource, getSslShimSource, buildSiteCustomizeSource, getRequestsShimSource } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
 import type { WorkerExecutor } from './execution/worker-executor.js';
@@ -39,7 +39,8 @@ import { HostMount } from './vfs/host-mount.js';
 import type { VirtualProvider } from './vfs/provider.js';
 import { ExtensionRegistry } from './extension/registry.js';
 import type { ExtensionConfig } from './extension/types.js';
-import { CODEPOD_EXT_SOURCE } from './extension/codepod-ext-shim.js';
+import { CODEPOD_EXT_SOURCE, generateCommandShim } from './extension/codepod-ext-shim.js';
+import { SUBPROCESS_PY_SOURCE } from './process/subprocess-shim.js';
 import { PackageRegistry } from './packages/registry.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
@@ -232,41 +233,68 @@ export class Sandbox {
       });
     }
 
-    // Bootstrap Python socket shim when networking is enabled
-    if (bridge) {
-      const networkMode = options.network?.mode ?? 'restricted';
+    // Bootstrap subprocess shim and sitecustomize.py (always installed).
+    // If networking is enabled, also install socket/ssl/requests shims.
+    {
+      const enc = new TextEncoder();
       vfs.withWriteAccess(() => {
         vfs.mkdirp('/usr/lib/python');
-        vfs.writeFile('/usr/lib/python/socket.py', new TextEncoder().encode(getSocketShimSource(networkMode)));
-        vfs.writeFile('/usr/lib/python/ssl.py', new TextEncoder().encode(getSslShimSource()));
-        // sitecustomize.py pre-loads our socket+ssl shims into sys.modules at
-        // interpreter startup, bypassing RustPython's frozen modules which would
-        // otherwise take priority over PYTHONPATH files.
-        vfs.writeFile('/usr/lib/python/sitecustomize.py', new TextEncoder().encode(getSiteCustomizeSource()));
-        // requests module shim — lightweight requests-compatible API that
-        // routes through _codepod.fetch() / http.client via the socket shim
-        vfs.writeFile('/usr/lib/python/requests.py', new TextEncoder().encode(getRequestsShimSource()));
+        vfs.writeFile('/usr/lib/python/subprocess.py', enc.encode(SUBPROCESS_PY_SOURCE));
+        // sitecustomize.py pre-loads our shims into sys.modules at interpreter
+        // startup, bypassing RustPython's frozen modules which would otherwise
+        // take priority over PYTHONPATH files.
+        vfs.writeFile('/usr/lib/python/sitecustomize.py', enc.encode(buildSiteCustomizeSource({ networking: !!bridge })));
+        if (bridge) {
+          const networkMode = options.network?.mode ?? 'restricted';
+          vfs.writeFile('/usr/lib/python/socket.py', enc.encode(getSocketShimSource(networkMode)));
+          vfs.writeFile('/usr/lib/python/ssl.py', enc.encode(getSslShimSource()));
+          // requests module shim — lightweight requests-compatible API that
+          // routes through _codepod.fetch() / http.client via the socket shim
+          vfs.writeFile('/usr/lib/python/requests.py', enc.encode(getRequestsShimSource()));
+        }
       });
     }
 
-    // Install extension Python package files in VFS
-    if (extensionRegistry.getPackageNames().length > 0) {
+    // Install Python shims for extensions with command and/or pythonPackage.
+    // Every extension that has a command handler gets an auto-generated _shim.py
+    // that wraps the command via codepod_ext.call() — no subprocess needed.
+    // If the extension also provides pythonPackage.files, those are installed
+    // alongside the shim and can import from ._shim.
+    const extWithPython = extensionRegistry.list().filter(
+      (e) => e.command != null || e.pythonPackage != null,
+    );
+    if (extWithPython.length > 0) {
       vfs.withWriteAccess(() => {
+        const enc = new TextEncoder();
         vfs.mkdirp('/usr/lib/python');
-        vfs.writeFile('/usr/lib/python/codepod_ext.py',
-          new TextEncoder().encode(CODEPOD_EXT_SOURCE));
-        for (const name of extensionRegistry.getPackageNames()) {
-          const ext = extensionRegistry.get(name)!;
-          const pkg = ext.pythonPackage!;
-          vfs.mkdirp(`/usr/lib/python/${name}`);
-          for (const [fp, src] of Object.entries(pkg.files)) {
-            // Ensure subdirectories exist for nested paths
-            const parts = fp.split('/');
-            if (parts.length > 1) {
-              vfs.mkdirp(`/usr/lib/python/${name}/${parts.slice(0, -1).join('/')}`);
+        vfs.writeFile('/usr/lib/python/codepod_ext.py', enc.encode(CODEPOD_EXT_SOURCE));
+        for (const ext of extWithPython) {
+          vfs.mkdirp(`/usr/lib/python/${ext.name}`);
+          // Auto-generate _shim.py for any extension with a command handler.
+          if (ext.command) {
+            vfs.writeFile(
+              `/usr/lib/python/${ext.name}/_shim.py`,
+              enc.encode(generateCommandShim(ext.name)),
+            );
+          }
+          if (ext.pythonPackage) {
+            // Install author-provided package files (may import from ._shim).
+            for (const [fp, src] of Object.entries(ext.pythonPackage.files)) {
+              const parts = fp.split('/');
+              if (parts.length > 1) {
+                vfs.mkdirp(`/usr/lib/python/${ext.name}/${parts.slice(0, -1).join('/')}`);
+              }
+              vfs.writeFile(`/usr/lib/python/${ext.name}/${fp}`, enc.encode(src));
             }
-            vfs.writeFile(`/usr/lib/python/${name}/${fp}`,
-              new TextEncoder().encode(src));
+          } else if (ext.command) {
+            // No explicit package: auto-generate __init__.py that re-exports run().
+            vfs.writeFile(
+              `/usr/lib/python/${ext.name}/__init__.py`,
+              enc.encode(
+                `"""Auto-generated package for the '${ext.name}' extension command."""\n` +
+                `from ${ext.name}._shim import run\n\n__all__ = ['run']\n`,
+              ),
+            );
           }
         }
       });

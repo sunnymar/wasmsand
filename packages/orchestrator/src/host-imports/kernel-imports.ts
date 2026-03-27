@@ -14,6 +14,7 @@
  *   Network / extensions:
  *   - host_network_fetch: HTTP fetch via NetworkBridge (async/JSPI)
  *   - host_extension_invoke: call a host extension (Python only; shell uses host_spawn)
+ *   - host_run_command: run a shell command and collect output (async/JSPI, Python subprocess)
  */
 
 import type { NetworkBridgeLike } from '../network/bridge.js';
@@ -49,6 +50,9 @@ export interface KernelImportsOptions {
    * extensionRegistry takes precedence.
    */
   extensionHandler?: (cmd: Record<string, unknown>) => Record<string, unknown>;
+
+  /** Run a shell command and collect output. Used by Python _codepod.spawn(). */
+  runCommand?: (cmd: string, stdin: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
   /** Called by host_spawn to actually create and start a WASM process. */
   spawnProcess?: (req: SpawnRequest, fdTable: Map<number, FdTarget>) => number;
@@ -352,15 +356,32 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           const req = JSON.parse(reqJson) as {
             name?: string;
             extension?: string;
-            args?: string[];
+            // When called from Python _codepod.extension_call(**kwargs), the entire
+            // kwargs dict is serialized as the `args` field. Unpack it here.
+            args?: string[] | Record<string, unknown>;
             stdin?: string;
             env?: [string, string][];
             cwd?: string;
           };
 
           const name = (req.name ?? req.extension ?? '') as string;
-          const args = req.args ?? [];
-          const stdin = req.stdin ?? '';
+
+          // Python kwargs arrive as `args: {args: [...], stdin: "...", ...}`.
+          // Detect and unpack that shape; otherwise treat args as a string array.
+          let args: string[];
+          let stdin: string;
+          if (Array.isArray(req.args)) {
+            args = req.args as string[];
+            stdin = req.stdin ?? '';
+          } else if (req.args && typeof req.args === 'object') {
+            const kw = req.args as Record<string, unknown>;
+            args = Array.isArray(kw.args) ? (kw.args as string[]) : [];
+            stdin = typeof kw.stdin === 'string' ? kw.stdin : (req.stdin ?? '');
+          } else {
+            args = [];
+            stdin = req.stdin ?? '';
+          }
+
           const envObj: Record<string, string> = {};
           if (req.env) for (const [k, v] of req.env) envObj[k] = v;
           const cwd = req.cwd ?? '/';
@@ -399,6 +420,33 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       return writeJson(memory, outPtr, outCap, {
         exit_code: 1, stdout: '', stderr: 'extensions not available\n',
       });
+    },
+
+    // host_run_command(req_ptr, req_len, out_ptr, out_cap) -> i32 (async/JSPI)
+    // Runs a shell command and captures output. Used by Python _codepod.spawn().
+    async host_run_command(
+      reqPtr: number, reqLen: number,
+      outPtr: number, outCap: number,
+    ): Promise<number> {
+      if (!opts.runCommand) {
+        return writeJson(memory, outPtr, outCap, {
+          exit_code: 1, stdout: '', stderr: 'subprocess not available\n',
+        });
+      }
+      try {
+        const req = JSON.parse(readString(memory, reqPtr, reqLen)) as { cmd: string; stdin?: string };
+        const result = await opts.runCommand(req.cmd, req.stdin ?? '');
+        return writeJson(memory, outPtr, outCap, {
+          exit_code: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return writeJson(memory, outPtr, outCap, {
+          exit_code: 1, stdout: '', stderr: `${msg}\n`,
+        });
+      }
     },
 
   };

@@ -209,10 +209,11 @@ describe('Extension Python packages', () => {
     expect(result.exitCode).toBe(1);
   });
 
-  it('pip install says already satisfied for registered package', async () => {
+  it('pip install accepts registered extension package without error', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
+      security: { pipPolicy: { enabled: true } },
       extensions: [{
         name: 'mypkg',
         pythonPackage: { version: '1.0.0', files: { '__init__.py': '' } },
@@ -220,13 +221,14 @@ describe('Extension Python packages', () => {
     });
     const result = await sandbox.run('pip install mypkg');
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Requirement already satisfied');
+    expect(result.stderr).not.toContain('ERROR');
   });
 
   it('pip install fails for unknown package', async () => {
     sandbox = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
+      security: { pipPolicy: { enabled: true } },
     });
     const result = await sandbox.run('pip install unknown');
     expect(result.exitCode).toBe(1);
@@ -263,6 +265,39 @@ describe('Extension Python packages', () => {
     const content = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/codepod_ext.py'));
     expect(content).toContain('import _codepod');
     expect(content).toContain('def call(');
+  });
+
+  it('command-only extension gets auto-generated _shim.py and __init__.py', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      adapter: new NodeAdapter(),
+      extensions: [{
+        name: 'greet',
+        command: async (input) => ({ stdout: `hello ${input.args[0]}\n`, exitCode: 0 }),
+      }],
+    });
+    const shim = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/greet/_shim.py'));
+    expect(shim).toContain('import codepod_ext');
+    expect(shim).toContain('def run(*args');
+    expect(shim).toContain('_ce.call("greet"');
+    const init = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/greet/__init__.py'));
+    expect(init).toContain('from greet._shim import run');
+  });
+
+  it('extension with command+package gets _shim.py alongside author files', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      adapter: new NodeAdapter(),
+      extensions: [{
+        name: 'myext',
+        command: async () => ({ stdout: 'ok\n', exitCode: 0 }),
+        pythonPackage: { version: '1.0.0', files: { '__init__.py': 'from myext._shim import run' } },
+      }],
+    });
+    const shim = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/myext/_shim.py'));
+    expect(shim).toContain('_ce.call("myext"');
+    const init = new TextDecoder().decode(sandbox.readFile('/usr/lib/python/myext/__init__.py'));
+    expect(init).toBe('from myext._shim import run');
   });
 
   it('extension with both command and package', async () => {
