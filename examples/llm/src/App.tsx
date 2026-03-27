@@ -4,11 +4,13 @@ import { initSandbox } from './sandbox.js';
 import { initEngine } from './llm.js';
 import { ModelLoader } from './components/ModelLoader.js';
 import { Chat } from './components/Chat.js';
+import { IntroDialog, shouldShowIntro } from './components/IntroDialog.js';
 import type { Sandbox } from '@codepod/sandbox';
-import { MODELS, DEFAULT_MODEL_ID } from './models.js';
+import { DEFAULT_MODEL_ID } from './models.js';
 
 export function App() {
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
+  const [showIntro, setShowIntro] = useState(() => shouldShowIntro());
   const [boot, setBoot] = useState<BootState>({ phase: 'booting', modelProgress: 0, modelText: '', crossOriginIsolated: window.crossOriginIsolated });
   const [sandboxReady, setSandboxReady] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
@@ -88,5 +90,10 @@ export function App() {
     );
   }
 
-  return <Chat engine={engineRef.current} sandbox={sandboxRef.current} sandboxReady={sandboxReady} modelId={modelId} onModelChange={handleModelChange} />;
+  return (
+    <>
+      {showIntro && <IntroDialog onDismiss={() => setShowIntro(false)} />}
+      <Chat engine={engineRef.current} sandbox={sandboxRef.current} sandboxReady={sandboxReady} modelId={modelId} onModelChange={handleModelChange} />
+    </>
+  );
 }
