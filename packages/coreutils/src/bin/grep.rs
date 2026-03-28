@@ -3,7 +3,7 @@
 use regex::RegexBuilder;
 use std::env;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 use std::process;
 
@@ -28,6 +28,9 @@ struct Options {
     files_without_match: bool,
     include_globs: Vec<String>,
     exclude_globs: Vec<String>,
+    whole_line: bool,
+    patterns: Vec<String>,
+    pattern_files: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +360,9 @@ fn main() {
         files_without_match: false,
         include_globs: Vec::new(),
         exclude_globs: Vec::new(),
+        whole_line: false,
+        patterns: Vec::new(),
+        pattern_files: Vec::new(),
     };
     let mut positional: Vec<String> = Vec::new();
     let mut past_flags = false;
@@ -435,6 +441,37 @@ fn main() {
             i += 1;
             continue;
         }
+        if arg == "-e" || arg == "--regexp" {
+            i += 1;
+            if i < args.len() {
+                opts.patterns.push(args[i].clone());
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(val) = arg.strip_prefix("--regexp=") {
+            opts.patterns.push(val.to_string());
+            i += 1;
+            continue;
+        }
+        if arg == "-f" || arg == "--file" {
+            i += 1;
+            if i < args.len() {
+                opts.pattern_files.push(args[i].clone());
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(val) = arg.strip_prefix("--file=") {
+            opts.pattern_files.push(val.to_string());
+            i += 1;
+            continue;
+        }
+        if arg == "-x" || arg == "--line-regexp" {
+            opts.whole_line = true;
+            i += 1;
+            continue;
+        }
         if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
             let chars: Vec<char> = arg[1..].chars().collect();
             let mut ci = 0;
@@ -455,6 +492,29 @@ fn main() {
                     's' => opts.suppress_errors = true,
                     'h' => opts.no_filename = true,
                     'H' => opts.with_filename = true,
+                    'x' => opts.whole_line = true,
+                    'e' => {
+                        // -ePattern or -e Pattern (next arg)
+                        let val = if ci + 1 < chars.len() {
+                            chars[ci + 1..].iter().collect::<String>()
+                        } else {
+                            i += 1;
+                            if i < args.len() { args[i].clone() } else { String::new() }
+                        };
+                        opts.patterns.push(val);
+                        break;
+                    }
+                    'f' => {
+                        // -fFILE or -f FILE (next arg)
+                        let val = if ci + 1 < chars.len() {
+                            chars[ci + 1..].iter().collect::<String>()
+                        } else {
+                            i += 1;
+                            if i < args.len() { args[i].clone() } else { String::new() }
+                        };
+                        opts.pattern_files.push(val);
+                        break;
+                    }
                     'A' | 'B' | 'C' | 'm' => {
                         // Value may be remainder of this arg or the next arg
                         let val_str = if ci + 1 < chars.len() {
@@ -493,23 +553,72 @@ fn main() {
         i += 1;
     }
 
-    if positional.is_empty() {
-        eprintln!("grep: missing pattern");
-        eprintln!("Usage: grep [OPTION]... PATTERN [FILE]...");
-        process::exit(2);
+    // Collect patterns from -e flags and (if no -e/-f flags) from first positional arg
+    if opts.patterns.is_empty() && opts.pattern_files.is_empty() {
+        if positional.is_empty() {
+            eprintln!("grep: missing pattern");
+            eprintln!("Usage: grep [OPTION]... PATTERN [FILE]...");
+            process::exit(2);
+        }
+        opts.patterns.push(positional.remove(0));
     }
 
-    let pattern = &positional[0];
-    let mut pattern_str = if opts.fixed_string {
-        regex::escape(pattern)
-    } else if opts.extended {
-        pattern.clone()
-    } else {
-        bre_to_ere(pattern)
-    };
-    if opts.word_match {
-        pattern_str = format!(r"\b{}\b", pattern_str);
+    // Load patterns from -f files
+    for pfile in &opts.pattern_files {
+        let content = if pfile == "-" {
+            let mut s = String::new();
+            io::stdin().read_to_string(&mut s).unwrap_or(0);
+            s
+        } else {
+            match fs::read_to_string(pfile) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("grep: {}: {}", pfile, e);
+                    process::exit(2);
+                }
+            }
+        };
+        for line in content.lines() {
+            opts.patterns.push(line.to_string());
+        }
     }
+
+    // Newlines within a single pattern string are treated as pattern separators
+    // (GNU grep behavior). Expand patterns by splitting on '\n'.
+    let expanded_patterns: Vec<String> = opts.patterns.iter()
+        .flat_map(|p| p.lines().map(|l| l.to_string()).collect::<Vec<_>>())
+        .collect();
+
+    // Build combined regex from all patterns
+    // Empty pattern list (e.g. -f empty_file) matches nothing by default.
+    let pattern_str = if expanded_patterns.is_empty() {
+        // No patterns — use a pattern that never matches any non-empty input.
+        // We handle this as a special case: with -v it inverts to "match all".
+        // Use "$a" which always fails (no content after end of string).
+        String::from("$a")
+    } else {
+        let parts: Vec<String> = expanded_patterns.iter().map(|p| {
+            let mut s = if opts.fixed_string {
+                regex::escape(p)
+            } else if opts.extended {
+                p.clone()
+            } else {
+                bre_to_ere(p)
+            };
+            if opts.whole_line {
+                s = format!("^(?:{})$", s);
+            }
+            if opts.word_match {
+                s = format!(r"\b{}\b", s);
+            }
+            s
+        }).collect();
+        if parts.len() == 1 {
+            parts.into_iter().next().unwrap()
+        } else {
+            parts.iter().map(|p| format!("(?:{})", p)).collect::<Vec<_>>().join("|")
+        }
+    };
     let re = RegexBuilder::new(&pattern_str)
         .case_insensitive(opts.ignore_case)
         .build()
@@ -517,7 +626,7 @@ fn main() {
             eprintln!("grep: Invalid regular expression: {}", e);
             process::exit(2);
         });
-    let files = &positional[1..];
+    let files = &positional;
 
     let mut found_any = false;
     let mut had_error = false;
@@ -544,7 +653,22 @@ fn main() {
             files.len() > 1 || opts.recursive
         };
         for file in files {
-            let path = Path::new(file);
+            if file == "-" {
+                let stdin = io::stdin();
+                match grep_reader(stdin.lock(), &re, &opts, "(standard input)", show_filename) {
+                    Ok(found) => {
+                        if found {
+                            found_any = true;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("grep: (standard input): {}", e);
+                        had_error = true;
+                    }
+                }
+                continue;
+            }
+            let path = Path::new(file.as_str());
             match grep_path(path, &re, &opts, show_filename) {
                 Ok(found) => {
                     if found {
@@ -563,11 +687,16 @@ fn main() {
 
     if opts.files_without_match {
         // With -L, exit 0 if any file had no matches
-        process::exit(if found_any && !had_error { 1 } else { 0 });
+        if had_error {
+            process::exit(2);
+        }
+        process::exit(if found_any { 1 } else { 0 });
+    } else if had_error {
+        // Errors always produce exit code 2, even when a match was found
+        // (GNU grep behavior; -s suppresses error messages but not exit code)
+        process::exit(2);
     } else if found_any {
         process::exit(0);
-    } else if had_error && !opts.suppress_errors {
-        process::exit(2);
     } else {
         process::exit(1);
     }

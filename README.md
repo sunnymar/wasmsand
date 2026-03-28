@@ -9,7 +9,7 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 ## What it does
 
 - **Shell execution** — pipes, redirects, variables, globbing, control flow, functions, subshells, background jobs (`&`), aliases, arrays, process substitution
-- **100+ commands** — cat, grep, sed, awk, find, sort, jq, tar, curl, sqlite3, `pdfinfo`, `pdfunite`, `pdfseparate`, `xlsx2csv`, `csv2xlsx`, and more
+- **100+ commands** — cat, grep, sed, awk, find, sort, jq, tar, curl, sqlite3, `pdfinfo`, `pdftotext`, `pdfunite`, `pdfseparate`, `xlsx2csv`, `csv2xlsx`, and more
 - **Native document tools** — inspect and transform PDFs and spreadsheets with familiar real-world CLI names
 - **Python 3** via RustPython compiled to WASI, with **numpy** support (native Rust implementation)
 - **Virtual filesystem** — in-memory POSIX VFS with optional persistence
@@ -22,7 +22,7 @@ LLMs are trained on enormous amounts of shell and Python usage. Rather than inve
 
 codepod ships document-oriented commands as native WASM executables, so they behave like the rest of the built-in shell toolchain instead of host-side extensions.
 
-- **PDF** — `pdfinfo`, `pdfunite`, `pdfseparate`
+- **PDF** — `pdfinfo`, `pdftotext`, `pdfunite`, `pdfseparate`
 - **Spreadsheet** — `xlsx2csv`, `csv2xlsx`
 
 These follow familiar real-world CLI names and mostly familiar flags, which matters for LLMs: models already know how to reach for `pdfinfo` or `xlsx2csv` in the same way they reach for `awk`, `sed`, or `sqlite3`.
@@ -30,6 +30,10 @@ These follow familiar real-world CLI names and mostly familiar flags, which matt
 ```bash
 # Inspect a PDF
 pdfinfo report.pdf
+
+# Extract text from a PDF
+pdftotext document.pdf -        # stdout
+pdftotext document.pdf -l 3 -   # first 3 pages only
 
 # Merge multiple PDFs
 pdfunite part1.pdf part2.pdf merged.pdf
