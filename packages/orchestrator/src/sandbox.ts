@@ -6,6 +6,7 @@
  */
 
 import { VFS } from './vfs/vfs.js';
+import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
 import { ShellInstance } from './shell/shell-instance.js';
 import type { ShellLike } from './shell/shell-like.js';
@@ -42,6 +43,7 @@ import type { ExtensionConfig } from './extension/types.js';
 import { CODEPOD_EXT_SOURCE, generateCommandShim } from './extension/codepod-ext-shim.js';
 import { SUBPROCESS_PY_SOURCE } from './process/subprocess-shim.js';
 import { PackageRegistry } from './packages/registry.js';
+import { ToolRegistry } from './packages/tool-registry.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -78,6 +80,8 @@ export interface SandboxOptions {
   extensions?: ExtensionConfig[];
   /** Sandbox-native packages to install from PackageRegistry (e.g. ['requests', 'pandas']). */
   packages?: string[];
+  /** Optional WASM tool packages to install from ToolRegistry (e.g. ['pdftotext']). */
+  tools?: string[];
   /** Callbacks for offloading sandbox state to external storage. */
   storage?: StorageCallbacks;
 }
@@ -163,9 +167,17 @@ export class Sandbox {
       fsLimitBytes,
       fileCount: options.security?.limits?.fileCount,
     });
-    const { gateway, bridge } = await Sandbox.createNetworkBridge(options.network);
+    const { bridge } = await Sandbox.createNetworkBridge(options.network);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir, vfs);
+
+    // Register optional WASM tools from ToolRegistry before preloadModules()
+    if (options.tools && options.tools.length > 0) {
+      const toolRegistry = new ToolRegistry();
+      for (const bin of toolRegistry.resolveBinaries(options.tools)) {
+        mgr.registerTool(bin.name, `${options.wasmDir}/${bin.wasm}`);
+      }
+    }
 
     // Build extension registry and register host commands with ProcessManager
     const extensionRegistry = new ExtensionRegistry();
@@ -304,6 +316,31 @@ export class Sandbox {
     {
       const enc = new TextEncoder();
       vfs.withWriteAccess(() => {
+        // Standard /etc files expected by many tools and scripts
+        vfs.writeFile('/etc/os-release', enc.encode([
+          'NAME="Codepod"',
+          'ID=codepod',
+          `PRETTY_NAME="Codepod Sandbox ${CODEPOD_VERSION}"`,
+          `VERSION_ID="${CODEPOD_VERSION}"`,
+          'HOME_URL="https://github.com/codepod-sandbox/codepod"',
+        ].join('\n') + '\n'));
+        vfs.writeFile('/etc/hostname', enc.encode('sandbox\n'));
+        vfs.writeFile('/etc/hosts', enc.encode([
+          '127.0.0.1  localhost',
+          '::1        localhost',
+        ].join('\n') + '\n'));
+        vfs.writeFile('/etc/passwd', enc.encode([
+          'root:x:0:0:root:/root:/bin/sh',
+          'user:x:1000:1000:user:/home/user:/bin/sh',
+        ].join('\n') + '\n'));
+        vfs.writeFile('/etc/group', enc.encode([
+          'root:x:0:',
+          'user:x:1000:',
+        ].join('\n') + '\n'));
+        for (const f of ['/etc/os-release', '/etc/hostname', '/etc/hosts', '/etc/passwd', '/etc/group']) {
+          vfs.chmod(f, 0o444);
+        }
+
         vfs.mkdirp('/etc/codepod');
 
         // pkg policy
@@ -762,7 +799,7 @@ export class Sandbox {
   async fork(): Promise<Sandbox> {
     this.assertAlive();
     const childVfs = this.vfs.cowClone();
-    const { gateway, bridge } = await Sandbox.createNetworkBridge(this.networkPolicy);
+    const { bridge } = await Sandbox.createNetworkBridge(this.networkPolicy);
     const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir, childVfs);
 
