@@ -1,4 +1,7 @@
-use codepod_pdf_tools::{load_document, pages_in_range, print_help, print_version, EXIT_INPUT, EXIT_OK, EXIT_OUTPUT, EXIT_PERMISSION};
+use codepod_pdf_tools::{
+    load_document, pages_in_range, print_help, print_version, EXIT_INPUT, EXIT_OK, EXIT_OTHER,
+    EXIT_OUTPUT, EXIT_PERMISSION,
+};
 use std::io::Write as _;
 
 fn parse_u32_option(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u32, String> {
@@ -26,6 +29,35 @@ fn stem_path(path: &str) -> String {
     }
 }
 
+fn print_usage() {
+    print_help(
+        "pdftotext [options] <PDF-file> [<text-file>]",
+        &[
+            "-f <int>             : first page to convert",
+            "-l <int>             : last page to convert",
+            "-layout              : maintain original physical layout",
+            "-raw                 : keep strings in content stream order",
+            "-nopgbrk             : don't insert page breaks between pages",
+            "-nodiag              : discard diagonal text (ignored)",
+            "-htmlmeta            : generate a simple HTML file (ignored)",
+            "-tsv                 : generate a simple TSV file (ignored)",
+            "-enc <string>        : output text encoding name (ignored)",
+            "-eol <string>        : output end-of-line convention (ignored)",
+            "-bbox                : output bounding box info (ignored)",
+            "-bbox-layout         : like -bbox with layout data (ignored)",
+            "-cropbox             : use the crop box (ignored)",
+            "-colspacing <fp>     : column spacing fraction (ignored)",
+            "-opw <string>        : owner password (for encrypted files)",
+            "-upw <string>        : user password (for encrypted files)",
+            "-q                   : don't print any messages or errors",
+            "-v                   : print copyright and version info",
+            "-h                   : print usage information",
+            "-help                : print usage information",
+            "--help               : print usage information",
+        ],
+    );
+}
+
 fn main() {
     let mut args = std::env::args().skip(1).peekable();
     let mut first: Option<u32> = None;
@@ -51,41 +83,27 @@ fn main() {
                 }
             },
             "-nopgbrk" => no_page_break = true,
-            // Accepted but ignored (layout mode requires full glyph positioning)
-            "-layout" | "-raw" | "-fixed" | "-htmlmeta" | "-bbox" | "-bbox-layout" => {}
-            // Accepted flags with value argument — consume and ignore
-            "-enc" | "-eol" | "-opw" | "-upw" | "-r" | "-x" | "-y" | "-W" | "-H" | "-zoom" => {
+            // Accepted but ignored (layout requires full glyph positioning)
+            "-layout" | "-raw" | "-nodiag" | "-htmlmeta" | "-tsv"
+            | "-bbox" | "-bbox-layout" | "-cropbox" | "-q" | "-listenc" => {}
+            // Accepted flags that take a value argument — consume and ignore
+            "-enc" | "-eol" | "-opw" | "-upw" | "-r" | "-x" | "-y" | "-W" | "-H"
+            | "-zoom" | "-fixed" | "-colspacing" => {
                 let _ = args.next();
             }
-            "-q" => {}
             "-v" => {
+                // Poppler sends version to stderr
                 print_version("pdftotext");
                 std::process::exit(EXIT_OK);
             }
             "-h" | "-help" | "--help" => {
-                print_help(
-                    "pdftotext [options] PDF-file [output-file]",
-                    &[
-                        "-f <number>      first page to extract",
-                        "-l <number>      last page to extract",
-                        "-layout          maintain original physical layout",
-                        "-raw             keep strings in content stream order",
-                        "-nopgbrk         don't insert page breaks between pages",
-                        "-enc <encoding>  output text encoding (ignored)",
-                        "-eol <type>      end-of-line convention (ignored)",
-                        "-opw <password>  owner password (ignored)",
-                        "-upw <password>  user password (ignored)",
-                        "-q               quiet (no warnings/errors to stderr)",
-                        "-v               print version info and exit",
-                        "-h               print this usage information",
-                    ],
-                );
+                // Poppler sends help to stderr, exits 0
+                print_usage();
                 std::process::exit(EXIT_OK);
             }
-            // "-" alone means stdout (used as the output-file argument)
+            // "-" alone means stdout as the output-file argument
             "-" => {
                 if input_path.is_none() {
-                    // "-" as input is unusual; treat it as a positional
                     input_path = Some("-".to_string());
                 } else {
                     output_path = Some("-".to_string());
@@ -93,8 +111,14 @@ fn main() {
                 }
             }
             other if other.starts_with('-') => {
-                eprintln!("pdftotext: unsupported option '{other}'");
-                std::process::exit(EXIT_INPUT);
+                // Poppler: unrecognized option is treated as the PDF filename.
+                // We match that: stop option parsing, treat as positional.
+                if input_path.is_none() {
+                    input_path = Some(other.to_string());
+                } else {
+                    output_path = Some(other.to_string());
+                    break;
+                }
             }
             other => {
                 if input_path.is_none() {
@@ -108,8 +132,9 @@ fn main() {
     }
 
     let Some(input_path) = input_path else {
-        eprintln!("pdftotext: missing PDF-file");
-        std::process::exit(EXIT_INPUT);
+        // Poppler: no args → print help to stderr and exit 99
+        print_usage();
+        std::process::exit(EXIT_OTHER);
     };
 
     let doc = match load_document(&input_path) {
@@ -131,9 +156,7 @@ fn main() {
     // Extract text per page using lopdf's built-in content-stream parser
     let mut page_texts: Vec<String> = Vec::with_capacity(selected.len());
     for (page_no, _) in &selected {
-        let text = doc
-            .extract_text(&[*page_no])
-            .unwrap_or_default();
+        let text = doc.extract_text(&[*page_no]).unwrap_or_default();
         page_texts.push(text);
     }
 
@@ -147,7 +170,7 @@ fn main() {
             output.push('\n');
         }
         if !no_page_break {
-            // Real pdftotext adds \f after every page including the last
+            // pdftotext adds \f after every page including the last
             output.push('\x0c');
         } else if i + 1 < count {
             // With -nopgbrk, still separate pages with a newline if needed

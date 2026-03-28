@@ -9,17 +9,19 @@ pub const EXIT_OUTPUT: i32 = 2;
 pub const EXIT_PERMISSION: i32 = 3;
 pub const EXIT_OTHER: i32 = 99;
 
+/// Poppler tools print version info to stderr (matching poppler convention).
 pub fn print_version(command: &str) {
-    println!("{command} 0.1.0");
+    eprintln!("{command} 0.1.0");
 }
 
+/// Poppler tools print help to stderr (matching poppler convention).
 pub fn print_help(usage: &str, options: &[&str]) {
-    println!("Usage: {usage}");
+    eprintln!("Usage: {usage}");
     if !options.is_empty() {
-        println!();
-        println!("Options:");
+        eprintln!();
+        eprintln!("Options:");
         for option in options {
-            println!("  {option}");
+            eprintln!("  {option}");
         }
     }
 }

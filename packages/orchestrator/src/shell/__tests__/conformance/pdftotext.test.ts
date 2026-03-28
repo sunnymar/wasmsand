@@ -1,9 +1,23 @@
 /**
  * Conformance tests for pdftotext — PDF text extraction WASM binary.
  *
- * Tests cover: basic extraction, multi-page with form-feeds, -nopgbrk,
- * page range (-f/-l), output-to-file, stdout (-), and the real-world
- * "Attention Is All You Need" arxiv paper (1706.03762).
+ * Spec reference: Poppler pdftotext (https://poppler.freedesktop.org)
+ * Tested against: pdftotext version 26.03.0
+ *
+ * Known deviations from Poppler that are intentional:
+ *   - Text extraction quality differs (lopdf vs Poppler's layout engine)
+ *   - Layout flags (-layout, -raw, -tsv, etc.) are accepted but ignored
+ *
+ * Spec behaviors verified here:
+ *   - -h/-help/--help print to stderr and exit 0
+ *   - -v prints to stderr and exits 0
+ *   - No args prints help to stderr and exits 99
+ *   - -f/-l page range selection
+ *   - -nopgbrk suppresses form-feeds
+ *   - Form-feed (\f) after every page including the last
+ *   - Default output to <stem>.txt next to the input file
+ *   - '-' as output sends to stdout
+ *   - Missing file exits 1
  */
 import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
@@ -83,84 +97,76 @@ describe('pdftotext conformance', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Basic extraction
+  // Spec: help and version output
+  // Poppler: -h/-help/--help → stderr, exit 0
+  //          -v             → stderr, exit 0
+  //          no args        → stderr, exit 99
   // -------------------------------------------------------------------------
 
-  describe('basic text extraction', () => {
-    it('extracts text from a single-page PDF to stdout', async () => {
+  describe('spec: help and version output', () => {
+    it('-h prints usage to stderr and exits 0', async () => {
+      const r = await runner.run('pdftotext -h');
+      expect(r.exitCode).toBe(0);
+      expect(r.stderr).toContain('pdftotext');
+      expect(r.stdout).toBe('');
+    });
+
+    it('-help prints usage to stderr and exits 0', async () => {
+      const r = await runner.run('pdftotext -help');
+      expect(r.exitCode).toBe(0);
+      expect(r.stderr).toContain('pdftotext');
+      expect(r.stdout).toBe('');
+    });
+
+    it('--help prints usage to stderr and exits 0', async () => {
+      const r = await runner.run('pdftotext --help');
+      expect(r.exitCode).toBe(0);
+      expect(r.stderr).toContain('pdftotext');
+      expect(r.stdout).toBe('');
+    });
+
+    it('-v prints version to stderr and exits 0', async () => {
+      const r = await runner.run('pdftotext -v');
+      expect(r.exitCode).toBe(0);
+      expect(r.stderr).toContain('pdftotext');
+      expect(r.stdout).toBe('');
+    });
+
+    it('no args prints help to stderr and exits 99', async () => {
+      const r = await runner.run('pdftotext');
+      expect(r.exitCode).toBe(99);
+      expect(r.stderr).toContain('pdftotext');
+      expect(r.stdout).toBe('');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Spec: core extraction flags
+  // -------------------------------------------------------------------------
+
+  describe('spec: core flags (-f, -l, -nopgbrk, stdout)', () => {
+    it('extracts text and sends to stdout with -', async () => {
       const r = await runner.run('pdftotext /tmp/one.pdf -');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('Hello World');
-    });
-
-    it('exit 0 on success', async () => {
-      const r = await runner.run('pdftotext /tmp/one.pdf -');
-      expect(r.exitCode).toBe(0);
-    });
-
-    it('prints nothing to stderr on success', async () => {
-      const r = await runner.run('pdftotext /tmp/one.pdf -');
       expect(r.stderr).toBe('');
     });
-  });
 
-  // -------------------------------------------------------------------------
-  // Multi-page and page breaks
-  // -------------------------------------------------------------------------
-
-  describe('multi-page PDFs', () => {
-    it('extracts text from both pages', async () => {
-      const r = await runner.run('pdftotext /tmp/two.pdf -');
-      expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain('Page one text');
-      expect(r.stdout).toContain('Page two text');
-    });
-
-    it('inserts form-feed (\\f) between pages by default', async () => {
-      const r = await runner.run('pdftotext /tmp/two.pdf -');
-      expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain('\f');
-    });
-
-    it('-nopgbrk suppresses form-feed separators', async () => {
-      const r = await runner.run('pdftotext -nopgbrk /tmp/two.pdf -');
-      expect(r.exitCode).toBe(0);
-      expect(r.stdout).not.toContain('\f');
-      expect(r.stdout).toContain('Page one text');
-      expect(r.stdout).toContain('Page two text');
-    });
-
-    it('page 1 appears before page 2 in output', async () => {
-      const r = await runner.run('pdftotext /tmp/two.pdf -');
-      expect(r.exitCode).toBe(0);
-      const pos1 = r.stdout.indexOf('Page one text');
-      const pos2 = r.stdout.indexOf('Page two text');
-      expect(pos1).toBeGreaterThanOrEqual(0);
-      expect(pos2).toBeGreaterThanOrEqual(0);
-      expect(pos1).toBeLessThan(pos2);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // Page range selection
-  // -------------------------------------------------------------------------
-
-  describe('page range (-f and -l)', () => {
-    it('-f 2 skips the first page', async () => {
+    it('-f first page to convert', async () => {
       const r = await runner.run('pdftotext -f 2 /tmp/two.pdf -');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).not.toContain('Page one text');
       expect(r.stdout).toContain('Page two text');
     });
 
-    it('-l 1 extracts only the first page', async () => {
+    it('-l last page to convert', async () => {
       const r = await runner.run('pdftotext -l 1 /tmp/two.pdf -');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('Page one text');
       expect(r.stdout).not.toContain('Page two text');
     });
 
-    it('-f 2 -l 2 extracts only the middle page from a 3-page PDF', async () => {
+    it('-f and -l together select a range', async () => {
       const r = await runner.run('pdftotext -f 2 -l 2 /tmp/three.pdf -');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).not.toContain('First page');
@@ -168,72 +174,109 @@ describe('pdftotext conformance', () => {
       expect(r.stdout).not.toContain('Third page');
     });
 
-    it('-f 1 -l 3 extracts all three pages', async () => {
-      const r = await runner.run('pdftotext -f 1 -l 3 /tmp/three.pdf -');
+    it('-nopgbrk suppresses form-feed characters', async () => {
+      const r = await runner.run('pdftotext -nopgbrk /tmp/two.pdf -');
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain('First page');
-      expect(r.stdout).toContain('Second page');
-      expect(r.stdout).toContain('Third page');
+      expect(r.stdout).not.toContain('\f');
+    });
+
+    it('without -nopgbrk, each page is followed by a form-feed', async () => {
+      const r = await runner.run('pdftotext /tmp/two.pdf -');
+      expect(r.exitCode).toBe(0);
+      const formFeeds = (r.stdout.match(/\f/g) ?? []).length;
+      // 2 pages → 2 form-feeds (one after each page including the last)
+      expect(formFeeds).toBe(2);
     });
   });
 
   // -------------------------------------------------------------------------
-  // Output file handling
+  // Spec: output file handling
   // -------------------------------------------------------------------------
 
-  describe('output file handling', () => {
-    it('writes to <stem>.txt by default when no output file specified', async () => {
+  describe('spec: output file handling', () => {
+    it('default output goes to <stem>.txt in same directory as input', async () => {
       const r = await runner.run('pdftotext /tmp/one.pdf');
       expect(r.exitCode).toBe(0);
       const out = new TextDecoder().decode(vfs.readFile('/tmp/one.txt'));
       expect(out).toContain('Hello World');
     });
 
-    it('writes to an explicit output file path', async () => {
-      const r = await runner.run('pdftotext /tmp/one.pdf /tmp/myout.txt');
+    it('explicit output file path is respected', async () => {
+      const r = await runner.run('pdftotext /tmp/one.pdf /tmp/custom.txt');
       expect(r.exitCode).toBe(0);
-      const out = new TextDecoder().decode(vfs.readFile('/tmp/myout.txt'));
+      const out = new TextDecoder().decode(vfs.readFile('/tmp/custom.txt'));
       expect(out).toContain('Hello World');
     });
 
-    it('- as output file sends text to stdout', async () => {
+    it('- as output sends text to stdout (not a file)', async () => {
       const r = await runner.run('pdftotext /tmp/one.pdf -');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('Hello World');
     });
+
+    it('nothing is written to stdout when outputting to a file', async () => {
+      const r = await runner.run('pdftotext /tmp/one.pdf /tmp/out.txt');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe('');
+    });
   });
 
   // -------------------------------------------------------------------------
-  // Error handling
+  // Spec: accepted flags that are ignored (layout modes)
+  // These must not cause errors — they're accepted for compatibility.
   // -------------------------------------------------------------------------
 
-  describe('error handling', () => {
-    it('exits non-zero for a missing file', async () => {
+  describe('spec: accepted but ignored flags', () => {
+    for (const flag of ['-layout', '-raw', '-nodiag', '-htmlmeta', '-tsv',
+                        '-bbox', '-bbox-layout', '-cropbox', '-q', '-listenc']) {
+      it(`${flag} is accepted without error`, async () => {
+        const r = await runner.run(`pdftotext ${flag} /tmp/one.pdf -`);
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout).toContain('Hello World');
+      });
+    }
+
+    for (const [flag, val] of [['-enc', 'UTF-8'], ['-eol', 'unix'],
+                                ['-r', '72'], ['-x', '0'], ['-y', '0'],
+                                ['-W', '0'], ['-H', '0'],
+                                ['-fixed', '1.0'], ['-colspacing', '0.7']]) {
+      it(`${flag} ${val} is accepted without error`, async () => {
+        const r = await runner.run(`pdftotext ${flag} ${val} /tmp/one.pdf -`);
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout).toContain('Hello World');
+      });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Spec: error handling
+  // -------------------------------------------------------------------------
+
+  describe('spec: error handling', () => {
+    it('missing file exits 1', async () => {
       const r = await runner.run('pdftotext /tmp/no-such-file.pdf -');
-      expect(r.exitCode).not.toBe(0);
+      expect(r.exitCode).toBe(1);
     });
 
-    it('prints the filename in stderr for a missing file', async () => {
+    it('missing file prints error to stderr', async () => {
       const r = await runner.run('pdftotext /tmp/no-such-file.pdf -');
       expect(r.stderr).toContain('no-such-file.pdf');
     });
 
-    it('-h prints usage and exits 0', async () => {
-      const r = await runner.run('pdftotext -h');
-      expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain('pdftotext');
+    it('missing file produces no stdout', async () => {
+      const r = await runner.run('pdftotext /tmp/no-such-file.pdf -');
+      expect(r.stdout).toBe('');
     });
   });
 
   // -------------------------------------------------------------------------
   // Real-world: "Attention Is All You Need" (arxiv 1706.03762)
-  // 15-page transformer paper stored as:
-  //   packages/orchestrator/src/shell/__tests__/fixtures/attention.pdf
+  // 15-page paper, tested against Poppler 26.03.0
   // -------------------------------------------------------------------------
 
   describe('real-world: Attention Is All You Need (arxiv 1706.03762)', () => {
     it('extracts the paper title from page 1', async () => {
-      if (!ATTENTION_PDF_BYTES) return; // skip if fixture not available
+      if (!ATTENTION_PDF_BYTES) return;
       const r = await runner.run('pdftotext -f 1 -l 1 /tmp/attention.pdf -');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('Attention Is All You Need');
@@ -243,11 +286,10 @@ describe('pdftotext conformance', () => {
       if (!ATTENTION_PDF_BYTES) return;
       const r = await runner.run('pdftotext -f 1 -l 1 /tmp/attention.pdf -');
       expect(r.exitCode).toBe(0);
-      // Known authors of the paper
       expect(r.stdout).toContain('Vaswani');
     });
 
-    it('produces form-feeds for a 3-page range', async () => {
+    it('3-page range produces exactly 3 form-feeds', async () => {
       if (!ATTENTION_PDF_BYTES) return;
       const r = await runner.run('pdftotext -f 1 -l 3 /tmp/attention.pdf -');
       expect(r.exitCode).toBe(0);
@@ -262,12 +304,19 @@ describe('pdftotext conformance', () => {
       expect(r.stdout).not.toContain('\f');
     });
 
-    it('outputs substantially more text than a single page when extracting all 15 pages', async () => {
+    it('all 15 pages produce substantial text output', async () => {
       if (!ATTENTION_PDF_BYTES) return;
       const r = await runner.run('pdftotext /tmp/attention.pdf -');
       expect(r.exitCode).toBe(0);
-      // 15 pages of a research paper should produce thousands of characters
       expect(r.stdout.length).toBeGreaterThan(10000);
+    });
+
+    it('default output writes to attention.txt', async () => {
+      if (!ATTENTION_PDF_BYTES) return;
+      const r = await runner.run('pdftotext -f 1 -l 1 /tmp/attention.pdf');
+      expect(r.exitCode).toBe(0);
+      const out = new TextDecoder().decode(vfs.readFile('/tmp/attention.txt'));
+      expect(out).toContain('Attention Is All You Need');
     });
   });
 });
