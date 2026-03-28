@@ -14,7 +14,7 @@ cargo build \
 
 echo ""
 echo "Built document tool binaries:"
-for tool in pdfinfo pdfunite pdfseparate xlsx2csv csv2xlsx; do
+for tool in pdfinfo pdfunite pdfseparate pdftotext xlsx2csv csv2xlsx; do
   if [[ -f "$TARGET_DIR/$tool.wasm" ]]; then
     size=$(du -h "$TARGET_DIR/$tool.wasm" | cut -f1)
     printf "  %-20s %s\n" "$tool.wasm" "$size"
@@ -24,7 +24,7 @@ done
 if [[ "${1:-}" == "--copy-fixtures" ]]; then
   echo ""
   echo "Copying to test fixtures..."
-  for tool in pdfinfo pdfunite pdfseparate xlsx2csv csv2xlsx; do
+  for tool in pdfinfo pdfunite pdfseparate pdftotext xlsx2csv csv2xlsx; do
     cp "$TARGET_DIR/$tool.wasm" "$FIXTURES_DIR/$tool.wasm"
   done
   echo "Done."

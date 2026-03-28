@@ -15,5 +15,9 @@ path = "src/bin/pdfunite.rs"
 name = "pdfseparate"
 path = "src/bin/pdfseparate.rs"
 
+[[bin]]
+name = "pdftotext"
+path = "src/bin/pdftotext.rs"
+
 [dependencies]
 lopdf = { version = "0.40", default-features = false }
