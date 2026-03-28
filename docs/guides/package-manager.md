@@ -143,6 +143,6 @@ The registry provides a `index.json` listing packages with their wheel files and
 
 ### Limitations
 
-- **Pure Python only.** Packages with C extensions or native binaries cannot be installed. Use the `pkg` manager or built-in native packages (numpy, PIL) for performance-sensitive operations.
-- **RustPython compatibility.** Some packages that rely on CPython internals may not work. Standard-library-dependent packages generally work well.
-- **Subset of PyPI.** Only packages vetted for pure-Python compatibility are in the registry. If a package isn't available, check if a pure-Python alternative exists.
+- **Curated registry, not PyPI.** Only packages that have been built or ported for codepod's RustPython environment are available. Packages like `numpy` and `PIL` are supported via native Rust implementations — they are not vanilla PyPI wheels but purpose-built codepod packages.
+- **RustPython compatibility.** Packages that depend on CPython internals, the C extension API, or CPython-specific behaviour may not work. Pure-Python packages and those with native codepod ports work well.
+- **Request new packages** by opening an issue on [`codepod-sandbox/packages`](https://github.com/codepod-sandbox/packages).
