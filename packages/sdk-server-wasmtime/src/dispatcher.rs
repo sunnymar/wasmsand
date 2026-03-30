@@ -241,6 +241,8 @@ impl Dispatcher {
         let sid = sandbox_id(&params).map(str::to_owned);
         match method {
             "run" => self.handle_run(id, params).await,
+            "env.set" => self.handle_env_set(id, params, sid.as_deref()).await,
+            "env.get" => self.handle_env_get(id, &params, sid.as_deref()),
             "files.read" => self.handle_files_read(id, &params, sid.as_deref()),
             "files.write" => self.handle_files_write(id, &params, sid.as_deref()),
             "files.list" => self.handle_files_list(id, &params, sid.as_deref()),
@@ -253,10 +255,79 @@ impl Dispatcher {
         }
     }
 
-    // ── run stub (Task 3) ─────────────────────────────────────────────────────
+    // ── run + env ─────────────────────────────────────────────────────────────
 
-    async fn handle_run(&mut self, id: Option<RequestId>, _params: Value) -> Response {
-        Response::not_implemented(id, "run")
+    async fn handle_run(&mut self, id: Option<RequestId>, params: Value) -> Response {
+        let cmd = match require_str(&id, &params, "command") {
+            Ok(c) => c.to_owned(),
+            Err(r) => return r,
+        };
+        let sid = sandbox_id(&params).map(str::to_owned);
+        let sb = match self.manager.resolve(sid.as_deref()) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+        match sb.run(&cmd).await {
+            Ok(result) => Response::ok(id, result),
+            Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
+        }
+    }
+
+    async fn handle_env_set(
+        &mut self,
+        id: Option<RequestId>,
+        params: Value,
+        sid: Option<&str>,
+    ) -> Response {
+        let name = match require_str(&id, &params, "name") {
+            Ok(n) => n.to_owned(),
+            Err(r) => return r,
+        };
+        let value = match require_str(&id, &params, "value") {
+            Ok(v) => v.to_owned(),
+            Err(r) => return r,
+        };
+
+        // Validate name: must be a valid shell identifier
+        if name.is_empty()
+            || !name
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_alphabetic() || c == '_')
+                .unwrap_or(false)
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Response::err(id, codes::INVALID_PARAMS, "invalid env var name");
+        }
+
+        // POSIX single-quote escape: replace ' with '\''
+        let quoted = format!("'{}'", value.replace('\'', "'\\''"));
+        let sb = match self.manager.resolve(sid) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+        match sb.run(&format!("export {name}={quoted}")).await {
+            Ok(_) => Response::ok(id, json!({"ok": true})),
+            Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
+        }
+    }
+
+    fn handle_env_get(
+        &mut self,
+        id: Option<RequestId>,
+        params: &Value,
+        sid: Option<&str>,
+    ) -> Response {
+        let name = match require_str(&id, params, "name") {
+            Ok(n) => n.to_owned(),
+            Err(r) => return r,
+        };
+        let sb = match self.manager.resolve(sid) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+        let value = sb.env.get(&name).cloned();
+        Response::ok(id, json!({"value": value}))
     }
 
     // ── File operations ───────────────────────────────────────────────────────

@@ -160,3 +160,41 @@ async fn test_file_ops_rpc() {
         .await;
     assert!(r7.result.is_some(), "files.rm failed: {:?}", r7.error);
 }
+
+#[tokio::test]
+async fn test_run_and_env() {
+    use tokio::sync::mpsc;
+    let wasm = wasm_bytes();
+    let (tx, _rx) = mpsc::channel::<String>(16);
+    let (_cb_tx, cb_rx) = mpsc::channel::<String>(4);
+    let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
+
+    let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+    disp.dispatch(Some(sdk_server_wasmtime::rpc::RequestId::Int(1)), "create", serde_json::json!({
+        "shellWasmPath": wasm_path.to_str().unwrap(),
+    })).await;
+
+    // basic run
+    let (r, _) = disp.dispatch(Some(sdk_server_wasmtime::rpc::RequestId::Int(2)), "run", serde_json::json!({
+        "command": "echo hello",
+    })).await;
+    let result = r.result.unwrap();
+    assert_eq!(result["exitCode"].as_i64().unwrap(), 0);
+    assert!(result["stdout"].as_str().unwrap().trim() == "hello");
+
+    // env.set + env.get
+    let (r2, _) = disp.dispatch(Some(sdk_server_wasmtime::rpc::RequestId::Int(3)), "env.set", serde_json::json!({
+        "name": "MYVAR",
+        "value": "testvalue",
+    })).await;
+    assert!(r2.result.is_some(), "env.set failed: {:?}", r2.error);
+
+    let (r3, _) = disp.dispatch(Some(sdk_server_wasmtime::rpc::RequestId::Int(4)), "env.get", serde_json::json!({
+        "name": "MYVAR",
+    })).await;
+    // After setting via 'export MYVAR=testvalue', the env should sync on next run.
+    // env.get returns from manager.env which is synced after each run_command call.
+    // Since env.set runs 'export ...' as a command, env is synced.
+    assert_eq!(r3.result.unwrap()["value"].as_str().unwrap(), "testvalue");
+}
