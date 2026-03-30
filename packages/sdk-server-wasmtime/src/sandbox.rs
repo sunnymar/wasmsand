@@ -83,6 +83,7 @@ pub struct SandboxManager {
     pub next_named_id: u32,
 }
 
+#[allow(clippy::new_without_default)]
 impl SandboxManager {
     pub fn new() -> Self {
         Self {
@@ -117,11 +118,11 @@ impl SandboxManager {
                 self.root.as_mut().ok_or_else(|| anyhow::anyhow!("no root sandbox"))
             }
             Some(id) => {
-                if self.named.contains_key(id) {
-                    return Ok(self.named.get_mut(id).unwrap());
+                if let Some(sb) = self.named.get_mut(id) {
+                    return Ok(sb);
                 }
-                if self.forks.contains_key(id) {
-                    return Ok(self.forks.get_mut(id).unwrap());
+                if let Some(sb) = self.forks.get_mut(id) {
+                    return Ok(sb);
                 }
                 bail!("unknown sandboxId: {id}")
             }

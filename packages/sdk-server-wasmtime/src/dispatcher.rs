@@ -93,7 +93,7 @@ impl Dispatcher {
         let wasm_path = match params.get("shellWasmPath").and_then(|v| v.as_str()) {
             Some(p) => p.to_owned(),
             None => {
-                return Response::err(id, codes::INVALID_REQUEST, "missing required param: shellWasmPath");
+                return Response::err(id, codes::INVALID_PARAMS, "missing required param: shellWasmPath");
             }
         };
 
@@ -142,7 +142,7 @@ impl Dispatcher {
                             Err(e) => {
                                 return Response::err(
                                     id,
-                                    codes::INVALID_REQUEST,
+                                    codes::INVALID_PARAMS,
                                     format!("base64 decode error for '{rel_path}': {e}"),
                                 );
                             }
