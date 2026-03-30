@@ -240,8 +240,8 @@ impl Dispatcher {
     ) -> Response {
         let sid = sandbox_id(&params).map(str::to_owned);
         match method {
-            "run" => self.handle_run(id, params).await,
-            "env.set" => self.handle_env_set(id, params, sid.as_deref()).await,
+            "run" => self.handle_run(id, &params, sid.as_deref()).await,
+            "env.set" => self.handle_env_set(id, &params, sid.as_deref()).await,
             "env.get" => self.handle_env_get(id, &params, sid.as_deref()),
             "files.read" => self.handle_files_read(id, &params, sid.as_deref()),
             "files.write" => self.handle_files_write(id, &params, sid.as_deref()),
@@ -257,13 +257,12 @@ impl Dispatcher {
 
     // ── run + env ─────────────────────────────────────────────────────────────
 
-    async fn handle_run(&mut self, id: Option<RequestId>, params: Value) -> Response {
-        let cmd = match require_str(&id, &params, "command") {
+    async fn handle_run(&mut self, id: Option<RequestId>, params: &Value, sid: Option<&str>) -> Response {
+        let cmd = match require_str(&id, params, "command") {
             Ok(c) => c.to_owned(),
             Err(r) => return r,
         };
-        let sid = sandbox_id(&params).map(str::to_owned);
-        let sb = match self.manager.resolve(sid.as_deref()) {
+        let sb = match self.manager.resolve(sid) {
             Ok(s) => s,
             Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
         };
@@ -276,7 +275,7 @@ impl Dispatcher {
     async fn handle_env_set(
         &mut self,
         id: Option<RequestId>,
-        params: Value,
+        params: &Value,
         sid: Option<&str>,
     ) -> Response {
         let name = match require_str(&id, &params, "name") {
