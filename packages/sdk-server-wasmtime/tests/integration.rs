@@ -491,3 +491,205 @@ async fn test_persistence_rpc() {
     let content = base64::engine::general_purpose::STANDARD.decode(content_b64).unwrap();
     assert_eq!(content, b"hello persistence");
 }
+
+#[tokio::test]
+async fn test_fork() {
+    let wasm = wasm_bytes();
+    let mut mgr = SandboxManager::new();
+    mgr.create(wasm, None, None, None).await.unwrap();
+
+    let sb = mgr.root.as_mut().unwrap();
+    sb.shell.vfs_mut().write_file("/tmp/shared.txt", b"shared", false).unwrap();
+    let forked = sb.fork().await.unwrap();
+
+    let fork_id = "f1".to_string();
+    mgr.forks.insert(fork_id.clone(), forked);
+
+    // Fork can read the file
+    let fork = mgr.forks.get_mut(&fork_id).unwrap();
+    let content = fork.shell.vfs().read_file("/tmp/shared.txt").unwrap();
+    assert_eq!(content, b"shared");
+
+    // Fork write does not affect root
+    fork.shell.vfs_mut().write_file("/tmp/fork_only.txt", b"fork", false).unwrap();
+    assert!(mgr.root.as_ref().unwrap().shell.vfs().read_file("/tmp/fork_only.txt").is_err());
+}
+
+#[tokio::test]
+async fn test_sandbox_fork_rpc() {
+    use base64::Engine as _;
+    use tokio::sync::mpsc;
+
+    let (tx, _rx) = mpsc::channel::<String>(16);
+    let (_cb_tx, cb_rx) = mpsc::channel::<String>(4);
+    let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
+
+    let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+
+    // create root sandbox
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
+        "create",
+        serde_json::json!({"shellWasmPath": wasm_path.to_str().unwrap()}),
+    ).await;
+    assert!(r.result.is_some(), "create failed: {:?}", r.error);
+
+    // Write file to root
+    let root_data = base64::engine::general_purpose::STANDARD.encode(b"root data");
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(2)),
+        "files.write",
+        serde_json::json!({"path": "/tmp/root.txt", "data": root_data}),
+    ).await;
+    assert!(r.result.is_some(), "files.write failed: {:?}", r.error);
+
+    // Fork the root sandbox
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(3)),
+        "sandbox.fork",
+        serde_json::json!({}),
+    ).await;
+    assert!(r.error.is_none(), "fork failed: {:?}", r.error);
+    let fork_id = r.result.unwrap()["sandboxId"].as_str().unwrap().to_string();
+
+    // Read file in fork — should see root's data
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(4)),
+        "files.read",
+        serde_json::json!({"path": "/tmp/root.txt", "sandboxId": fork_id}),
+    ).await;
+    assert!(r.error.is_none(), "files.read in fork failed: {:?}", r.error);
+    let b64 = r.result.unwrap()["data"].as_str().unwrap().to_string();
+    let content = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+    assert_eq!(content, b"root data");
+
+    // Write in fork — should not affect root
+    let fork_data = base64::engine::general_purpose::STANDARD.encode(b"fork only");
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(5)),
+        "files.write",
+        serde_json::json!({"path": "/tmp/fork_only.txt", "sandboxId": fork_id, "data": fork_data}),
+    ).await;
+    assert!(r.result.is_some(), "files.write in fork failed: {:?}", r.error);
+
+    // Reading fork_only.txt from root should fail
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(6)),
+        "files.read",
+        serde_json::json!({"path": "/tmp/fork_only.txt"}), // no sandboxId = root
+    ).await;
+    assert!(r.error.is_some(), "fork write should not affect root");
+
+    // Destroy fork
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(7)),
+        "sandbox.destroy",
+        serde_json::json!({"sandboxId": fork_id}),
+    ).await;
+    assert!(r.error.is_none(), "sandbox.destroy failed: {:?}", r.error);
+
+    // After destroy, accessing the fork should fail
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(8)),
+        "files.read",
+        serde_json::json!({"path": "/tmp/root.txt", "sandboxId": fork_id}),
+    ).await;
+    assert!(r.error.is_some(), "accessing destroyed fork should fail");
+}
+
+#[tokio::test]
+async fn test_sandbox_create_list_remove_rpc() {
+    use base64::Engine as _;
+    use tokio::sync::mpsc;
+
+    let (tx, _rx) = mpsc::channel::<String>(16);
+    let (_cb_tx, cb_rx) = mpsc::channel::<String>(4);
+    let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
+
+    let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+
+    // create root sandbox
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
+        "create",
+        serde_json::json!({"shellWasmPath": wasm_path.to_str().unwrap()}),
+    ).await;
+    assert!(r.result.is_some(), "create failed: {:?}", r.error);
+
+    // sandbox.list — should be empty initially
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(2)),
+        "sandbox.list",
+        serde_json::json!({}),
+    ).await;
+    assert!(r.error.is_none(), "sandbox.list failed: {:?}", r.error);
+    let list = r.result.unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 0, "expected empty named sandbox list");
+
+    // sandbox.create
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(3)),
+        "sandbox.create",
+        serde_json::json!({}),
+    ).await;
+    assert!(r.error.is_none(), "sandbox.create failed: {:?}", r.error);
+    let named_id = r.result.unwrap()["sandboxId"].as_str().unwrap().to_string();
+
+    // sandbox.list — should have one entry
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(4)),
+        "sandbox.list",
+        serde_json::json!({}),
+    ).await;
+    assert!(r.error.is_none());
+    let list = r.result.unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+
+    // Write file to named sandbox
+    let data = base64::engine::general_purpose::STANDARD.encode(b"named data");
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(5)),
+        "files.write",
+        serde_json::json!({"path": "/tmp/named.txt", "sandboxId": named_id, "data": data}),
+    ).await;
+    assert!(r.result.is_some(), "files.write to named failed: {:?}", r.error);
+
+    // Read from named sandbox
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(6)),
+        "files.read",
+        serde_json::json!({"path": "/tmp/named.txt", "sandboxId": named_id}),
+    ).await;
+    assert!(r.error.is_none(), "files.read from named failed: {:?}", r.error);
+    let b64 = r.result.unwrap()["data"].as_str().unwrap().to_string();
+    let content = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+    assert_eq!(content, b"named data");
+
+    // Named sandbox is isolated from root
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(7)),
+        "files.read",
+        serde_json::json!({"path": "/tmp/named.txt"}), // no sandboxId = root
+    ).await;
+    assert!(r.error.is_some(), "named sandbox write should not affect root");
+
+    // sandbox.remove
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(8)),
+        "sandbox.remove",
+        serde_json::json!({"sandboxId": named_id}),
+    ).await;
+    assert!(r.error.is_none(), "sandbox.remove failed: {:?}", r.error);
+
+    // sandbox.list — should be empty again
+    let (r, _) = disp.dispatch(
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(9)),
+        "sandbox.list",
+        serde_json::json!({}),
+    ).await;
+    assert!(r.error.is_none());
+    let list = r.result.unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 0);
+}

@@ -254,6 +254,11 @@ impl Dispatcher {
             "persistence.export" => self.handle_persistence_export(id, &params, sid.as_deref()),
             "persistence.import" => self.handle_persistence_import(id, &params, sid.as_deref()),
             "mount" => self.handle_mount(id, &params, sid.as_deref()),
+            "sandbox.fork" => self.handle_sandbox_fork(id, &params, sid.as_deref()).await,
+            "sandbox.destroy" => self.handle_sandbox_destroy(id, &params),
+            "sandbox.create" => self.handle_sandbox_create(id, &params).await,
+            "sandbox.list" => self.handle_sandbox_list(id),
+            "sandbox.remove" => self.handle_sandbox_remove(id, &params),
             // remaining methods still not_implemented (done in later tasks)
             _ if KNOWN_METHODS.contains(&method) => Response::not_implemented(id, method),
             _ => Response::method_not_found(id, method),
@@ -577,6 +582,97 @@ impl Dispatcher {
             }
             Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
         }
+    }
+
+    // ── Sandbox management ───────────────────────────────────────────────────
+
+    async fn handle_sandbox_fork(
+        &mut self,
+        id: Option<RequestId>,
+        _params: &Value,
+        _sid: Option<&str>,
+    ) -> Response {
+        if self.manager.forks.len() >= 16 {
+            return Response::err(id, codes::INVALID_PARAMS, "max forks reached");
+        }
+        let forked = {
+            let sb = match self.manager.root.as_ref() {
+                Some(s) => s,
+                None => return Response::err(id, codes::INVALID_PARAMS, "no root sandbox"),
+            };
+            match sb.fork().await {
+                Ok(f) => f,
+                Err(e) => return Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
+            }
+        };
+        let fork_id = self.manager.next_fork_id.to_string();
+        self.manager.next_fork_id += 1;
+        self.manager.forks.insert(fork_id.clone(), forked);
+        Response::ok(id, json!({"sandboxId": fork_id}))
+    }
+
+    fn handle_sandbox_destroy(&mut self, id: Option<RequestId>, params: &Value) -> Response {
+        let sid = match require_str(&id, params, "sandboxId") {
+            Ok(s) => s.to_owned(),
+            Err(r) => return r,
+        };
+        if self.manager.forks.remove(&sid).is_none() {
+            return Response::err(
+                id,
+                codes::INVALID_PARAMS,
+                format!("unknown sandboxId: {sid}"),
+            );
+        }
+        Response::ok(id, json!({"ok": true}))
+    }
+
+    async fn handle_sandbox_create(
+        &mut self,
+        id: Option<RequestId>,
+        _params: &Value,
+    ) -> Response {
+        if self.manager.named.len() >= 64 {
+            return Response::err(id, codes::INVALID_PARAMS, "max sandboxes reached");
+        }
+        let (engine, wasm_bytes) = {
+            let root = match self.manager.root.as_ref() {
+                Some(r) => r,
+                None => return Response::err(id, codes::INVALID_PARAMS, "no root sandbox"),
+            };
+            (root.engine.clone(), root.wasm_bytes.clone())
+        };
+        let vfs = crate::vfs::MemVfs::new(None, None);
+        let shell = match crate::wasm::ShellInstance::new(&engine, &wasm_bytes, vfs, &[]).await {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
+        };
+        let sb = crate::sandbox::SandboxState { engine, wasm_bytes, shell, env: Default::default() };
+        let sid = self.manager.next_named_id.to_string();
+        self.manager.next_named_id += 1;
+        self.manager.named.insert(sid.clone(), sb);
+        Response::ok(id, json!({"sandboxId": sid}))
+    }
+
+    fn handle_sandbox_list(&self, id: Option<RequestId>) -> Response {
+        let entries: Vec<_> = self.manager.named.keys()
+            .map(|sid| json!({"sandboxId": sid}))
+            .collect();
+        Response::ok(id, json!(entries))
+    }
+
+    fn handle_sandbox_remove(&mut self, id: Option<RequestId>, params: &Value) -> Response {
+        let sid = match require_str(&id, params, "sandboxId") {
+            Ok(s) => s.to_owned(),
+            Err(r) => return r,
+        };
+        if self.manager.named.remove(&sid).is_none() {
+            return Response::err(
+                id,
+                codes::INVALID_PARAMS,
+                format!("unknown sandboxId: {sid}"),
+            );
+        }
+        Response::ok(id, json!({"ok": true}))
     }
 
     // ── Mount ─────────────────────────────────────────────────────────────────
