@@ -249,6 +249,9 @@ impl Dispatcher {
             "files.mkdir" => self.handle_files_mkdir(id, &params, sid.as_deref()),
             "files.rm" => self.handle_files_rm(id, &params, sid.as_deref()),
             "files.stat" => self.handle_files_stat(id, &params, sid.as_deref()),
+            "snapshot.create" => self.handle_snapshot_create(id, &params, sid.as_deref()),
+            "snapshot.restore" => self.handle_snapshot_restore(id, &params, sid.as_deref()),
+            "mount" => self.handle_mount(id, &params, sid.as_deref()),
             // remaining methods still not_implemented (done in later tasks)
             _ if KNOWN_METHODS.contains(&method) => Response::not_implemented(id, method),
             _ => Response::method_not_found(id, method),
@@ -491,5 +494,105 @@ impl Dispatcher {
             }
             Err(e) => vfs_err(id, e),
         }
+    }
+
+    // ── Snapshot operations ───────────────────────────────────────────────────
+
+    fn handle_snapshot_create(
+        &mut self,
+        id: Option<RequestId>,
+        _params: &Value,
+        sid: Option<&str>,
+    ) -> Response {
+        let sb = match self.manager.resolve(sid) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+        let snap_id = sb.shell.vfs_mut().snapshot();
+        Response::ok(id, json!({"id": snap_id}))
+    }
+
+    fn handle_snapshot_restore(
+        &mut self,
+        id: Option<RequestId>,
+        params: &Value,
+        sid: Option<&str>,
+    ) -> Response {
+        let snap_id = match require_str(&id, params, "id") {
+            Ok(s) => s.to_owned(),
+            Err(r) => return r,
+        };
+        let sb = match self.manager.resolve(sid) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+        match sb.shell.vfs_mut().restore(&snap_id) {
+            Ok(_) => Response::ok(id, json!({"ok": true})),
+            Err(e) => vfs_err(id, e),
+        }
+    }
+
+    // ── Mount ─────────────────────────────────────────────────────────────────
+
+    fn handle_mount(
+        &mut self,
+        id: Option<RequestId>,
+        params: &Value,
+        sid: Option<&str>,
+    ) -> Response {
+        let path = match require_str(&id, params, "path") {
+            Ok(p) => p.to_owned(),
+            Err(r) => return r,
+        };
+        // Collect files before taking mutable borrow on manager.
+        let files_vec: Vec<(String, Vec<u8>)> = match params.get("files").and_then(|v| v.as_object()) {
+            Some(files_obj) => {
+                let mut out = Vec::new();
+                for (rel, val) in files_obj {
+                    let b64 = match val.as_str() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let bytes = match b64_decode(b64) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            return Response::err(
+                                id,
+                                codes::INVALID_PARAMS,
+                                format!("base64 decode error for '{rel}': {e}"),
+                            );
+                        }
+                    };
+                    out.push((rel.clone(), bytes));
+                }
+                out
+            }
+            None => {
+                return Response::err(id, codes::INVALID_PARAMS, "missing: files");
+            }
+        };
+
+        let sb = match self.manager.resolve(sid) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+
+        let _ = sb.shell.vfs_mut().mkdirp(&path);
+        for (rel, bytes) in &files_vec {
+            let full = format!("{}/{}", path.trim_end_matches('/'), rel);
+            if let Some(parent) = std::path::Path::new(&full).parent().and_then(|p| p.to_str()) {
+                if !parent.is_empty() && parent != "/" {
+                    let _ = sb.shell.vfs_mut().mkdirp(parent);
+                }
+            }
+            if let Err(e) = sb.shell.vfs_mut().write_file(&full, bytes, false) {
+                return Response::err(
+                    id,
+                    codes::INTERNAL_ERROR,
+                    format!("write_file '{full}' failed: {e}"),
+                );
+            }
+        }
+        Response::ok(id, json!({"ok": true}))
     }
 }
