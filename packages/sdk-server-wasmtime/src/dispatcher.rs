@@ -726,6 +726,9 @@ impl Dispatcher {
             Ok(s) => s,
             Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
         };
+        // NOTE: The codepod shell-exec builtin uses "clear" as a subcommand
+        // (first positional arg), not the POSIX -c flag. "history -c" would
+        // fall into the "unknown subcommand" branch and return exit code 1.
         match sb.run("history clear").await {
             Ok(_) => Response::ok(id, json!({"ok": true})),
             Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
@@ -750,6 +753,11 @@ impl Dispatcher {
             "method": method,
             "params": params,
         }))?;
+        // NOTE: stdout_tx must have a large enough buffer (default: 16) to avoid
+        // deadlock. The dispatcher is single-threaded — if stdout_tx fills up here,
+        // the main loop (which drains it) cannot run because it's waiting for
+        // dispatch() to return. The channel buffer must be >= 1 + the maximum
+        // number of output lines emitted before the callback response arrives.
         self.stdout_tx.send(req).await?;
         let resp_line = self
             .cb_rx
