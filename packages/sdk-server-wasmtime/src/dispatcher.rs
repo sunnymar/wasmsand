@@ -251,6 +251,8 @@ impl Dispatcher {
             "files.stat" => self.handle_files_stat(id, &params, sid.as_deref()),
             "snapshot.create" => self.handle_snapshot_create(id, &params, sid.as_deref()),
             "snapshot.restore" => self.handle_snapshot_restore(id, &params, sid.as_deref()),
+            "persistence.export" => self.handle_persistence_export(id, &params, sid.as_deref()),
+            "persistence.import" => self.handle_persistence_import(id, &params, sid.as_deref()),
             "mount" => self.handle_mount(id, &params, sid.as_deref()),
             // remaining methods still not_implemented (done in later tasks)
             _ if KNOWN_METHODS.contains(&method) => Response::not_implemented(id, method),
@@ -529,6 +531,51 @@ impl Dispatcher {
         match sb.shell.vfs_mut().restore(&snap_id) {
             Ok(_) => Response::ok(id, json!({"ok": true})),
             Err(e) => Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        }
+    }
+
+    // ── Persistence ──────────────────────────────────────────────────────────
+
+    fn handle_persistence_export(
+        &mut self,
+        id: Option<RequestId>,
+        _params: &Value,
+        sid: Option<&str>,
+    ) -> Response {
+        let sb = match self.manager.resolve(sid) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+        match sb.shell.vfs().export_bytes() {
+            Ok(blob) => Response::ok(id, json!({"data": b64_encode(&blob)})),
+            Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
+        }
+    }
+
+    fn handle_persistence_import(
+        &mut self,
+        id: Option<RequestId>,
+        params: &Value,
+        sid: Option<&str>,
+    ) -> Response {
+        let data_b64 = match require_str(&id, params, "data") {
+            Ok(d) => d.to_owned(),
+            Err(r) => return r,
+        };
+        let blob = match b64_decode(&data_b64) {
+            Ok(b) => b,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e),
+        };
+        let sb = match self.manager.resolve(sid) {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
+        };
+        match crate::vfs::MemVfs::import_bytes(&blob) {
+            Ok(new_vfs) => {
+                *sb.shell.vfs_mut() = new_vfs;
+                Response::ok(id, json!({"ok": true}))
+            }
+            Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
         }
     }
 
