@@ -896,9 +896,10 @@ async fn test_streaming_run() {
     ).await;
     assert!(resp.error.is_none(), "run failed: {:?}", resp.error);
 
-    // The final response should have empty stdout (it was streamed)
+    // The final response should have empty stdout and stderr (both were streamed)
     let result = resp.result.unwrap();
     assert_eq!(result["stdout"].as_str().unwrap_or("nope"), "");
+    assert_eq!(result["stderr"].as_str().unwrap_or("nope"), "");
     assert_eq!(result["exitCode"].as_i64().unwrap(), 0);
 
     // The output notification should be in rx
