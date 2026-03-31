@@ -32,14 +32,15 @@ REBUILD_PYTHON=false
 PYTHON_FEATURES="${PYTHON_FEATURES:-numpy,pil}"
 ENGINE="deno"
 
-for arg in "$@"; do
-  case "$arg" in
-    --engine=*) ENGINE="${arg#--engine=}" ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --engine=*) ENGINE="${1#--engine=}" ;;
     --engine)   shift; ENGINE="$1" ;;
-    --target=*) TARGET_FLAG="--target ${arg#--target=}" ;;
+    --target=*) TARGET_FLAG="--target ${1#--target=}" ;;
     --target)   shift; TARGET_FLAG="--target $1" ;;
     --rebuild-python) REBUILD_PYTHON=true ;;
   esac
+  shift
 done
 
 if [ "$ENGINE" = "wasmtime" ]; then

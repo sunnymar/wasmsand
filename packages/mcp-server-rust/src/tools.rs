@@ -24,7 +24,7 @@ pub fn handle_tools_list(id: Value) -> Value {
         tool("list_sandboxes", "List active sandboxes", json!({"type":"object","properties":{}})),
         tool("run_command", "Run a shell command", json!({"type":"object","properties":{"command":{"type":"string"},"sandboxId":{"type":"string"}},"required":["command"]})),
         tool("read_file", "Read a file", json!({"type":"object","properties":{"path":{"type":"string"},"sandboxId":{"type":"string"}},"required":["path"]})),
-        tool("write_file", "Write a file", json!({"type":"object","properties":{"path":{"type":"string"},"data":{"type":"string"},"sandboxId":{"type":"string"}},"required":["path","data"]})),
+        tool("write_file", "Write a file (data must be base64-encoded)", json!({"type":"object","properties":{"path":{"type":"string"},"data":{"type":"string","description":"Base64-encoded file content"},"sandboxId":{"type":"string"}},"required":["path","data"]})),
         tool("list_directory", "List a directory", json!({"type":"object","properties":{"path":{"type":"string"},"sandboxId":{"type":"string"}},"required":["path"]})),
         tool("snapshot", "Create a VFS snapshot", json!({"type":"object","properties":{"sandboxId":{"type":"string"}}})),
         tool("restore", "Restore a VFS snapshot", json!({"type":"object","properties":{"id":{"type":"string"},"sandboxId":{"type":"string"}},"required":["id"]})),
