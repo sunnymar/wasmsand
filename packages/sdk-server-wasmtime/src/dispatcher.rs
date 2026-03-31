@@ -699,17 +699,17 @@ impl Dispatcher {
             };
             (root.engine.clone(), root.wasm_bytes.clone())
         };
-        let vfs = crate::vfs::MemVfs::new(None, None);
-        let shell = match crate::wasm::ShellInstance::new(&engine, &wasm_bytes, vfs, &[], 0).await {
-            Ok(s) => s,
-            Err(e) => return Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
-        };
         let nice = params
             .get("nice")
             .and_then(|v| v.as_u64())
             .map(|n| n.min(19) as u8)
             .unwrap_or(0);
         let timeout_ms = params.get("timeoutMs").and_then(|v| v.as_u64());
+        let vfs = crate::vfs::MemVfs::new(None, None);
+        let shell = match crate::wasm::ShellInstance::new(&engine, &wasm_bytes, vfs, &[], nice).await {
+            Ok(s) => s,
+            Err(e) => return Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
+        };
         let sb = crate::sandbox::SandboxState {
             engine,
             wasm_bytes,
