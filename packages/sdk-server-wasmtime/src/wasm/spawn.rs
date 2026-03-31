@@ -154,7 +154,8 @@ async fn run_child(
     stderr_pipe: Option<PipeBuf>,
     nice: u8,
 ) -> anyhow::Result<i32> {
-    let data = StoreData::new(vfs, &stdin, &env).context("creating child store data")?;
+    let data = StoreData::new_with_ctx(vfs, &stdin, &env, Some(ctx.clone()), nice)
+        .context("creating child store data")?;
 
     // Remember the output pipes before creating the store (we'll use them after).
     let child_stdout_pipe = data.stdout_pipe.clone();
