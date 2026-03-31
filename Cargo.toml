@@ -22,6 +22,10 @@ members = [
   "packages/pandas-rust/crates/pandas-rust-core",
   "packages/pandas-rust/crates/pandas-rust-python",
   "packages/pandas-rust/crates/pandas-rust-wasm",
+  # Host binary: Wasmtime-based sandbox server (Option 2 backend)
+  "packages/sdk-server-wasmtime",
+  # Rust MCP server (wasmtime backend)
+  "packages/mcp-server-rust",
 ]
 exclude = [
   "packages/sips",

@@ -43,9 +43,13 @@ for arg in "$@"; do
 done
 
 if [ "$ENGINE" = "wasmtime" ]; then
-  echo "==> Note: wasmtime MCP server (mcp-server-rust crate) is planned for Task 11." >&2
-  echo "==> Falling back to deno engine for codepod-mcp build." >&2
-  ENGINE="deno"
+  echo "==> Building codepod-mcp-rust (wasmtime)..."
+  mkdir -p "$OUT_DIR"
+  cargo build -p mcp-server-rust --release
+  cp target/release/codepod-mcp-rust "$OUT_DIR/codepod-mcp-rust"
+  SIZE=$(du -h "$OUT_DIR/codepod-mcp-rust" | cut -f1)
+  echo "==> Built: $OUT_DIR/codepod-mcp-rust ($SIZE)"
+  exit 0
 elif [ "$ENGINE" != "deno" ]; then
   echo "Error: unknown engine '$ENGINE'. Use deno or wasmtime." >&2
   exit 1
