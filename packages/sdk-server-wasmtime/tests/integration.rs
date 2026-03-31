@@ -916,3 +916,103 @@ async fn test_streaming_run() {
     }
     assert!(found_notification, "expected output notification in channel");
 }
+
+#[tokio::test]
+async fn test_timeout_kills_command() {
+    let wasm = wasm_bytes();
+    let mut mgr = SandboxManager::new();
+    // 500ms timeout
+    mgr.create(wasm, None, Some(500), 0, None).await.unwrap();
+    let result = mgr.root_run("sleep 100").await.unwrap();
+    assert_eq!(
+        result["exitCode"].as_i64().unwrap(),
+        124,
+        "expected exit code 124 (timeout)"
+    );
+    assert!(result["stderr"].as_str().unwrap().contains("timeout"));
+}
+
+#[tokio::test]
+async fn test_poisoned_after_timeout() {
+    let wasm = wasm_bytes();
+    let mut mgr = SandboxManager::new();
+    mgr.create(wasm, None, Some(300), 0, None).await.unwrap();
+    // First run times out
+    let r = mgr.root_run("sleep 100").await.unwrap();
+    assert_eq!(r["exitCode"].as_i64().unwrap(), 124);
+    // Second run should fail because sandbox is poisoned
+    let err = mgr.root_run("echo hello").await;
+    assert!(err.is_err(), "expected error on poisoned sandbox");
+}
+
+#[tokio::test]
+async fn test_nice_doesnt_break_execution() {
+    let wasm = wasm_bytes();
+    let mut mgr = SandboxManager::new();
+    // nice=19: yields every 1ms, but should still run correctly
+    mgr.create(wasm, None, None, 19, None).await.unwrap();
+    let result = mgr.root_run("echo 'nice works'").await.unwrap();
+    assert_eq!(result["exitCode"].as_i64().unwrap(), 0);
+    assert!(result["stdout"].as_str().unwrap().contains("nice works"));
+}
+
+#[tokio::test]
+async fn test_suspend_resume() {
+    let wasm = wasm_bytes();
+    let mut mgr = SandboxManager::new();
+    mgr.create(wasm, None, None, 0, None).await.unwrap();
+
+    // Pre-pause: suspend before the next run.
+    let sb = mgr.root.as_mut().unwrap();
+    sb.paused.store(true, std::sync::atomic::Ordering::Release);
+
+    // Resume after a short delay from a background task.
+    let notify = sb.resume_notify.clone();
+    let paused = sb.paused.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        paused.store(false, std::sync::atomic::Ordering::Release);
+        notify.notify_waiters();
+    });
+
+    // run() should block until the background task resumes it.
+    let result = mgr.root_run("echo 'resumed'").await.unwrap();
+    assert_eq!(result["exitCode"].as_i64().unwrap(), 0);
+    assert!(result["stdout"].as_str().unwrap().contains("resumed"));
+}
+
+#[tokio::test]
+async fn test_timeout_rpc() {
+    use tokio::sync::mpsc;
+    let (tx, _rx) = mpsc::channel::<String>(16);
+    let (_cb_tx, cb_rx) = mpsc::channel::<String>(4);
+    let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
+
+    let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+
+    let (r, _) = disp
+        .dispatch(
+            Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
+            "create",
+            serde_json::json!({
+                "shellWasmPath": wasm_path.to_str().unwrap(),
+                "timeoutMs": 500,
+            }),
+        )
+        .await;
+    assert!(r.result.is_some(), "create failed: {:?}", r.error);
+
+    let (r2, _) = disp
+        .dispatch(
+            Some(sdk_server_wasmtime::rpc::RequestId::Int(2)),
+            "run",
+            serde_json::json!({ "command": "sleep 100" }),
+        )
+        .await;
+    assert!(r2.result.is_some(), "run should return result not error");
+    assert_eq!(
+        r2.result.unwrap()["exitCode"].as_i64().unwrap(),
+        124
+    );
+}
