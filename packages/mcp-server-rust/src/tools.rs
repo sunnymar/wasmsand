@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use serde_json::{json, Value};
 use sdk_server_wasmtime::sandbox::SandboxManager;
@@ -19,7 +20,11 @@ pub fn handle_initialize(msg: &Value) -> Value {
 
 pub fn handle_tools_list(id: Value) -> Value {
     let tools = vec![
-        tool("create_sandbox", "Create a new sandbox", json!({"type":"object","properties":{}})),
+        tool("create_sandbox", "Create a new isolated sandbox (wasmtime). Optional: nice (0–19, default 0) and timeoutMs (per-command kill timeout).",
+            json!({"type":"object","properties":{
+                "nice":{"type":"integer","description":"CPU scheduling priority 0–19. 0=default (10ms quantum), 19=lowest (1ms quantum).","minimum":0,"maximum":19},
+                "timeoutMs":{"type":"integer","description":"Per-command wall-clock kill timeout in ms. Omit for no limit.","minimum":1}
+            }})),
         tool("destroy_sandbox", "Destroy a sandbox", json!({"type":"object","properties":{"sandboxId":{"type":"string"}}})),
         tool("list_sandboxes", "List active sandboxes", json!({"type":"object","properties":{}})),
         tool("run_command", "Run a shell command", json!({"type":"object","properties":{"command":{"type":"string"},"sandboxId":{"type":"string"}},"required":["command"]})),
@@ -30,6 +35,10 @@ pub fn handle_tools_list(id: Value) -> Value {
         tool("restore", "Restore a VFS snapshot", json!({"type":"object","properties":{"id":{"type":"string"},"sandboxId":{"type":"string"}},"required":["id"]})),
         tool("export_state", "Export sandbox state as base64", json!({"type":"object","properties":{"sandboxId":{"type":"string"}}})),
         tool("import_state", "Import sandbox state from base64", json!({"type":"object","properties":{"data":{"type":"string"},"sandboxId":{"type":"string"}},"required":["data"]})),
+        tool("suspend_sandbox", "Pause sandbox before its next run() call (wasmtime only).",
+            json!({"type":"object","properties":{"sandboxId":{"type":"string"}}})),
+        tool("resume_sandbox", "Resume a previously suspended sandbox (wasmtime only).",
+            json!({"type":"object","properties":{"sandboxId":{"type":"string"}}})),
     ];
     json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}})
 }
@@ -70,10 +79,12 @@ async fn dispatch_tool(
 
     match name {
         "create_sandbox" => {
+            let nice = args.get("nice").and_then(|v| v.as_u64()).map(|n| n.min(19) as u8).unwrap_or(0);
+            let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64());
             let mut m = mgr.lock().await;
             if m.root.is_none() {
-                m.create((**wasm_bytes).clone(), None, None, None).await?;
-                Ok("Sandbox created.".to_string())
+                m.create((**wasm_bytes).clone(), None, timeout_ms, nice, None).await?;
+                Ok(format!("Sandbox created (nice={nice}, timeout={timeout_ms:?})."))
             } else {
                 // Fork the root to create a named sandbox
                 let new_sb = m.root.as_ref().unwrap().fork().await?;
@@ -171,6 +182,19 @@ async fn dispatch_tool(
             let sb = m.resolve(sid.as_deref())?;
             *sb.shell.vfs_mut() = new_vfs;
             Ok("imported".to_string())
+        }
+        "suspend_sandbox" => {
+            let mut m = mgr.lock().await;
+            let sb = m.resolve(sid.as_deref())?;
+            sb.paused.store(true, Ordering::Release);
+            Ok("Sandbox suspended.".to_string())
+        }
+        "resume_sandbox" => {
+            let mut m = mgr.lock().await;
+            let sb = m.resolve(sid.as_deref())?;
+            sb.paused.store(false, Ordering::Release);
+            sb.resume_notify.notify_waiters();
+            Ok("Sandbox resumed.".to_string())
         }
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
