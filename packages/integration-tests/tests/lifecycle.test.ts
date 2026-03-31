@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno-only file; uses Deno globals not in the TypeScript stdlib.
 // packages/integration-tests/tests/lifecycle.test.ts
 // Engine-parameterized: set SERVER_BINARY env var to the binary to test.
 // Defaults to dist/codepod-server (wasmtime).
