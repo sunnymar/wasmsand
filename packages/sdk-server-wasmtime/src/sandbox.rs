@@ -64,7 +64,10 @@ impl SandboxState {
         if self.poisoned {
             anyhow::bail!("sandbox poisoned: previous command timed out");
         }
-        // Wait while pre-paused (set externally before this run was called).
+        // Pre-command pause: if the sandbox was suspended externally, wait here
+        // before starting the next command. Mid-command suspension (pausing an
+        // already-running command) is not implemented — it would require the
+        // dispatcher to handle concurrent RPCs.
         while self.paused.load(Ordering::Acquire) {
             self.resume_notify.notified().await;
         }
