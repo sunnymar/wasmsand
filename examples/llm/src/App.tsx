@@ -7,6 +7,7 @@ import { Chat } from './components/Chat.js';
 import { IntroDialog, shouldShowIntro } from './components/IntroDialog.js';
 import type { Sandbox } from '@codepod/sandbox';
 import { DEFAULT_MODEL_ID } from './models.js';
+import type { SubAgentFn } from './types.js';
 
 export function App() {
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
@@ -16,6 +17,7 @@ export function App() {
   const [retryKey, setRetryKey] = useState(0);
   const sandboxRef = useRef<Sandbox | null>(null);
   const engineRef = useRef<unknown>(null);
+  const subAgentRef = useRef<SubAgentFn | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,7 +34,7 @@ export function App() {
 
         // Kick off sandbox in the background
         if (!sandboxRef.current) {
-          initSandbox().then(sandbox => {
+          initSandbox(subAgentRef).then(sandbox => {
             if (!cancelled) {
               sandboxRef.current = sandbox;
               setSandboxReady(true);
@@ -93,7 +95,7 @@ export function App() {
   return (
     <>
       {showIntro && <IntroDialog onDismiss={() => setShowIntro(false)} />}
-      <Chat engine={engineRef.current} sandbox={sandboxRef.current} sandboxReady={sandboxReady} modelId={modelId} onModelChange={handleModelChange} />
+      <Chat engine={engineRef.current} sandbox={sandboxRef.current} sandboxReady={sandboxReady} modelId={modelId} onModelChange={handleModelChange} subAgentRef={subAgentRef} />
     </>
   );
 }

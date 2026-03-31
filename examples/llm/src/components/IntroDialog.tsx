@@ -48,11 +48,14 @@ export function IntroDialog({ onDismiss }: IntroDialogProps) {
         </p>
 
         <p style={{ fontSize: '0.9rem', lineHeight: 1.6, marginBottom: '0.85rem', color: '#a6adc8' }}>
-          The RLM pattern lets the model spawn sub-agents via{' '}
-          <code style={{ background: '#313244', borderRadius: 3, padding: '1px 5px', fontSize: '0.82rem', color: '#a6e3a1' }}>
-            llm "question"
-          </code>
-          {' '}— a bash command that recursively invokes another LLM instance. Sub-agents can run their own code and return results to the parent.
+          The RLM pattern lets the model delegate sub-tasks to fresh agent instances via a Python package installed in the sandbox:
+        </p>
+        <pre style={{ background: '#1e1e2e', border: '1px solid #313244', borderRadius: 6, padding: '0.6rem 0.75rem', fontSize: '0.78rem', color: '#a6e3a1', marginBottom: '0.85rem', overflowX: 'auto' }}>{`from llm import sub_llm, FINAL
+
+summaries = [sub_llm("summarise", context=chunk) for chunk in chunks]
+FINAL("\\n".join(summaries))`}</pre>
+        <p style={{ fontSize: '0.9rem', lineHeight: 1.6, marginBottom: '0.85rem', color: '#a6adc8' }}>
+          Sub-agents share the same persistent filesystem — data written to <code style={{ background: '#313244', borderRadius: 3, padding: '1px 5px', fontSize: '0.82rem', color: '#a6e3a1' }}>/tmp/</code> is visible to all agents. Context can also be passed inline via the <code style={{ background: '#313244', borderRadius: 3, padding: '1px 5px', fontSize: '0.82rem', color: '#a6e3a1' }}>context=</code> argument.
         </p>
 
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', padding: '0.6rem 0.75rem', background: '#1e1e2e', borderRadius: 6, border: '1px solid #45475a', marginBottom: '1.25rem', fontSize: '0.82rem', color: '#6c7086' }}>

@@ -145,63 +145,35 @@ Deno.test('tool call limit stops the loop', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Sub-agent (llm "query")
+// FINAL() sentinel detection
 // ---------------------------------------------------------------------------
 
-Deno.test('llm "query" triggers recursive sub-agent', async () => {
-  // Engine call order: outer-turn-1, sub-turn-1, outer-turn-2
-  const responses = [
-    'Let me ask.\n```bash\nllm "what is 2+2"\n```',
-    'The answer is 4.',   // sub-agent
-    'Sub said: 4.',       // outer turn 2
-  ];
-  let callIdx = 0;
-  const engine: Engine = {
-    chat: {
-      completions: {
-        create: async (): Promise<AsyncIterable<LLMChunk>> => {
-          const text = responses[callIdx++] ?? 'done';
-          return (async function* (): AsyncGenerator<LLMChunk> {
-            yield { choices: [{ delta: { content: text }, finish_reason: 'stop' }] };
-          })();
-        },
-      },
-    },
-  };
-
-  const parts: Part[] = [];
-  await runChat(engine, noBlock, 'Delegate', (p) => parts.push(p));
-
-  assertEquals(callIdx, 3);
-  const llmCall = parts.find(
-    (p) => p.kind === 'tool-call' && (p as Extract<Part, { kind: 'tool-call' }>).command.includes('llm'),
+Deno.test('FINAL() sentinel in stdout terminates the loop early', async () => {
+  // Model writes Python code; runBlock returns stdout with __FINAL__: marker.
+  const parts = await collect(
+    mockEngine(['```python\nfrom llm import sub_llm, FINAL\nFINAL("The answer is 42")\n```']),
+    async () => ({ stdout: '__FINAL__:The answer is 42', stderr: '', exitCode: 0 }),
+    'Answer with FINAL',
   );
-  assertEquals(llmCall !== undefined, true);
-  const subResult = parts.find(
-    (p) =>
-      p.kind === 'tool-result' &&
-      (p as Extract<Part, { kind: 'tool-result' }>).stdout.includes('The answer is 4.'),
+  // Should see: tool-call, tool-result, then a text part with the answer
+  const tc = parts.find((p) => p.kind === 'tool-call');
+  assertEquals(tc !== undefined, true);
+  const tr = parts.find((p) => p.kind === 'tool-result');
+  assertEquals(tr !== undefined, true);
+  const textPart = parts.find(
+    (p) => p.kind === 'text' && (p as Extract<Part, { kind: 'text' }>).text.includes('The answer is 42'),
   );
-  assertEquals(subResult !== undefined, true);
+  assertEquals(textPart !== undefined, true);
 });
 
-Deno.test('sub-agent recursion depth limit blocks third level', async () => {
-  // MAX_DEPTH=2: depth=0 and depth=1 can spawn, depth=2 is blocked.
-  // Engine calls (depth-first): d0t1 → d1t1 → d2t1 → d2t2 → d1t2 → d0t2
-  const responses = [
-    '```bash\nllm "level1"\n```',   // depth=0 turn 1 → spawns depth=1
-    '```bash\nllm "level2"\n```',   // depth=1 turn 1 → spawns depth=2
-    '```bash\nllm "level3"\n```',   // depth=2 turn 1 → BLOCKED (depth 2 >= MAX_DEPTH 2)
-    'depth2 done',                  // depth=2 turn 2 (after blocked error fed back)
-    'level1 done',                  // depth=1 turn 2
-    'outer done',                   // depth=0 turn 2
-  ];
-  let callIdx = 0;
+Deno.test('FINAL() stops the loop — no further engine calls after sentinel', async () => {
+  let callCount = 0;
   const engine: Engine = {
     chat: {
       completions: {
         create: async (): Promise<AsyncIterable<LLMChunk>> => {
-          const text = responses[callIdx++] ?? 'done';
+          callCount++;
+          const text = '```python\nFINAL("done")\n```';
           return (async function* (): AsyncGenerator<LLMChunk> {
             yield { choices: [{ delta: { content: text }, finish_reason: 'stop' }] };
           })();
@@ -209,16 +181,9 @@ Deno.test('sub-agent recursion depth limit blocks third level', async () => {
       },
     },
   };
-
-  const parts: Part[] = [];
-  await runChat(engine, noBlock, 'Start', (p) => parts.push(p));
-
-  const depthError = parts.find(
-    (p) =>
-      p.kind === 'tool-result' &&
-      (p as Extract<Part, { kind: 'tool-result' }>).stderr.includes('Max recursion depth'),
-  );
-  assertEquals(depthError !== undefined, true);
+  await runChat(engine, async () => ({ stdout: '__FINAL__:done', stderr: '', exitCode: 0 }), 'Go', () => {});
+  // Only one engine call — the loop exits after FINAL, never re-enters
+  assertEquals(callCount, 1);
 });
 
 // ---------------------------------------------------------------------------

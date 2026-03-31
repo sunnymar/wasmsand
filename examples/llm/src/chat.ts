@@ -1,10 +1,9 @@
 import type { Part } from './types.js';
 import { SYSTEM_PROMPT } from './prompts.js';
-import { extractCodeBlocks, parseLlmCommand } from './parse.js';
+import { extractCodeBlocks, parseFinalCall } from './parse.js';
 import type { CodeBlock } from './parse.js';
 
 export const MAX_TOOL_CALLS = 15;
-export const MAX_DEPTH = 2;
 
 export type LLMChunk = { choices: Array<{ delta: { content: string | null }; finish_reason: string | null }> };
 
@@ -30,7 +29,6 @@ export async function runChat(
   runBlock: RunBlock,
   query: string,
   onPart: (part: Part) => void,
-  depth = 0,
 ): Promise<void> {
   const history: LLMMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -65,6 +63,8 @@ export async function runChat(
     if (blocks.length === 0) break;
 
     const resultLines: string[] = [];
+    let finalAnswer: string | null = null;
+
     for (const block of blocks) {
       if (toolCallCount >= MAX_TOOL_CALLS) {
         onPart({ kind: 'text', text: '\n\n_Tool call limit reached — stopping._' });
@@ -72,50 +72,25 @@ export async function runChat(
       }
 
       const callId = crypto.randomUUID();
-      // llm "..." is only valid as a bash command.
-      const subQuery = block.lang === 'bash' ? parseLlmCommand(block.code) : null;
+      onPart({ kind: 'tool-call', callId, command: block.code });
+      const result = await runBlock(block);
+      onPart({ kind: 'tool-result', callId, ...result });
 
-      if (subQuery !== null) {
-        // Recursive sub-agent call.
-        onPart({ kind: 'tool-call', callId, command: block.code });
-
-        if (depth >= MAX_DEPTH) {
-          const err = 'Max recursion depth reached.';
-          onPart({ kind: 'tool-result', callId, stdout: '', stderr: err, exitCode: 1 });
-          resultLines.push(`$ ${block.code}\nstderr: ${err}`);
-        } else {
-          // Run sub-agent; accumulate its text, forward its tool calls.
-          let subText = '';
-          await runChat(
-            engine,
-            runBlock,
-            subQuery,
-            (part) => {
-              if (part.kind === 'text') {
-                subText += part.text;
-              } else {
-                // Forward sub-agent tool calls/results so user can see the work.
-                onPart(part);
-              }
-            },
-            depth + 1,
-          );
-          onPart({ kind: 'tool-result', callId, stdout: subText, stderr: '', exitCode: 0 });
-          resultLines.push(`$ ${block.code}\n${subText || '(no output)'}`);
-        }
-      } else {
-        // Bash or Python block — execute via the runBlock callback.
-        onPart({ kind: 'tool-call', callId, command: block.code });
-        const result = await runBlock(block);
-        onPart({ kind: 'tool-result', callId, ...result });
-
-        const output = [result.stdout, result.stderr ? `stderr: ${result.stderr}` : '']
-          .filter(Boolean)
-          .join('\n');
-        resultLines.push(`$ ${block.code}\n${output || '(no output)'}`);
-      }
+      const output = [result.stdout, result.stderr ? `stderr: ${result.stderr}` : '']
+        .filter(Boolean)
+        .join('\n');
+      resultLines.push(`$ ${block.code}\n${output || '(no output)'}`);
 
       toolCallCount++;
+
+      // Check for FINAL() sentinel — Python code called FINAL(answer)
+      finalAnswer = parseFinalCall(result.stdout);
+      if (finalAnswer !== null) break;
+    }
+
+    if (finalAnswer !== null) {
+      onPart({ kind: 'text', text: `\n\n${finalAnswer}` });
+      return;
     }
 
     // Feed only the portion up to the first code block (what we actually executed)

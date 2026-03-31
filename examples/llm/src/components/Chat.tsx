@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import type { Part, ChatMessage } from '../types.js';
+import type { Part, ChatMessage, SubAgentFn } from '../types.js';
 import { ToolCall } from './ToolCall.js';
 import { runChat } from '../chat.js';
 import type { RunBlock } from '../chat.js';
@@ -14,6 +14,7 @@ interface ChatProps {
   sandboxReady: boolean;
   modelId: string;
   onModelChange: (modelId: string) => void;
+  subAgentRef: { current: SubAgentFn | null };
 }
 
 function renderParts(parts: Part[]): React.ReactNode[] {
@@ -41,7 +42,7 @@ function renderParts(parts: Part[]): React.ReactNode[] {
   return nodes;
 }
 
-export function Chat({ engine, sandbox, sandboxReady, modelId, onModelChange }: ChatProps) {
+export function Chat({ engine, sandbox, sandboxReady, modelId, onModelChange, subAgentRef }: ChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -61,6 +62,7 @@ export function Chat({ engine, sandbox, sandboxReady, modelId, onModelChange }: 
     setInput('');
     setGenerating(true);
 
+    try {
     const runBlock: RunBlock = async (block: CodeBlock) => {
       if (!sandbox) return { stdout: '', stderr: 'Sandbox not ready yet — please wait and retry.', exitCode: 1 };
       if (block.lang === 'python') {
@@ -70,13 +72,37 @@ export function Chat({ engine, sandbox, sandboxReady, modelId, onModelChange }: 
       return runBash(sandbox, block.code);
     };
 
-    // Write conversation history to ~/session.txt so the agent can read it if needed.
-    if (messages.length > 0 && sandbox) {
-      const historyText = messages
-        .map(m => `${m.role === 'user' ? 'USER' : 'ASSISTANT'}: ${m.content}`)
-        .join('\n\n---\n\n');
-      sandbox.writeFile('/root/session.txt', new TextEncoder().encode(historyText));
+    const enc = new TextEncoder();
+
+    // Write context files for the main agent.
+    // /context/user_message — what the user just asked (read-only by convention)
+    // /context/history      — prior conversation turns (read-only by convention)
+    if (sandbox) {
+      sandbox.writeFile('/context/user_message', enc.encode(input));
+      const historyText = messages.length > 0
+        ? messages.map(m => `${m.role === 'user' ? 'USER' : 'ASSISTANT'}: ${m.content}`).join('\n\n---\n\n')
+        : '(no prior history)';
+      sandbox.writeFile('/context/history', enc.encode(historyText));
     }
+
+    // Build the sub-agent function that the llm extension will call.
+    // Before each sub-agent run, overwrite /context/user_message with the task
+    // the parent assigned (and optionally /context/parent_context with inline data).
+    // This is safe because the parent is blocked inside sub_llm() waiting for return.
+    const subAgentFn: SubAgentFn = async (task: string, context?: string) => {
+      if (sandbox) {
+        sandbox.writeFile('/context/user_message', enc.encode(task));
+        sandbox.writeFile('/context/parent_context', enc.encode(context ?? ''));
+      }
+      let finalText = '';
+      await runChat(engine as never, runBlock, task, (part) => {
+        if (part.kind === 'text') finalText += part.text;
+      });
+      return finalText.trim();
+    };
+
+    // Expose the sub-agent function to the sandbox extension before running.
+    subAgentRef.current = subAgentFn;
 
     await runChat(
       engine as never,
@@ -92,7 +118,10 @@ export function Chat({ engine, sandbox, sandboxReady, modelId, onModelChange }: 
       },
     );
 
-    setGenerating(false);
+    } finally {
+      subAgentRef.current = null;
+      setGenerating(false);
+    }
   }
 
   return (

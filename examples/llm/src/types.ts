@@ -14,6 +14,9 @@ export interface ChatMessage {
   id: string;
 }
 
+/** Callback used by the llm extension to recursively invoke a sub-agent. */
+export type SubAgentFn = (task: string, context?: string) => Promise<string>;
+
 export type BootState =
   | { phase: 'booting'; modelProgress: number; modelText: string; crossOriginIsolated: boolean }
   | { phase: 'ready' }

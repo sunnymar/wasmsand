@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert';
-import { extractCodeBlocks, parseLlmCommand } from './parse.ts';
+import { extractCodeBlocks, parseFinalCall } from './parse.ts';
 
 // ---------------------------------------------------------------------------
 // extractCodeBlocks
@@ -75,26 +75,27 @@ Deno.test('stops at first complete block (early-break simulation)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// parseLlmCommand
+// parseFinalCall
 // ---------------------------------------------------------------------------
 
-Deno.test('parses llm "query" (double quotes)', () => {
-  assertEquals(parseLlmCommand('llm "what is pi?"'), 'what is pi?');
+Deno.test('parseFinalCall — detects sentinel in stdout', () => {
+  assertEquals(parseFinalCall('__FINAL__:The answer is 42'), 'The answer is 42');
 });
 
-Deno.test("parses llm 'query' (single quotes)", () => {
-  assertEquals(parseLlmCommand("llm 'what is pi?'"), 'what is pi?');
+Deno.test('parseFinalCall — detects sentinel with leading text', () => {
+  assertEquals(parseFinalCall('some output\n__FINAL__:done'), 'done');
 });
 
-Deno.test('returns null for a non-llm command', () => {
-  assertEquals(parseLlmCommand('echo hello'), null);
-  assertEquals(parseLlmCommand('python3 script.py'), null);
+Deno.test('parseFinalCall — returns null when no sentinel', () => {
+  assertEquals(parseFinalCall('just some output'), null);
+  assertEquals(parseFinalCall(''), null);
 });
 
-Deno.test('returns null for llm without quotes', () => {
-  assertEquals(parseLlmCommand('llm what is pi'), null);
+Deno.test('parseFinalCall — trims whitespace from answer', () => {
+  assertEquals(parseFinalCall('__FINAL__:  hello  '), 'hello');
 });
 
-Deno.test('trims whitespace from query', () => {
-  assertEquals(parseLlmCommand('llm "  hello  "'), 'hello');
+Deno.test('parseFinalCall — multiline answer captured', () => {
+  const result = parseFinalCall('__FINAL__:line1\nline2\nline3');
+  assertEquals(result, 'line1\nline2\nline3');
 });

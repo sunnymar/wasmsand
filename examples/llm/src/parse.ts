@@ -32,9 +32,11 @@ export function extractCodeBlocks(text: string): CodeBlock[] {
   return blocks;
 }
 
-/** If cmd is `llm "query"` or `llm 'query'`, return the query string; else null. */
-export function parseLlmCommand(cmd: string): string | null {
-  const trimmed = cmd.trim();
-  const m = trimmed.match(/^llm\s+["']([^"']+)["']\s*$/s);
+/**
+ * If stdout contains a `__FINAL__:answer` sentinel (printed by `FINAL()` from the
+ * llm Python package), return the answer string; otherwise return null.
+ */
+export function parseFinalCall(stdout: string): string | null {
+  const m = stdout.match(/__FINAL__:([\s\S]*)$/m);
   return m ? m[1].trim() : null;
 }
