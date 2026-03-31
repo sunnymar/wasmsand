@@ -66,3 +66,58 @@ jobs:
 
       - name: Smoke-test MCP server
         run: bash scripts/smoke-test-mcp.sh
+
+  test-wasmtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Build wasmtime server
+        run: bash scripts/build-sdk-server.sh
+
+      - name: Run integration tests (wasmtime)
+        run: |
+          SERVER_BINARY=dist/codepod-server \
+          deno test -A --no-check packages/integration-tests/tests/
+
+  test-deno-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - run: deno install
+
+      - name: Build TypeScript orchestrator
+        run: cd packages/orchestrator && npx tsup
+
+      - name: Run integration tests (deno sdk-server)
+        run: |
+          SERVER_BINARY="$HOME/.deno/bin/deno" \
+          SERVER_ARGS="run -A --no-check --unstable-sloppy-imports packages/sdk-server/src/server.ts" \
+          deno test -A --no-check packages/integration-tests/tests/
