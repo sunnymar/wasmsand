@@ -140,6 +140,7 @@ class Sandbox:
             # Internal constructor for forked sandboxes
             self._client = _client
             self._sandbox_id = _sandbox_id
+            self._engine = 'deno'  # forks don't support CPU control
             self.commands = Commands(self._client, self._sandbox_id)
             self.files = Files(self._client, self._sandbox_id)
             self.sandboxes = SandboxManager(self._client)

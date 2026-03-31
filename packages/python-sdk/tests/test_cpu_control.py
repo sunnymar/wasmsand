@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, patch
 
-import codepod
 from codepod.sandbox import Sandbox
 
 
@@ -15,7 +14,7 @@ class TestNiceParam:
 
         class FakeClient:
             def start(self): pass
-            def register_storage_handlers(self, **kwargs): pass
+            def register_storage_handlers(self, **_): pass
             def call(self, method, params):
                 captured[method] = params
                 if method == "create":
@@ -25,7 +24,7 @@ class TestNiceParam:
         with patch("codepod.sandbox._resolve_runtime", return_value=("/fake/codepod-server", [], None, None)), \
              patch("codepod.sandbox._find_codepod_server", return_value="/fake/codepod-server"), \
              patch("codepod.sandbox.RpcClient", return_value=FakeClient()):
-            sb = Sandbox(engine="wasmtime", nice=10)
+            _ = Sandbox(engine="wasmtime", nice=10)
 
         assert captured["create"].get("nice") == 10
 
@@ -35,7 +34,7 @@ class TestNiceParam:
 
         class FakeClient:
             def start(self): pass
-            def register_storage_handlers(self, **kwargs): pass
+            def register_storage_handlers(self, **_): pass
             def call(self, method, params):
                 captured[method] = params
                 return {"ok": True}
@@ -43,7 +42,7 @@ class TestNiceParam:
         with patch("codepod.sandbox._resolve_runtime", return_value=("/fake/codepod-server", [], None, None)), \
              patch("codepod.sandbox._find_codepod_server", return_value="/fake/codepod-server"), \
              patch("codepod.sandbox.RpcClient", return_value=FakeClient()):
-            sb = Sandbox(engine="wasmtime", nice=99)
+            _ = Sandbox(engine="wasmtime", nice=99)
 
         assert captured["create"].get("nice") == 19
 
@@ -53,7 +52,7 @@ class TestNiceParam:
 
         class FakeClient:
             def start(self): pass
-            def register_storage_handlers(self, **kwargs): pass
+            def register_storage_handlers(self, **_): pass
             def call(self, method, params):
                 captured[method] = params
                 return {"ok": True}
@@ -61,7 +60,7 @@ class TestNiceParam:
         with patch("codepod.sandbox._resolve_runtime", return_value=("/fake/codepod-server", [], None, None)), \
              patch("codepod.sandbox._find_codepod_server", return_value="/fake/codepod-server"), \
              patch("codepod.sandbox.RpcClient", return_value=FakeClient()):
-            sb = Sandbox(engine="wasmtime", nice=0)
+            _ = Sandbox(engine="wasmtime", nice=0)
 
         assert "nice" not in captured["create"]
 
