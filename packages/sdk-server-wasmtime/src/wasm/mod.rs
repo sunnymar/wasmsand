@@ -113,6 +113,8 @@ pub struct StoreData {
     pub spawn_ctx: Option<Arc<SpawnContext>>,
     /// Current environment variables (passed to spawned children).
     pub env: Vec<(String, String)>,
+    /// Scheduling priority for this store's spawned children.
+    pub nice: u8,
 }
 
 impl WasiView for StoreData {
@@ -126,7 +128,7 @@ impl WasiView for StoreData {
 
 impl StoreData {
     pub fn new(vfs: MemVfs, stdin: &[u8], env: &[(String, String)]) -> anyhow::Result<Self> {
-        Self::new_with_ctx(vfs, stdin, env, None)
+        Self::new_with_ctx(vfs, stdin, env, None, 0)
     }
 
     pub fn new_with_ctx(
@@ -134,6 +136,7 @@ impl StoreData {
         stdin: &[u8],
         env: &[(String, String)],
         spawn_ctx: Option<Arc<SpawnContext>>,
+        nice: u8,
     ) -> anyhow::Result<Self> {
         let stdout_pipe = DrainablePipe::new();
         let stderr_pipe = DrainablePipe::new();
@@ -157,6 +160,7 @@ impl StoreData {
             kernel: ProcessKernel::default(),
             spawn_ctx,
             env: env.to_vec(),
+            nice,
         })
     }
 }
@@ -655,10 +659,11 @@ fn add_process_imports(linker: &mut Linker<StoreData>) -> anyhow::Result<()> {
 
             let parent_vfs = c.data().vfs.cow_clone();
             let parent_env = c.data().env.clone();
+            let parent_nice = c.data().nice;
 
             // Spawn background task; get oneshot receiver.
             let (_, rx) =
-                spawn::spawn_child(spawn_ctx, parent_vfs, parent_env, stdin_data, stdout_pipe, stderr_pipe, &req);
+                spawn::spawn_child(spawn_ctx, parent_vfs, parent_env, stdin_data, stdout_pipe, stderr_pipe, &req, parent_nice);
 
             // Register the child in the kernel's process table.
             c.data_mut().kernel.add_process(rx)

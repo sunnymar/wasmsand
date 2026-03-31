@@ -37,7 +37,7 @@ impl ShellInstance {
         let module = Arc::new(Module::new(&engine.engine, wasm_bytes).context("compiling WASM module")?);
 
         let spawn_ctx = SpawnContext::new(engine, module.clone());
-        let data = StoreData::new_with_ctx(vfs, &[], env, Some(spawn_ctx))
+        let data = StoreData::new_with_ctx(vfs, &[], env, Some(spawn_ctx), nice)
             .context("creating store data")?;
         let mut store = Store::new(&engine.engine, data);
 

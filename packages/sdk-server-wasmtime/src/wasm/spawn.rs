@@ -60,6 +60,9 @@ pub struct SpawnRequest {
     pub stderr_fd: i32,
     #[serde(default)]
     pub stdin_data: String,
+    /// Scheduling priority for this child process. 0–19; inherits from parent if absent.
+    #[serde(default)]
+    pub nice: u8,
 }
 
 fn default_cwd() -> String {
@@ -100,6 +103,7 @@ pub fn spawn_child(
     stdout_pipe: Option<PipeBuf>,
     stderr_pipe: Option<PipeBuf>,
     req: &SpawnRequest,
+    parent_nice: u8,
 ) -> (i32, oneshot::Receiver<i32>) {
     let (tx, rx) = oneshot::channel::<i32>();
 
@@ -119,11 +123,14 @@ pub fn spawn_child(
         child_env.push(("PWD".to_owned(), req.cwd.clone()));
     }
 
+    // Child inherits parent nice unless the spawn request overrides it.
+    let child_nice = if req.nice > 0 { req.nice } else { parent_nice };
+
     let cmd_str = req.to_shell_cmd();
 
     tokio::spawn(async move {
         let exit_code =
-            run_child(spawn_ctx, parent_vfs, stdin_data, child_env, cmd_str, stdout_pipe, stderr_pipe)
+            run_child(spawn_ctx, parent_vfs, stdin_data, child_env, cmd_str, stdout_pipe, stderr_pipe, child_nice)
                 .await
                 .unwrap_or(1);
         let _ = tx.send(exit_code);
@@ -145,6 +152,7 @@ async fn run_child(
     cmd: String,
     stdout_pipe: Option<PipeBuf>,
     stderr_pipe: Option<PipeBuf>,
+    nice: u8,
 ) -> anyhow::Result<i32> {
     let data = StoreData::new(vfs, &stdin, &env).context("creating child store data")?;
 
@@ -154,8 +162,8 @@ async fn run_child(
 
     let mut store = Store::new(&ctx.engine, data);
     store.set_fuel(u64::MAX / 2)?;
-    // Set epoch deadline far in the future (per-command limits configured in Phase 6+).
-    store.set_epoch_deadline(u64::MAX / 2);
+    let quantum = crate::wasm::nice_to_quantum(nice);
+    store.epoch_deadline_async_yield_and_update(quantum);
 
     let instance = ctx
         .linker
