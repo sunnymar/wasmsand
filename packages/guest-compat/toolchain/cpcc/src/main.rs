@@ -3,11 +3,7 @@ use clap::Parser;
 use std::ffi::OsString;
 use std::process::{Command, ExitCode};
 
-mod archive;
-mod env;
-mod preserve;
-mod wasi_sdk;
-mod wasm_opt;
+use cpcc_toolchain::{archive, env, preserve, wasi_sdk, wasm_opt};
 
 #[derive(Parser, Debug)]
 #[command(name = "cpcc", version, about = "Clang wrapper for the codepod guest compatibility runtime", long_about = None)]

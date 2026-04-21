@@ -69,12 +69,9 @@ impl WasiSdk {
     pub fn clang(&self) -> PathBuf {
         self.root.join("bin/clang")
     }
-    // Used by Tasks 9 and 10 (cpcc-ar, cpcc-ranlib, cpcc-nm wrappers).
-    #[allow(dead_code)]
     pub fn ar(&self) -> PathBuf {
         self.root.join("bin/llvm-ar")
     }
-    #[allow(dead_code)]
     pub fn ranlib(&self) -> PathBuf {
         self.root.join("bin/llvm-ranlib")
     }

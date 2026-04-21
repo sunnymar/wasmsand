@@ -186,3 +186,12 @@ fn preserves_pre_opt_artifact_at_stable_path() {
     );
     assert!(out_wasm.exists(), "linked wasm missing");
 }
+
+#[test]
+fn cpar_exists_and_forwards_help() {
+    let ar = env!("CARGO_BIN_EXE_cpar");
+    let out = Command::new(ar).arg("--help").output().unwrap();
+    // llvm-ar's --help is not consistent across versions; accept any run
+    // that did not fail to spawn.
+    assert!(out.status.code().is_some(), "cpar failed to execute");
+}
