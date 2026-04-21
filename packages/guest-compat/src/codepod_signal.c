@@ -3,6 +3,31 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include "codepod_markers.h"
+
+CODEPOD_DECLARE_MARKER(signal);
+CODEPOD_DECLARE_MARKER(sigaction);
+CODEPOD_DECLARE_MARKER(raise);
+CODEPOD_DECLARE_MARKER(alarm);
+CODEPOD_DECLARE_MARKER(sigemptyset);
+CODEPOD_DECLARE_MARKER(sigfillset);
+CODEPOD_DECLARE_MARKER(sigaddset);
+CODEPOD_DECLARE_MARKER(sigdelset);
+CODEPOD_DECLARE_MARKER(sigismember);
+CODEPOD_DECLARE_MARKER(sigprocmask);
+CODEPOD_DECLARE_MARKER(sigsuspend);
+
+CODEPOD_DEFINE_MARKER(signal,       0x73676e6cu) /* sgnl */
+CODEPOD_DEFINE_MARKER(sigaction,    0x73676163u) /* sgac */
+CODEPOD_DEFINE_MARKER(raise,        0x72616973u) /* rais */
+CODEPOD_DEFINE_MARKER(alarm,        0x616c726du) /* alrm */
+CODEPOD_DEFINE_MARKER(sigemptyset,  0x73656d70u) /* semp */
+CODEPOD_DEFINE_MARKER(sigfillset,   0x7366696cu) /* sfil */
+CODEPOD_DEFINE_MARKER(sigaddset,    0x73616464u) /* sadd */
+CODEPOD_DEFINE_MARKER(sigdelset,    0x7364656cu) /* sdel */
+CODEPOD_DEFINE_MARKER(sigismember,  0x7369736du) /* sism */
+CODEPOD_DEFINE_MARKER(sigprocmask,  0x7370726du) /* sprm */
+CODEPOD_DEFINE_MARKER(sigsuspend,   0x73737370u) /* sssp */
 
 #ifndef NSIG
 #define NSIG 64
@@ -62,6 +87,7 @@ static int codepod_signal_validate(int sig) {
 }
 
 int sigemptyset(sigset_t *set) {
+  CODEPOD_MARKER_CALL(sigemptyset);
   if (set == NULL) {
     errno = EINVAL;
     return -1;
@@ -71,6 +97,7 @@ int sigemptyset(sigset_t *set) {
 }
 
 int sigfillset(sigset_t *set) {
+  CODEPOD_MARKER_CALL(sigfillset);
   if (set == NULL) {
     errno = EINVAL;
     return -1;
@@ -80,6 +107,7 @@ int sigfillset(sigset_t *set) {
 }
 
 int sigaddset(sigset_t *set, int sig) {
+  CODEPOD_MARKER_CALL(sigaddset);
   sigset_t bit;
 
   if (set == NULL) {
@@ -95,6 +123,7 @@ int sigaddset(sigset_t *set, int sig) {
 }
 
 int sigdelset(sigset_t *set, int sig) {
+  CODEPOD_MARKER_CALL(sigdelset);
   sigset_t bit;
 
   if (set == NULL) {
@@ -110,6 +139,7 @@ int sigdelset(sigset_t *set, int sig) {
 }
 
 int sigismember(const sigset_t *set, int sig) {
+  CODEPOD_MARKER_CALL(sigismember);
   sigset_t bit;
 
   if (set == NULL) {
@@ -124,6 +154,7 @@ int sigismember(const sigset_t *set, int sig) {
 }
 
 sighandler_t signal(int sig, sighandler_t handler) {
+  CODEPOD_MARKER_CALL(signal);
   sighandler_t old_handler;
 
   if (codepod_signal_validate(sig) != 0) {
@@ -140,6 +171,7 @@ sighandler_t signal(int sig, sighandler_t handler) {
 }
 
 int sigaction(int sig, const struct sigaction *restrict act, struct sigaction *restrict oldact) {
+  CODEPOD_MARKER_CALL(sigaction);
   if (codepod_signal_validate(sig) != 0) {
     return -1;
   }
@@ -157,6 +189,7 @@ int sigaction(int sig, const struct sigaction *restrict act, struct sigaction *r
 }
 
 int sigprocmask(int how, const sigset_t *restrict set, sigset_t *restrict oldset) {
+  CODEPOD_MARKER_CALL(sigprocmask);
   codepod_signal_init();
 
   if (oldset) {
@@ -183,12 +216,14 @@ int sigprocmask(int how, const sigset_t *restrict set, sigset_t *restrict oldset
 }
 
 int sigsuspend(const sigset_t *mask) {
+  CODEPOD_MARKER_CALL(sigsuspend);
   (void)mask;
   errno = EINTR;
   return -1;
 }
 
 int raise(int sig) {
+  CODEPOD_MARKER_CALL(raise);
   sighandler_t handler;
   unsigned long long bit;
 
@@ -222,6 +257,7 @@ int raise(int sig) {
 }
 
 unsigned alarm(unsigned seconds) {
+  CODEPOD_MARKER_CALL(alarm);
   unsigned previous = codepod_alarm_seconds;
   codepod_alarm_seconds = seconds;
   return previous;

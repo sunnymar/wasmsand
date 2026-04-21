@@ -3,6 +3,15 @@
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
+#include "codepod_markers.h"
+
+CODEPOD_DECLARE_MARKER(sched_getaffinity);
+CODEPOD_DECLARE_MARKER(sched_setaffinity);
+CODEPOD_DECLARE_MARKER(sched_getcpu);
+
+CODEPOD_DEFINE_MARKER(sched_getaffinity, 0x73676166u) /* sgaf */
+CODEPOD_DEFINE_MARKER(sched_setaffinity, 0x73736166u) /* ssaf */
+CODEPOD_DEFINE_MARKER(sched_getcpu,      0x73676370u) /* sgcp */
 
 static int codepod_sched_validate_size(size_t cpusetsize) {
   if (cpusetsize < sizeof(cpu_set_t)) {
@@ -13,6 +22,7 @@ static int codepod_sched_validate_size(size_t cpusetsize) {
 }
 
 int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask) {
+  CODEPOD_MARKER_CALL(sched_getaffinity);
   (void)pid;
 
   if (!mask) {
@@ -29,6 +39,7 @@ int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask) {
 }
 
 int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t *mask) {
+  CODEPOD_MARKER_CALL(sched_setaffinity);
   const unsigned char *bytes;
   size_t i;
   unsigned long first_word;
@@ -61,5 +72,6 @@ int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t *mask) {
 }
 
 int sched_getcpu(void) {
+  CODEPOD_MARKER_CALL(sched_getcpu);
   return 0;
 }
