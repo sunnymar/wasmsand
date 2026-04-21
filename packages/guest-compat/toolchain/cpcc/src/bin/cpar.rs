@@ -5,10 +5,11 @@ use std::process::{Command, ExitCode};
 fn main() -> Result<ExitCode> {
     let sdk = wasi_sdk::discover().context("locating wasi-sdk")?;
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let status = Command::new(sdk.ar())
+    let ar = sdk.ar();
+    let status = Command::new(&ar)
         .args(&args)
         .status()
-        .with_context(|| format!("spawning {}", sdk.ar().display()))?;
+        .with_context(|| format!("spawning {}", ar.display()))?;
     Ok(status
         .code()
         .map(|c| ExitCode::from(c as u8))
