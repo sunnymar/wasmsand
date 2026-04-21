@@ -21,6 +21,10 @@ path = "src/bin/cpranlib.rs"
 name = "cpcheck"
 path = "src/bin/cpcheck.rs"
 
+[[bin]]
+name = "cpconf"
+path = "src/bin/cpconf.rs"
+
 [lib]
 path = "src/lib.rs"
 

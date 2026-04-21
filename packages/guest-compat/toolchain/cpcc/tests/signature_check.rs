@@ -33,16 +33,13 @@ fn signature_check_passes_on_canary_built_via_cpcc() {
     let preserved = tmp.path().join("dup2-canary.pre-opt.wasm");
 
     // Build dup2 canary via cpcc with preservation.
-    // NOTE: at Task 10 time, canary sources still live under `examples/`
-    // with underscore names. Task 11 moves them to `conformance/c/` with
-    // dashed names and updates this path accordingly.
     let cc = env!("CARGO_BIN_EXE_cpcc");
     let st = Command::new(cc)
         .env("CPCC_ARCHIVE", &archive)
         .env("CPCC_INCLUDE", root.join("packages/guest-compat/include"))
         .env("CPCC_PRESERVE_PRE_OPT", &preserved)
         .env("CPCC_NO_WASM_OPT", "1")
-        .arg(root.join("packages/guest-compat/examples/dup2_canary.c"))
+        .arg(root.join("packages/guest-compat/conformance/c/dup2-canary.c"))
         .arg("-o")
         .arg(&out_wasm)
         .status()
