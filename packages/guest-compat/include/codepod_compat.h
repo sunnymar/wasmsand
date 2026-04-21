@@ -1,7 +1,13 @@
 #ifndef CODEPOD_COMPAT_H
 #define CODEPOD_COMPAT_H
 
+#include <stdint.h>
 #include <stdio.h>
+
+#define CODEPOD_GUEST_COMPAT_VERSION_MAJOR 1u
+#define CODEPOD_GUEST_COMPAT_VERSION_MINOR 0u
+
+extern uint32_t codepod_guest_compat_version;
 
 /*
  * Narrow phase-1 command-execution shim for codepod guests.

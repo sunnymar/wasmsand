@@ -10,7 +10,7 @@ BUILD_DIR := build
 BUILD_COMMON := --include include
 BUILD_PREREQS := Makefile $(BUILD)
 
-.PHONY: all clean copy-fixtures
+.PHONY: all clean copy-fixtures objects
 
 all: stdio-canary.wasm sleep-canary.wasm system-canary.wasm popen-canary.wasm affinity-canary.wasm dup2-canary.wasm getgroups-canary.wasm signal-canary.wasm
 
@@ -34,6 +34,11 @@ $(BUILD_DIR)/codepod_unistd.o: src/codepod_unistd.c src/codepod_runtime.h $(BUIL
 
 $(BUILD_DIR)/codepod_signal.o: src/codepod_signal.c include/signal.h include/unistd.h $(BUILD_PREREQS) | $(BUILD_DIR)
 	$(BUILD) $(BUILD_COMMON) --compile-only --source $< --output $@
+
+$(BUILD_DIR)/codepod_version.o: src/codepod_version.c include/codepod_compat.h $(BUILD_PREREQS) | $(BUILD_DIR)
+	$(BUILD) $(BUILD_COMMON) --compile-only --source $< --output $@
+
+objects: $(BUILD_DIR)/codepod_command.o $(BUILD_DIR)/codepod_sched.o $(BUILD_DIR)/codepod_signal.o $(BUILD_DIR)/codepod_unistd.o $(BUILD_DIR)/codepod_version.o
 
 system-canary.wasm: examples/system_canary.c include/codepod_compat.h $(BUILD_DIR)/codepod_command.o $(BUILD_PREREQS)
 	$(BUILD) $(BUILD_COMMON) --input $(BUILD_DIR)/codepod_command.o --source $< --output $@
