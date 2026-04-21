@@ -9,10 +9,17 @@ BUILD := ../../scripts/build-c-port.sh
 BUILD_DIR := build
 BUILD_COMMON := --include include
 BUILD_PREREQS := Makefile $(BUILD)
+LIB := $(BUILD_DIR)/libcodepod_guest_compat.a
+LIB_OBJS := \
+  $(BUILD_DIR)/codepod_command.o \
+  $(BUILD_DIR)/codepod_sched.o \
+  $(BUILD_DIR)/codepod_signal.o \
+  $(BUILD_DIR)/codepod_unistd.o \
+  $(BUILD_DIR)/codepod_version.o
 
-.PHONY: all clean copy-fixtures objects
+.PHONY: all clean copy-fixtures objects lib
 
-all: stdio-canary.wasm sleep-canary.wasm system-canary.wasm popen-canary.wasm affinity-canary.wasm dup2-canary.wasm getgroups-canary.wasm signal-canary.wasm
+all: lib stdio-canary.wasm sleep-canary.wasm system-canary.wasm popen-canary.wasm affinity-canary.wasm dup2-canary.wasm getgroups-canary.wasm signal-canary.wasm
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -57,6 +64,11 @@ getgroups-canary.wasm: examples/getgroups_canary.c $(BUILD_DIR)/codepod_unistd.o
 
 signal-canary.wasm: examples/signal_canary.c include/signal.h include/unistd.h $(BUILD_DIR)/codepod_signal.o $(BUILD_PREREQS)
 	$(BUILD) $(BUILD_COMMON) --input $(BUILD_DIR)/codepod_signal.o --source $< --output $@
+
+lib: $(LIB)
+
+$(LIB): $(LIB_OBJS) | $(BUILD_DIR)
+	eval "$$($(BUILD) env)" && "$$AR" rcs $@ $(LIB_OBJS)
 
 copy-fixtures: all
 	cp stdio-canary.wasm $(FIXTURES)/stdio-canary.wasm
