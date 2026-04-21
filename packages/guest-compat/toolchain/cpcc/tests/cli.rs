@@ -156,3 +156,33 @@ fn missing_version_sentinel_is_a_hard_error() {
         "stderr: {stderr}"
     );
 }
+
+#[test]
+fn preserves_pre_opt_artifact_at_stable_path() {
+    // Real clang+wasi-sdk build. Skip if WASI_SDK_PATH is not set in CI env.
+    if std::env::var_os("WASI_SDK_PATH").is_none() {
+        eprintln!("skipping — WASI_SDK_PATH not set");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("hello.c");
+    fs::write(&src, b"int main(void) { return 0; }").unwrap();
+    let out_wasm = tmp.path().join("hello.wasm");
+    let preserved = tmp.path().join("hello.pre-opt.wasm");
+
+    let st = Command::new(bin())
+        .env("CPCC_PRESERVE_PRE_OPT", &preserved)
+        .env("CPCC_NO_WASM_OPT", "1")
+        .arg(&src)
+        .arg("-o")
+        .arg(&out_wasm)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert!(
+        preserved.exists(),
+        "pre-opt wasm not preserved at {}",
+        preserved.display()
+    );
+    assert!(out_wasm.exists(), "linked wasm missing");
+}

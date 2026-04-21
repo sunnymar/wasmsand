@@ -5,7 +5,9 @@ use std::process::{Command, ExitCode};
 
 mod archive;
 mod env;
+mod preserve;
 mod wasi_sdk;
+mod wasm_opt;
 
 #[derive(Parser, Debug)]
 #[command(name = "cpcc", version, about = "Clang wrapper for the codepod guest compatibility runtime", long_about = None)]
@@ -91,9 +93,20 @@ fn main() -> Result<ExitCode> {
         .args(&argv)
         .status()
         .with_context(|| format!("spawning {}", sdk.clang().display()))?;
-    if let Some(code) = status.code() {
-        Ok(ExitCode::from(code as u8))
-    } else {
-        Ok(ExitCode::FAILURE)
+    if !status.success() {
+        return Ok(status
+            .code()
+            .map(|c| ExitCode::from(c as u8))
+            .unwrap_or(ExitCode::FAILURE));
     }
+
+    // Post-link: if an output `.wasm` was produced and the user asked for
+    // pre-opt preservation, copy the just-linked binary to the stable path
+    // BEFORE any optional wasm-opt pass.
+    if let Some(out_wasm) = preserve::output_wasm(&cli.args) {
+        preserve::copy_to_preserve(&out_wasm, env.preserve_pre_opt.as_deref())?;
+        wasm_opt::maybe_run(&out_wasm, &env.wasm_opt)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
 }

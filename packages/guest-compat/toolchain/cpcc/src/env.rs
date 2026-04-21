@@ -7,18 +7,13 @@ pub struct Env {
     pub archive: Option<PathBuf>,
     pub include: Option<PathBuf>,
     pub skip_version_check: bool,
-    // Used by Task 8 (wasm-opt invocation).
-    #[allow(dead_code)]
     pub preserve_pre_opt: Option<PathBuf>,
-    // Used by Task 8 (wasm-opt invocation).
-    #[allow(dead_code)]
     pub wasm_opt: WasmOptMode,
 }
 
 pub enum WasmOptMode {
     Disabled,
     Default,
-    #[allow(dead_code)]
     Explicit(Vec<OsString>),
 }
 
