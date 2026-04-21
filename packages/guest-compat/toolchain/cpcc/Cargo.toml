@@ -17,6 +17,10 @@ path = "src/bin/cpar.rs"
 name = "cpranlib"
 path = "src/bin/cpranlib.rs"
 
+[[bin]]
+name = "cpcheck"
+path = "src/bin/cpcheck.rs"
+
 [lib]
 path = "src/lib.rs"
 
@@ -24,6 +28,7 @@ path = "src/lib.rs"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 which = "6"
+wasmparser = "0.247.0"
 
 [dev-dependencies]
 tempfile = "3"

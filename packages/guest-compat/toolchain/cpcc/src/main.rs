@@ -5,6 +5,28 @@ use std::process::{Command, ExitCode};
 
 use cpcc_toolchain::{archive, env, preserve, wasi_sdk, wasm_opt};
 
+/// Tier 1 symbols from §Compatibility Tiers. When the compat archive is
+/// linked, cpcc exports each symbol and its marker so that cpcheck's
+/// §Verifying Precedence stages 2 and 3 can locate them in the pre-opt wasm.
+const TIER1: &[&str] = &[
+    "dup2",
+    "getgroups",
+    "sched_getaffinity",
+    "sched_setaffinity",
+    "sched_getcpu",
+    "signal",
+    "sigaction",
+    "raise",
+    "alarm",
+    "sigemptyset",
+    "sigfillset",
+    "sigaddset",
+    "sigdelset",
+    "sigismember",
+    "sigprocmask",
+    "sigsuspend",
+];
+
 #[derive(Parser, Debug)]
 #[command(name = "cpcc", version, about = "Clang wrapper for the codepod guest compatibility runtime", long_about = None)]
 struct Cli {
@@ -48,11 +70,27 @@ fn build_clang_invocation(
     // archive, and the whole thing must precede `-lc`. clang's default is
     // to insert `-lc` at the very end, so appending these three args is
     // sufficient.
+    //
+    // When the archive is present:
+    // - Pass --no-wasm-opt so that clang's automatic wasm-opt invocation
+    //   is suppressed. cpcc captures the linker output as the "pre-opt"
+    //   artifact (§Verifying Precedence) and runs wasm-opt separately via
+    //   CPCC_WASM_OPT_FLAGS / CPCC_NO_WASM_OPT. Without this flag the
+    //   clang driver runs wasm-opt itself before cpcc can preserve the
+    //   pre-opt wasm, which makes stage 3 of cpcheck unverifiable.
+    // - Export each Tier 1 symbol and its marker so that cpcheck's
+    //   §Verifying Precedence stages 2 and 3 can locate them by name in
+    //   the export section of the pre-opt .wasm.
     if let Some(archive) = env.archive.as_ref() {
         if is_link_invocation(user_args) {
+            argv.push("--no-wasm-opt".into());
             argv.push("-Wl,--whole-archive".into());
             argv.push(archive.clone().into_os_string());
             argv.push("-Wl,--no-whole-archive".into());
+            for sym in TIER1 {
+                argv.push(format!("-Wl,--export={sym}").into());
+                argv.push(format!("-Wl,--export=__codepod_guest_compat_marker_{sym}").into());
+            }
         }
     }
     argv

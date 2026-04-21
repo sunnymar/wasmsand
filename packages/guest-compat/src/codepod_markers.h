@@ -16,11 +16,20 @@
  * to make the marker bodies individually identifiable in dumps.
  */
 
-#define CODEPOD_MARKER_ATTR __attribute__((visibility("default"), used, noinline))
+/* A volatile static prevents the compiler from constant-folding the
+ * marker's return value into its callers at -O2, so that callers contain a
+ * real `call` instruction (not an inlined constant) in the pre-opt .wasm —
+ * which is what §Verifying Precedence stage 3 inspects.
+ * export_name forces wasm-ld to emit the function as a wasm export, which
+ * stage 2 of the check requires. */
+#define CODEPOD_MARKER_ATTR(sym)                                            \
+  __attribute__((visibility("default"), used, noinline,                     \
+                 export_name("__codepod_guest_compat_marker_" #sym)))
 
 #define CODEPOD_DEFINE_MARKER(sym, magic)                                   \
-  CODEPOD_MARKER_ATTR uint32_t __codepod_guest_compat_marker_##sym(void) {  \
-    return (uint32_t)(magic);                                               \
+  static volatile uint32_t __codepod_marker_val_##sym = (uint32_t)(magic); \
+  CODEPOD_MARKER_ATTR(sym) uint32_t __codepod_guest_compat_marker_##sym(void) { \
+    return __codepod_marker_val_##sym;                                      \
   }
 
 #define CODEPOD_DECLARE_MARKER(sym) \
