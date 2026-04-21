@@ -232,6 +232,11 @@ export class WasiHost {
     return this.ioFds;
   }
 
+  /** Public fd renumbering entrypoint for guest-side libc compatibility. */
+  renumberFd(fromFd: number, toFd: number): number {
+    return this.fdRenumber(fromFd, toFd);
+  }
+
   /** Signal cancellation — next syscall check will throw WasiExitError. */
   cancelExecution(): void {
     this.cancelled = true;
@@ -1203,9 +1208,29 @@ export class WasiHost {
   }
 
   private fdRenumber(fromFd: number, toFd: number): number {
-    // Cannot renumber stdio/custom I/O fds
-    if (this.ioFds.has(fromFd) || this.ioFds.has(toFd)) {
+    if (fromFd === toFd) {
+      if (this.ioFds.has(fromFd) || this.dirFds.has(fromFd) || this.fdTable.isOpen(fromFd)) {
+        return WASI_ESUCCESS;
+      }
       return WASI_EBADF;
+    }
+
+    if (this.ioFds.has(fromFd)) {
+      const source = this.ioFds.get(fromFd)!;
+      if (this.ioFds.has(toFd)) {
+        this.ioFds.delete(toFd);
+      } else if (this.dirFds.has(toFd)) {
+        this.dirFds.delete(toFd);
+      } else if (this.fdTable.isOpen(toFd)) {
+        try { this.fdTable.close(toFd); } catch { /* ignore */ }
+      }
+      this.ioFds.set(toFd, source);
+      this.ioFds.delete(fromFd);
+      return WASI_ESUCCESS;
+    }
+
+    if (this.ioFds.has(toFd)) {
+      this.ioFds.delete(toFd);
     }
 
     // Handle dirFd sources

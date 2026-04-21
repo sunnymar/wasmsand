@@ -1005,6 +1005,7 @@ function spawnAsyncProcess(
       memory: childMemoryProxy,
       callerPid: pid,
       kernel,
+      wasiHost: host,
       networkBridge,
       extensionRegistry,
       nativeModules: mgr.nativeModules,

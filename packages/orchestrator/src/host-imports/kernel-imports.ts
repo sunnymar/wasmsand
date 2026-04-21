@@ -21,6 +21,7 @@ import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { NativeModuleRegistry } from '../process/native-modules.js';
 import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
+import type { WasiHost } from '../wasi/wasi-host.js';
 import type { FdTarget } from '../wasi/fd-target.js';
 import { createStaticTarget } from '../wasi/fd-target.js';
 import { readString, writeJson } from './common.js';
@@ -59,6 +60,9 @@ export interface KernelImportsOptions {
 
   /** Registry of dynamically loaded native Python module WASMs. */
   nativeModules?: NativeModuleRegistry;
+
+  /** Active WASI host for guest-side fd operations such as dup2 on stdio. */
+  wasiHost?: WasiHost;
 }
 
 export function createKernelImports(opts: KernelImportsOptions): Record<string, WebAssembly.ImportValue> {
@@ -158,6 +162,9 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // host_dup2(src_fd, dst_fd) -> i32
     // Makes dst_fd point to the same target as src_fd.
     host_dup2(srcFd: number, dstFd: number): number {
+      if (opts.wasiHost) {
+        return opts.wasiHost.renumberFd(srcFd, dstFd) === 0 ? 0 : -1;
+      }
       if (!opts.kernel) return -1;
       try {
         opts.kernel.dup2(callerPid, srcFd, dstFd);

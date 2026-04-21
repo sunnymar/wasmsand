@@ -143,6 +143,41 @@ To create a command alias, use a VFS symlink. For example, `python` is a built-i
 
 The resolver follows symlinks through the VFS, reads the target tool file, and verifies the `S_TOOL` flag. This means standard `ln -s` semantics apply — no special aliasing API needed.
 
+## Building C executables
+
+For C programs, use the host-side builder in
+[`scripts/build-c-port.sh`](../../scripts/build-c-port.sh) together with the
+phase-1 compatibility package under `packages/guest-compat/`.
+
+- The builder wraps `clang` from `wasi-sdk`; codepod does not provide an
+  in-sandbox compiler.
+- Plain file/stdio programs can target `wasm32-wasip1` directly.
+- Command execution helpers such as `codepod_system()` and
+  `codepod_popen()` are optional extensions, not part of baseline WASI.
+- Multi-call ports such as BusyBox are a later recipe path; Task 3 only
+  establishes the shared builder they will consume.
+- Shared libraries and full POSIX thread/process semantics are out of scope.
+
+Small ports can call the builder directly:
+
+```bash
+scripts/build-c-port.sh \
+  --source packages/guest-compat/examples/stdio_canary.c \
+  --include packages/guest-compat/include \
+  --output /tmp/stdio-canary.wasm
+```
+
+Recipe-style ports can also reuse the discovered toolchain settings:
+
+```bash
+eval "$(scripts/build-c-port.sh env)"
+make CC="$CC" AR="$AR" RANLIB="$RANLIB"
+```
+
+The exported `CC` is an absolute `scripts/build-c-port.sh cc` wrapper, so it
+continues to work when an upstream `make` recipe spawns child compiler
+processes in another directory.
+
 ## What Your Executable Can Do
 
 ### File I/O
