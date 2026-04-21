@@ -78,7 +78,6 @@ impl WasiSdk {
     pub fn ranlib(&self) -> PathBuf {
         self.root.join("bin/llvm-ranlib")
     }
-    #[allow(dead_code)]
     pub fn nm(&self) -> PathBuf {
         self.root.join("bin/llvm-nm")
     }

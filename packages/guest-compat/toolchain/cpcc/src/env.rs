@@ -31,6 +31,8 @@ impl Env {
             include: std::env::var_os("CPCC_INCLUDE")
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
+            // CPCC_SKIP_VERSION_CHECK and CPCC_NO_WASM_OPT are presence flags:
+            // any set value (including empty) enables them.
             skip_version_check: std::env::var_os("CPCC_SKIP_VERSION_CHECK").is_some(),
             preserve_pre_opt: std::env::var_os("CPCC_PRESERVE_PRE_OPT").map(PathBuf::from),
             wasm_opt: if std::env::var_os("CPCC_NO_WASM_OPT").is_some() {

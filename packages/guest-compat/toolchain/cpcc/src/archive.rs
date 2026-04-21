@@ -2,10 +2,10 @@ use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Command;
 
-/// Parse `major.minor` out of the archive by dumping the
-/// `codepod_guest_compat_version` data symbol via `llvm-nm` and cross-
-/// referencing against the compile-time constants this build of cpcc
-/// was linked with. Implements §Versioning.
+/// Assert the `codepod_guest_compat_version` sentinel symbol is defined in
+/// the archive (via `llvm-nm`). Step 1 check is presence-only; value
+/// parsing against the header's major/minor constants is deferred to
+/// Step 3 when cargo-codepod lands. Implements §Versioning (presence).
 pub fn check_version(nm: &Path, archive: &Path) -> Result<()> {
     let out = Command::new(nm)
         .arg("--defined-only")
