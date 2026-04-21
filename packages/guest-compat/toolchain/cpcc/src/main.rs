@@ -3,29 +3,7 @@ use clap::Parser;
 use std::ffi::OsString;
 use std::process::{Command, ExitCode};
 
-use cpcc_toolchain::{archive, env, preserve, wasi_sdk, wasm_opt};
-
-/// Tier 1 symbols from §Compatibility Tiers. When the compat archive is
-/// linked, cpcc exports each symbol and its marker so that cpcheck's
-/// §Verifying Precedence stages 2 and 3 can locate them in the pre-opt wasm.
-const TIER1: &[&str] = &[
-    "dup2",
-    "getgroups",
-    "sched_getaffinity",
-    "sched_setaffinity",
-    "sched_getcpu",
-    "signal",
-    "sigaction",
-    "raise",
-    "alarm",
-    "sigemptyset",
-    "sigfillset",
-    "sigaddset",
-    "sigdelset",
-    "sigismember",
-    "sigprocmask",
-    "sigsuspend",
-];
+use cpcc_toolchain::{archive, env, preserve, wasi_sdk, wasm_opt, TIER1};
 
 #[derive(Parser, Debug)]
 #[command(name = "cpcc", version, about = "Clang wrapper for the codepod guest compatibility runtime", long_about = None)]

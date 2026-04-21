@@ -1,27 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use cpcc_toolchain::{precheck, wasi_sdk};
+use cpcc_toolchain::{precheck, wasi_sdk, TIER1};
 use std::path::PathBuf;
 use std::process::ExitCode;
-
-const TIER1: &[&str] = &[
-    "dup2",
-    "getgroups",
-    "sched_getaffinity",
-    "sched_setaffinity",
-    "sched_getcpu",
-    "signal",
-    "sigaction",
-    "raise",
-    "alarm",
-    "sigemptyset",
-    "sigfillset",
-    "sigaddset",
-    "sigdelset",
-    "sigismember",
-    "sigprocmask",
-    "sigsuspend",
-];
 
 #[derive(Parser)]
 #[command(about = "§Verifying Precedence: archive + pre-opt wasm implementation-signature check")]
