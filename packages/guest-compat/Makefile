@@ -45,15 +45,15 @@ ensure-toolchain:
 # when these rules fire and must not be injected; CPCC_ARCHIVE is
 # explicitly unset so cpcc skips link-arg framing. This is safe because
 # `-c` disables link anyway.
-$(BUILD_DIR)/%.o: src/%.c include/codepod_compat.h src/codepod_runtime.h src/codepod_markers.h ensure-toolchain | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: src/%.c include/codepod_compat.h src/codepod_runtime.h src/codepod_markers.h | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE= CPCC_INCLUDE=$(INCLUDE) $(CPCC) -c $< -o $@
 
 lib: $(LIB)
 
-$(LIB): $(LIB_OBJS) ensure-toolchain | $(BUILD_DIR)
+$(LIB): $(LIB_OBJS) | $(BUILD_DIR) ensure-toolchain
 	$(CPAR) rcs $@ $(LIB_OBJS)
 
-$(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(LIB) ensure-toolchain | $(BUILD_DIR)
+$(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(LIB) | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE=$(abspath $(LIB)) \
 	CPCC_INCLUDE=$(INCLUDE) \
 	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/$*-canary.pre-opt.wasm \
