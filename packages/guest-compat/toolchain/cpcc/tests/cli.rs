@@ -114,6 +114,14 @@ fn dry_run_injects_compat_archive_and_isystem() {
         "{stdout}"
     );
     assert!(stdout.contains("-Wl,--no-whole-archive"), "{stdout}");
+    // §Verifying Precedence requires the pre-opt .wasm to include marker
+    // calls. Assert the driver flags that make that possible.
+    assert!(stdout.contains("--no-wasm-opt"), "{stdout}");
+    assert!(stdout.contains("-Wl,--export=dup2"), "{stdout}");
+    assert!(
+        stdout.contains("-Wl,--export=__codepod_guest_compat_marker_dup2"),
+        "{stdout}"
+    );
     let whole_idx = stdout.find("--whole-archive").unwrap();
     let no_whole_idx = stdout.find("--no-whole-archive").unwrap();
     assert!(
