@@ -17,6 +17,8 @@ members = [
   "packages/mcp-server-rust",
   # Process-spawning helpers for coreutils (host_spawn_async/host_waitpid ABI)
   "packages/codepod-process",
+  # cpcc clang-wrapper for C compat (§Toolchain Integration)
+  "packages/guest-compat/toolchain/cpcc",
 ]
 exclude = [
   "packages/sips",

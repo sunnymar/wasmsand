@@ -1,0 +1,14 @@
+[package]
+name = "cpcc-toolchain"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Clang wrapper and companion tooling for the codepod guest compatibility runtime."
+
+[[bin]]
+name = "cpcc"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
