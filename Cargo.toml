@@ -24,6 +24,7 @@ members = [
   # Safe Rust wrappers over the Tier 1 ABI
   "packages/guest-compat/rust/codepod-guest-compat",
   "packages/guest-compat/conformance/rust/dup2-canary",
+  "packages/guest-compat/conformance/rust/getgroups-canary",
 ]
 exclude = [
   "packages/sips",
