@@ -5,7 +5,7 @@
 //! preservation, and post-link `wasm-opt`.
 
 use anyhow::{anyhow, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Subcommand {
@@ -103,4 +103,36 @@ pub fn plan_invocation_with_sdk(
     }
 
     Ok(plan)
+}
+
+/// Locate every top-level .wasm artifact under `target/wasm32-wasip1/<profile>/`.
+/// Excludes `deps/` (intermediates) and `examples/` (not the user's bin).
+/// Returns sorted paths so behavior is deterministic across runs.
+pub fn locate_outputs(target_dir: &Path, profile: &str) -> Vec<PathBuf> {
+    let dir = target_dir.join("wasm32-wasip1").join(profile);
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("wasm")
+            && path.is_file()
+        {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Profile derived from the forwarded args (`--release` ⇒ "release",
+/// otherwise "debug"). `cargo test` overrides this — those binaries land
+/// under target/wasm32-wasip1/debug/deps and we don't preserve them.
+pub fn profile_from_args(forwarded: &[String]) -> &'static str {
+    if forwarded.iter().any(|a| a == "--release") {
+        "release"
+    } else {
+        "debug"
+    }
 }

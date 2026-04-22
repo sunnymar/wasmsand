@@ -1,4 +1,4 @@
-use cpcc_toolchain::cargo_codepod::{plan_invocation, plan_invocation_with_sdk, Subcommand};
+use cpcc_toolchain::cargo_codepod::{plan_invocation, plan_invocation_with_sdk, profile_from_args, Subcommand};
 use std::path::PathBuf;
 
 #[test]
@@ -68,4 +68,14 @@ fn linker_omitted_when_clang_missing() {
         .iter()
         .find(|(k, _)| k == "CARGO_TARGET_WASM32_WASIP1_LINKER");
     assert!(linker.is_none());
+}
+
+#[test]
+fn profile_release_when_release_flag_present() {
+    assert_eq!(profile_from_args(&["--release".into()]), "release");
+}
+
+#[test]
+fn profile_debug_when_release_flag_absent() {
+    assert_eq!(profile_from_args(&[]), "debug");
 }
