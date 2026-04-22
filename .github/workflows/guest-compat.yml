@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -49,3 +51,22 @@ jobs:
 
       - name: Run conformance driver (C + Rust)
         run: ./target/release/cpconf --include-rust --skip-behavioral
+
+      - name: Build BusyBox via cpcc
+        run: make -C packages/c-ports/busybox all
+
+      - name: Signature-check BusyBox (§Verifying Precedence)
+        run: ./packages/c-ports/busybox/scripts/signature-check.sh
+
+      - name: Build coreutils via cargo-codepod
+        run: ./scripts/build-coreutils.sh --engine=cargo-codepod
+
+      - name: Signature-check every coreutils binary (§Verifying Precedence)
+        run: ./scripts/guest-compat-check-coreutils.sh
+
+      - name: Build grex via cargo-codepod
+        run: ./packages/rust-ports/grex.build.sh
+
+      - name: Smoke-run grex via wasmtime
+        run: |
+          wasmtime target/rust-ports/grex/wasm32-wasip1/release/grex.wasm -- --version
