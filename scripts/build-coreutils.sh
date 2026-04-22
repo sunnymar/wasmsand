@@ -21,7 +21,7 @@ SHELL_FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixture
 ARCHIVE="$REPO_ROOT/packages/guest-compat/build/libcodepod_guest_compat.a"
 PRE_OPT_DIR="$REPO_ROOT/target/wasm32-wasip1/release/coreutils-pre-opt"
 
-ENGINE="cargo"
+ENGINE="cargo-codepod"
 COPY_FIXTURES=0
 for arg in "$@"; do
   case "$arg" in
