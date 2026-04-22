@@ -52,6 +52,10 @@ static int case_set_cpu1_einval(void) {
 
 static int case_getcpu_zero(void) {
   int cpu = sched_getcpu();
+  if (cpu < 0) {
+    emit("getcpu_zero", 1, NULL, 1, errno);
+    return 1;
+  }
   if (cpu != 0) {
     emit("getcpu_zero", 1, NULL, 0, 0);
     return 1;

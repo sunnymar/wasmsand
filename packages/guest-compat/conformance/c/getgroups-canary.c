@@ -12,6 +12,10 @@ static void emit(const char *case_name, int exit_code, const char *stdout_line, 
 
 static int case_count_only(void) {
   int count = getgroups(0, NULL);
+  if (count < 0) {
+    emit("count_only", 1, NULL, 1, errno);
+    return 1;
+  }
   if (count != 1) {
     emit("count_only", 1, NULL, 0, 0);
     return 1;
@@ -23,6 +27,10 @@ static int case_count_only(void) {
 static int case_fetch_one(void) {
   gid_t groups[1] = {99};
   int count = getgroups(1, groups);
+  if (count < 0) {
+    emit("fetch_one", 1, NULL, 1, errno);
+    return 1;
+  }
   if (count != 1 || groups[0] != 0) {
     emit("fetch_one", 1, NULL, 0, 0);
     return 1;
