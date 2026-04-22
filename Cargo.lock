@@ -475,6 +475,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codepod-guest-compat-sys"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "codepod-pdf-tools"
 version = "0.1.0"
 dependencies = [
@@ -533,7 +540,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde",
+ "serde_json",
  "tempfile",
+ "toml",
  "wasmparser 0.247.0",
  "which",
 ]
