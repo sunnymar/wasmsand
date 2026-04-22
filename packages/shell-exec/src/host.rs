@@ -35,6 +35,7 @@ impl FetchResult {
     }
 }
 
+
 /// JSON-encoded fetch request sent to the host via `host_network_fetch`.
 #[cfg(target_arch = "wasm32")]
 #[derive(Serialize)]
@@ -287,6 +288,15 @@ extern "C" {
     /// Perform an HTTP fetch. JSON request/response via output buffer.
     /// Async on the host side; JSPI suspends/resumes WASM transparently.
     pub fn host_network_fetch(
+        req_ptr: *const u8,
+        req_len: u32,
+        out_ptr: *mut u8,
+        out_cap: u32,
+    ) -> i32;
+
+    /// Invoke a host extension command. JSON request/response via output buffer.
+    /// Returns a Promise on the host side; JSPI suspends/resumes WASM transparently.
+    pub fn host_extension_invoke(
         req_ptr: *const u8,
         req_len: u32,
         out_ptr: *mut u8,
