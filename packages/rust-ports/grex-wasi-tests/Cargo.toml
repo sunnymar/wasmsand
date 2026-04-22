@@ -1,0 +1,55 @@
+# grex-wasi-tests
+#
+# Runs grex's own upstream test code (tests/lib_integration_tests.rs +
+# tests/property_tests.rs) against wasm32-wasip1 via wasmtime. Upstream grex
+# gates these files out on wasm with `#![cfg(not(target_family = "wasm"))]`;
+# this crate's build.rs strips that gate when pulling the test files into its
+# own OUT_DIR, so the upstream assertions actually execute on our runtime.
+#
+# The upstream crate at ../grex is BYTE-IDENTICAL; only the build-time
+# transform output under $OUT_DIR differs. This satisfies §Package Validation
+# Requirements "the upstream crate is not modified."
+#
+# Rust's wasip1 stdlib panics on several functions (env::temp_dir, etc.).
+# `codepod-wasi-shims` provides wasi-aware replacements with stable export
+# names; `codepod-wasi-postlink` (invoked via the `.cargo/config.toml`
+# runner) rewrites the stdlib bodies in the linked .wasm to call those
+# replacements. The consumer crate just needs to depend on codepod-wasi-shims
+# and not strip symbols before postlink runs.
+
+[package]
+name = "grex-wasi-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Runs grex's upstream library + property tests against the codepod guest-compat runtime."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Pull grex in as a library dependency. default-features = false skips the
+# `cli` feature (which depends on clap, cfg-gated out on wasm) and the
+# `python` feature (pyo3, same). grex's rlib compiles cleanly for wasm32-wasip1.
+grex = { path = "../grex", default-features = false }
+
+# Runtime library: wasi-aware replacements for panicky stdlib fns. Its
+# `#[used]` exports land in the final wasm where codepod-wasi-postlink
+# can see them.
+codepod-wasi-shims = { path = "../../guest-compat/rust/codepod-wasi-shims" }
+
+[dev-dependencies]
+indoc = "2"
+regex = "1"
+rstest = "0.26"
+tempfile = "3"
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+# Keep the symbol table intact so codepod-wasi-postlink can find stdlib
+# functions by their mangled name before wasm-opt / strip runs.
+[profile.release.package.grex-wasi-tests]
+strip = false
+
+[profile.release]
+strip = false
+debug = "line-tables-only"
