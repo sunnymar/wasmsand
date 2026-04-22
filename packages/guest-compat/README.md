@@ -10,12 +10,14 @@ Included in this package:
 - narrow libc-compat header overrides for selected POSIX APIs
 - a private runtime header for host import declarations
 - plain-WASI canaries for stdio/file I/O and sleep behavior
-- a shared host-side builder entrypoint in `scripts/build-c-port.sh`
-- a build entrypoint that can copy canary fixtures into the orchestrator test
-  directory
+- a shared host-side toolchain (`cpcc`/`cpar`/`cpranlib`/`cpcheck`/`cpconf`)
+  under `toolchain/cpcc/`, built as workspace release binaries
+- a Make-driven entrypoint that can build the archive, the canaries, and
+  copy canary fixtures into the orchestrator test directory
 
-Later recipe tasks can consume the same builder for larger C ports such as
-BusyBox. This package only validates the builder against the phase-1 canaries.
+Later recipe tasks consume the same toolchain for larger C ports such as
+BusyBox (see `packages/c-ports/busybox/`). This package only validates the
+toolchain against the phase-1 canaries.
 
 Not included yet:
 
@@ -25,22 +27,30 @@ Not included yet:
 
 ## Build canaries
 
-Build the local canaries:
+Build the archive and all canaries:
 
 ```bash
-scripts/build-c-compat.sh
+make -C packages/guest-compat all
 ```
 
 Copy the resulting artifacts into the orchestrator fixture directory:
 
 ```bash
-scripts/build-c-compat.sh copy-fixtures
+make -C packages/guest-compat copy-fixtures
 ```
 
-Phase 1 C builds are host-side cross-compiles driven by
-`scripts/build-c-port.sh`. Individual ports such as BusyBox can consume that
-builder directly or use `scripts/build-c-port.sh env` to export subprocess-safe
-`CC`, `AR`, and `RANLIB` settings for upstream `make` recipes.
+Or run the full conformance flow end-to-end (toolchain build, archive,
+canaries, signature checks, orchestrator behavioral suite):
+
+```bash
+./target/release/cpconf
+```
+
+Phase 1 C builds are host-side cross-compiles driven by `cpcc`, which
+wraps `wasi-sdk`'s clang with the right `--target=wasm32-wasip1` /
+`--sysroot=` / `--whole-archive` framing. Ports such as BusyBox invoke
+`cpcc` / `cpar` / `cpranlib` as `CC` / `AR` / `RANLIB` directly; see
+`packages/c-ports/busybox/Makefile`.
 
 ## Phase 1 delivered
 
@@ -50,7 +60,8 @@ builder directly or use `scripts/build-c-port.sh env` to export subprocess-safe
 - `popen-canary`
 - `affinity-canary`
 - `dup2-canary`
-- host-side `clang` / `wasi-sdk` builder flow via `scripts/build-c-port.sh`
+- host-side `clang` / `wasi-sdk` driver wrapper via `cpcc` (+ companions
+  `cpar` / `cpranlib` / `cpcheck` / `cpconf`)
 - BusyBox pilot recipe scaffolding for `grep`, `head`, and `seq`
 
 ## Compatibility headers
