@@ -20,6 +20,7 @@ members = [
 ]
 exclude = [
   "packages/sips",
+  ".worktrees/guest-compat-step-1/packages/rust-ports/grex",
 ]
 resolver = "2"
 
