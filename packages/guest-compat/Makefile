@@ -37,9 +37,11 @@ all: lib canaries
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+# Always delegate to cargo so edits under toolchain/cpcc/src/ actually
+# rebuild. `cargo build` is a near-no-op when everything is up to date;
+# a `test -x` existence guard would silently use stale binaries.
 ensure-toolchain:
-	@test -x $(CPCC) && test -x $(CPAR) || \
-		(cd $(REPO_ROOT) && cargo build --release -p cpcc-toolchain)
+	cd $(REPO_ROOT) && cargo build --release -p cpcc-toolchain
 
 # Objects compile through `cpcc -c`. The compat archive is not yet built
 # when these rules fire and must not be injected; CPCC_ARCHIVE is

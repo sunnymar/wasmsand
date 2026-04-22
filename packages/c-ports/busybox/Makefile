@@ -23,12 +23,15 @@ WASI_EMULATED_LDFLAGS := -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emul
 
 all: $(BUILD_DIR)/busybox.wasm
 
+# Always delegate to cargo / upstream make so edits propagate. Cargo's
+# and make's own up-to-date checks are the right source of truth;
+# existence-only `test -x` / `test -f` guards would mask stale artifacts
+# after source edits under toolchain/cpcc/ or guest-compat/src/.
 ensure-toolchain:
-	@test -x $(CPCC) && test -x $(CPAR) && test -x $(CPRANLIB) || \
-		(cd $(REPO_ROOT) && cargo build --release -p cpcc-toolchain)
+	cd $(REPO_ROOT) && cargo build --release -p cpcc-toolchain
 
 ensure-compat:
-	@test -f $(GUEST_COMPAT_LIB) || $(MAKE) -C $(REPO_ROOT)/packages/guest-compat lib
+	$(MAKE) -C $(REPO_ROOT)/packages/guest-compat lib
 
 fetch:
 	mkdir -p $(BUILD_DIR) $(SRC_DIR)
