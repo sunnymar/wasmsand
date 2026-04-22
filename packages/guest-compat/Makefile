@@ -69,3 +69,21 @@ copy-fixtures: canaries
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+RUST_CANARY_NAMES := dup2 getgroups affinity signal
+RUST_CANARY_PRE_OPT := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.pre-opt.wasm,$(RUST_CANARY_NAMES)))
+RUST_CANARY_WASM := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.wasm,$(RUST_CANARY_NAMES)))
+
+.PHONY: rust-canaries
+
+rust-canaries: $(LIB) ensure-toolchain
+	@mkdir -p $(BUILD_DIR)/rust
+	CPCC_ARCHIVE=$(abspath $(LIB)) \
+	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/rust \
+	CPCC_NO_WASM_OPT=1 \
+	CARGO_TARGET_DIR=$(REPO_ROOT)/target \
+	$(REPO_ROOT)/target/release/cargo-codepod codepod build --release \
+	  -p dup2-canary -p getgroups-canary -p affinity-canary -p signal-canary
+	@for n in $(RUST_CANARY_NAMES); do \
+	  cp $(REPO_ROOT)/target/wasm32-wasip1/release/$$n-canary.wasm $(BUILD_DIR)/rust/$$n-canary.wasm; \
+	done

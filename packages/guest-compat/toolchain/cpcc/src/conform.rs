@@ -2,15 +2,23 @@ use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Canary → Tier 1 symbol that canary exercises. Canaries whose names
-/// are not in this map still build and run, but do not drive an
-/// implementation-signature check.
-pub fn canary_symbol_map() -> &'static [(&'static str, &'static str)] {
+use crate::spec::{Case, Spec};
+use crate::trace::{diff_case, parse_trace_line, Mismatch};
+
+/// Canary name → every Tier 1 symbol that canary exports. Used by both
+/// `run_signature_checks` (C side) and `run_rust_signature_checks` (Rust
+/// side, added below) to cover every marker a canary's pre-opt wasm
+/// must carry. Coverage across all four canaries is exhaustive of Tier 1.
+pub fn canary_symbol_map() -> &'static [(&'static str, &'static [&'static str])] {
     &[
-        ("dup2-canary", "dup2"),
-        ("getgroups-canary", "getgroups"),
-        ("affinity-canary", "sched_getaffinity"),
-        ("signal-canary", "signal"),
+        ("dup2-canary", &["dup2"]),
+        ("getgroups-canary", &["getgroups"]),
+        ("affinity-canary", &["sched_getaffinity", "sched_setaffinity", "sched_getcpu"]),
+        ("signal-canary", &[
+            "signal", "sigaction", "raise", "alarm",
+            "sigemptyset", "sigfillset", "sigaddset", "sigdelset",
+            "sigismember", "sigprocmask", "sigsuspend",
+        ]),
     ]
 }
 
@@ -61,16 +69,16 @@ impl Driver {
         let archive = self.guest_compat().join("build/libcodepod_guest_compat.a");
         let build_dir = self.guest_compat().join("build");
         let mut failed = Vec::new();
-        for (canary, sym) in canary_symbol_map() {
+        for (canary, symbols) in canary_symbol_map() {
             let pre_opt = build_dir.join(format!("{canary}.pre-opt.wasm"));
-            println!("== {canary} ({sym}) ==");
-            let status = Command::new(&cpcheck)
-                .arg("--archive")
-                .arg(&archive)
-                .arg("--pre-opt-wasm")
-                .arg(&pre_opt)
-                .arg("--symbol")
-                .arg(*sym)
+            println!("== {canary} ({} symbols) ==", symbols.len());
+            let mut cmd = Command::new(&cpcheck);
+            cmd.arg("--archive").arg(&archive);
+            cmd.arg("--pre-opt-wasm").arg(&pre_opt);
+            for sym in *symbols {
+                cmd.arg("--symbol").arg(*sym);
+            }
+            let status = cmd
                 .status()
                 .with_context(|| format!("running cpcheck on {canary}"))?;
             if !status.success() {
@@ -99,6 +107,147 @@ impl Driver {
             .context("spawning deno test")?;
         if !status.success() {
             return Err(anyhow!("orchestrator canary suite failed"));
+        }
+        Ok(())
+    }
+}
+
+/// Result of running one case through one language's canary.
+pub struct CaseResult {
+    pub spec_symbol: String,
+    pub case_name: String,
+    pub language: &'static str,
+    pub mismatches: Vec<Mismatch>,
+    /// Raw stdout from the canary, surfaced when parsing fails.
+    pub raw_stdout: String,
+}
+
+impl Driver {
+    /// Run `<canary>.wasm --case <name>` via wasmtime and return the
+    /// captured stdout + exit code. The canary's working directory is the
+    /// guest-compat build/ dir so VFS paths resolve consistently.
+    fn run_canary_case(&self, wasm: &std::path::Path, case_name: &str) -> Result<(String, i32)> {
+        let out = Command::new("wasmtime")
+            .arg("run")
+            .arg(wasm)
+            .arg("--")
+            .arg("--case")
+            .arg(case_name)
+            .output()
+            .with_context(|| format!("running wasmtime on {}", wasm.display()))?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let code = out.status.code().unwrap_or(-1);
+        Ok((stdout, code))
+    }
+
+    /// Diff one case's trace against its spec, for one language. Returns
+    /// the result regardless of pass/fail; caller aggregates.
+    pub fn run_one(
+        &self,
+        spec: &Spec,
+        case: &Case,
+        wasm: &std::path::Path,
+        language: &'static str,
+    ) -> Result<CaseResult> {
+        let (raw_stdout, process_exit) = self.run_canary_case(wasm, &case.name)?;
+        let trace_line = raw_stdout.lines().last().unwrap_or("").to_string();
+        let mismatches = match parse_trace_line(&trace_line) {
+            Ok(t) => diff_case(case, &t, process_exit),
+            Err(_) => vec![Mismatch::CaseName {
+                expected: case.name.clone(),
+                actual: format!("<unparseable: {trace_line}>"),
+            }],
+        };
+        Ok(CaseResult {
+            spec_symbol: spec.symbol.clone(),
+            case_name: case.name.clone(),
+            language,
+            mismatches,
+            raw_stdout,
+        })
+    }
+
+    /// Run every case in every spec under `conformance/` against the C and
+    /// (optionally) Rust canaries. Returns a flat Vec of results; caller
+    /// summarizes.
+    ///
+    /// When `include_rust` is true, missing Rust canary artifacts are a
+    /// HARD FAILURE. Soft-skipping would let a broken `make rust-canaries`
+    /// target or a missed copy-step produce a green `cpconf --include-rust`
+    /// that silently verified nothing on the Rust side — the opposite of
+    /// what a "Rust parity" CI gate is for.
+    pub fn run_spec_traces(&self, include_rust: bool) -> Result<Vec<CaseResult>> {
+        let conformance = self.guest_compat().join("conformance");
+        let specs = Spec::load_dir(&conformance)?;
+        let build = self.guest_compat().join("build");
+        let mut results = Vec::new();
+        for spec in &specs {
+            let c_wasm = build.join(format!("{}.wasm", spec.canary));
+            if !c_wasm.exists() {
+                return Err(anyhow!(
+                    "missing C canary wasm {} (spec {}). Ensure `make canaries` ran.",
+                    c_wasm.display(),
+                    spec.symbol
+                ));
+            }
+            let rust_wasm = build.join("rust").join(format!("{}.wasm", spec.canary));
+            if include_rust && !rust_wasm.exists() {
+                return Err(anyhow!(
+                    "--include-rust but missing Rust canary wasm {} (spec {}). \
+                     Ensure `make rust-canaries` ran and that cargo-codepod emitted the wasm. \
+                     This must be a hard failure — soft-skipping would silently pass the Rust gate.",
+                    rust_wasm.display(),
+                    spec.symbol
+                ));
+            }
+            for case in &spec.cases {
+                results.push(self.run_one(spec, case, &c_wasm, "c")?);
+                if include_rust {
+                    results.push(self.run_one(spec, case, &rust_wasm, "rust")?);
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// Run cpcheck on the Rust pre-opt wasms for the same canary→symbol
+    /// map used by the C side. Every canary in the map MUST have a
+    /// pre-opt wasm present — missing artifacts are a hard failure, for
+    /// the same reason as `run_spec_traces`.
+    pub fn run_rust_signature_checks(&self) -> Result<()> {
+        let cpcheck = self.target_bin("cpcheck");
+        let archive = self.guest_compat().join("build/libcodepod_guest_compat.a");
+        let build_dir = self.guest_compat().join("build/rust");
+        let mut failed = Vec::new();
+        for (canary, symbols) in canary_symbol_map() {
+            let pre_opt = build_dir.join(format!("{canary}.pre-opt.wasm"));
+            if !pre_opt.exists() {
+                return Err(anyhow!(
+                    "missing Rust pre-opt wasm {} for canary {}. \
+                     Ensure `make rust-canaries` ran with CPCC_PRESERVE_PRE_OPT set. \
+                     This must be a hard failure — soft-skipping would leave {} Tier 1 \
+                     symbols unverified on the Rust side.",
+                    pre_opt.display(),
+                    canary,
+                    symbols.len()
+                ));
+            }
+            println!("== rust {canary} ({} symbols) ==", symbols.len());
+            let mut cmd = Command::new(&cpcheck);
+            cmd.arg("--archive").arg(&archive);
+            cmd.arg("--pre-opt-wasm").arg(&pre_opt);
+            for sym in *symbols {
+                cmd.arg("--symbol").arg(*sym);
+            }
+            let status = cmd
+                .status()
+                .with_context(|| format!("running cpcheck on rust {canary}"))?;
+            if !status.success() {
+                failed.push(*canary);
+            }
+        }
+        if !failed.is_empty() {
+            return Err(anyhow!("rust signature check failed for: {}", failed.join(", ")));
         }
         Ok(())
     }
