@@ -19,9 +19,14 @@ struct Cli {
 }
 
 fn is_link_invocation(user_args: &[String]) -> bool {
+    // Relocatable (-r / --relocatable) and partial links must NOT receive the
+    // --whole-archive compat injection: the archive symbols would end up in
+    // intermediate .o files and cause duplicate-symbol errors when the final
+    // link re-injects the archive. Only the final executable link step gets
+    // the injection.
     !user_args
         .iter()
-        .any(|a| a == "-c" || a == "-E" || a == "-S")
+        .any(|a| a == "-c" || a == "-E" || a == "-S" || a == "-r" || a == "--relocatable")
 }
 
 fn build_clang_invocation(

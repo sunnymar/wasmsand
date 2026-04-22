@@ -1,7 +1,7 @@
 # BusyBox pilot recipe
 
-This package defines the phase-1 BusyBox pilot as a recipe on top of
-`scripts/build-c-port.sh`, not as a separate proof of the host C builder.
+This package builds BusyBox 1.37.0 for wasm32-wasip1 using the `cpcc`/`cpar`/`cpranlib`
+toolchain wrappers from `packages/guest-compat/toolchain/`.
 
 Enabled applets:
 
@@ -11,36 +11,25 @@ Enabled applets:
 
 Build path:
 
-- `make copy-fixtures` fetches BusyBox source and uses
-  `scripts/build-c-port.sh env` to export the shared `CC`, `AR`, and `RANLIB`
-  toolchain contract for the upstream `make` build.
+- `make copy-fixtures` fetches BusyBox source (if not already present), configures,
+  builds, and copies `busybox.wasm` to the test fixtures directory.
 - The recipe runs `allnoconfig`, merges the curated
   [`busybox.config`](busybox.config) back into `.config`, then regenerates
   `include/autoconf.h` via `silentoldconfig` so the selected applets survive
   BusyBox's non-interactive Kconfig flow.
-- The build step passes `CC`, `AR`, and `RANLIB` on the BusyBox `make`
-  command line so upstream defaults do not fall back to host `gcc` / `ar`.
-- The build step also adds the minimal WASI emulation flags and libraries
-  required to get past BusyBox's unconditional libc headers:
+- `cpcc`/`cpar`/`cpranlib` are used as `CC`/`AR`/`RANLIB` so the guest-compat
+  library (`libcodepod_guest_compat.a`) is automatically injected at link time
+  via `CPCC_ARCHIVE`.
+- The build step adds minimal WASI emulation flags and libraries:
   `-mllvm -wasm-enable-sjlj`,
   `-D_WASI_EMULATED_SIGNAL`,
   `-D_WASI_EMULATED_MMAN`,
   `-D_WASI_EMULATED_PROCESS_CLOCKS`,
-  plus the matching `libwasi-emulated-*` link flags.
-- A recipe-local `AR` wrapper emits an empty archive for kbuild directories
-  with no selected objects, avoiding BusyBox's `ar: no archive members
-  specified` failure without widening the curated applet set.
-- The recipe injects the pinned BusyBox config plus the narrow compatibility
-  headers in [`compat/include`](compat/include), currently
-  [`paths.h`](compat/include/paths.h) and
-  [`netdb.h`](compat/include/netdb.h) and
-  [`mntent.h`](compat/include/mntent.h) and
-  [`sys/statfs.h`](compat/include/sys/statfs.h) and
-  [`sys/sysmacros.h`](compat/include/sys/sysmacros.h) and
-  [`sys/wait.h`](compat/include/sys/wait.h) and
-  [`termios.h`](compat/include/termios.h) and
-  [`pwd.h`](compat/include/pwd.h) and
-  [`grp.h`](compat/include/grp.h).
+  plus the matching `libwasi-emulated-*` link flags and `-Wl,-u,__main_argc_argv`
+  to prevent `--gc-sections` from eliminating BusyBox's main entry point.
+- The recipe injects the pinned BusyBox config plus narrow compatibility
+  headers in [`compat/include`](compat/include) covering POSIX functions
+  absent in `wasm32-wasip1` (uid/gid, socket, signal, fork stubs, etc.).
 - If BusyBox still needs more libc or POSIX surface than the builder path
   provides, that is treated as a concrete blocker for this recipe, not as a
   reason to broaden the phase-1 platform contract.
