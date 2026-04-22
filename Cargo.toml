@@ -26,6 +26,7 @@ members = [
   "packages/guest-compat/conformance/rust/dup2-canary",
   "packages/guest-compat/conformance/rust/getgroups-canary",
   "packages/guest-compat/conformance/rust/affinity-canary",
+  "packages/guest-compat/conformance/rust/signal-canary",
 ]
 exclude = [
   "packages/sips",
