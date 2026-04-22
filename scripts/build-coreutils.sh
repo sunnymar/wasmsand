@@ -1,21 +1,72 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build all coreutils and shell to wasm32-wasip1
-# Usage: ./scripts/build-coreutils.sh [--copy-fixtures]
+# Build all coreutils + shell to wasm32-wasip1.
+# Usage:
+#   ./scripts/build-coreutils.sh [--engine=cargo|cargo-codepod] [--copy-fixtures]
+#
+# Engines (§Toolchain Integration > Rust Toolchain):
+#   cargo         — plain cargo, wasm32-wasip1, no compat archive. Historical
+#                   default; preserved for bisect and emergency fallback.
+#   cargo-codepod — the Phase A wrapper. Injects --whole-archive of
+#                   libcodepod_guest_compat.a via RUSTFLAGS, exports Tier 1
+#                   markers, preserves pre-opt wasms for cpcheck, runs wasm-opt.
+#                   Required for every coreutils .wasm to pass the §Verifying
+#                   Precedence check. Task 3 makes this the default.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_DIR="$REPO_ROOT/target/wasm32-wasip1/release"
 FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
+SHELL_FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures"
+ARCHIVE="$REPO_ROOT/packages/guest-compat/build/libcodepod_guest_compat.a"
+PRE_OPT_DIR="$REPO_ROOT/target/wasm32-wasip1/release/coreutils-pre-opt"
 
-echo "Building coreutils + shell + shell-exec to wasm32-wasip1..."
-cargo build \
-  -p codepod-coreutils \
-  -p codepod-shell-exec \
-  -p true-cmd-wasm \
-  -p false-cmd-wasm \
-  --target wasm32-wasip1 \
-  --release
+ENGINE="cargo"
+COPY_FIXTURES=0
+for arg in "$@"; do
+  case "$arg" in
+    --engine=*) ENGINE="${arg#--engine=}" ;;
+    --copy-fixtures) COPY_FIXTURES=1 ;;
+    *) echo "unknown arg: $arg" >&2; exit 2 ;;
+  esac
+done
+
+case "$ENGINE" in
+  cargo|cargo-codepod) ;;
+  *) echo "--engine must be cargo or cargo-codepod (got: $ENGINE)" >&2; exit 2 ;;
+esac
+
+echo "Building coreutils + shell + shell-exec to wasm32-wasip1 (engine=$ENGINE)..."
+
+if [[ "$ENGINE" == "cargo-codepod" ]]; then
+  # Ensure the wrapper and archive exist. The Makefile rule at
+  # packages/guest-compat/Makefile:43-44 rebuilds the toolchain on every
+  # invocation; mirror that here so edits propagate.
+  cargo build --release -p cpcc-toolchain
+  make -C "$REPO_ROOT/packages/guest-compat" lib
+  mkdir -p "$PRE_OPT_DIR"
+  # §Override And Link Precedence > Link Order Rust frontend: cargo-codepod
+  # reads CPCC_ARCHIVE and CPCC_PRESERVE_PRE_OPT. Setting the preserve dir
+  # is load-bearing for Task 5's signature check.
+  env \
+    CPCC_ARCHIVE="$ARCHIVE" \
+    CPCC_PRESERVE_PRE_OPT="$PRE_OPT_DIR" \
+    CPCC_WASM_OPT_FLAGS="-O2 --enable-bulk-memory --enable-sign-ext --enable-nontrapping-float-to-int --enable-mutable-globals" \
+    CARGO_TARGET_DIR="$REPO_ROOT/target" \
+    "$REPO_ROOT/target/release/cargo-codepod" codepod build --release \
+      -p codepod-coreutils \
+      -p codepod-shell-exec \
+      -p true-cmd-wasm \
+      -p false-cmd-wasm
+else
+  cargo build \
+    -p codepod-coreutils \
+    -p codepod-shell-exec \
+    -p true-cmd-wasm \
+    -p false-cmd-wasm \
+    --target wasm32-wasip1 \
+    --release
+fi
 
 echo ""
 echo "Built binaries:"
@@ -25,8 +76,7 @@ ls -lh "$TARGET_DIR"/*.wasm 2>/dev/null | while read line; do
   printf "  %-30s %s\n" "$name" "$size"
 done
 
-# Copy to test fixtures if requested
-if [[ "${1:-}" == "--copy-fixtures" ]]; then
+if [[ "$COPY_FIXTURES" -eq 1 ]]; then
   echo ""
   echo "Copying to test fixtures..."
 
@@ -37,11 +87,9 @@ if [[ "${1:-}" == "--copy-fixtures" ]]; then
 
   cp "$TARGET_DIR/true-cmd-wasm.wasm" "$FIXTURES_DIR/true-cmd.wasm"
   cp "$TARGET_DIR/false-cmd-wasm.wasm" "$FIXTURES_DIR/false-cmd.wasm"
-  cp "$TARGET_DIR/codepod-shell-exec.wasm" "$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures/codepod-shell-exec.wasm"
+  cp "$TARGET_DIR/codepod-shell-exec.wasm" "$SHELL_FIXTURES_DIR/codepod-shell-exec.wasm"
   cp "$TARGET_DIR/codepod-shell-exec.wasm" "$FIXTURES_DIR/codepod-shell-exec.wasm"
 
-  # Build asyncify variant for non-JSPI environments (Safari, Bun, older browsers).
-  # Requires wasm-opt (Binaryen) — skipped if not available.
   if command -v wasm-opt &>/dev/null; then
     echo ""
     echo "Building codepod-shell-exec-asyncify.wasm via wasm-opt --asyncify..."
@@ -54,12 +102,10 @@ if [[ "${1:-}" == "--copy-fixtures" ]]; then
       --pass-arg=asyncify-imports@codepod.host_waitpid,codepod.host_yield,codepod.host_network_fetch,codepod.host_register_tool,codepod.host_run_command,wasi_snapshot_preview1.fd_read,wasi_snapshot_preview1.poll_oneoff \
       -O1 \
       -o "$FIXTURES_DIR/codepod-shell-exec-asyncify.wasm"
-    cp "$FIXTURES_DIR/codepod-shell-exec-asyncify.wasm" \
-       "$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures/codepod-shell-exec-asyncify.wasm"
+    cp "$FIXTURES_DIR/codepod-shell-exec-asyncify.wasm" "$SHELL_FIXTURES_DIR/codepod-shell-exec-asyncify.wasm"
     echo "  codepod-shell-exec-asyncify.wasm built."
   else
     echo "WARNING: wasm-opt not found — skipping asyncify build."
-    echo "         Install Binaryen (brew install binaryen) and re-run to build the asyncify variant."
   fi
 
   echo "Done."
