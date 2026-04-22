@@ -79,3 +79,25 @@ fn profile_release_when_release_flag_present() {
 fn profile_debug_when_release_flag_absent() {
     assert_eq!(profile_from_args(&[]), "debug");
 }
+
+#[test]
+fn clang_linker_omitted_when_cpcc_no_clang_linker_set() {
+    // Save and restore to avoid cross-test contamination.
+    let prev = std::env::var_os("CPCC_NO_CLANG_LINKER");
+    std::env::set_var("CPCC_NO_CLANG_LINKER", "1");
+    let plan = plan_invocation_with_sdk(
+        Subcommand::Build,
+        &[],
+        Some(&PathBuf::from("/wasi-sdk/bin/clang")),
+    )
+    .unwrap();
+    match prev {
+        Some(v) => std::env::set_var("CPCC_NO_CLANG_LINKER", v),
+        None => std::env::remove_var("CPCC_NO_CLANG_LINKER"),
+    }
+    let linker = plan
+        .env
+        .iter()
+        .find(|(k, _)| k == "CARGO_TARGET_WASM32_WASIP1_LINKER");
+    assert!(linker.is_none(), "CPCC_NO_CLANG_LINKER=1 should skip linker injection even when clang is supplied");
+}

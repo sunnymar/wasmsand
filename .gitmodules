@@ -10,7 +10,7 @@
 [submodule "packages/pandas-rust"]
 	path = packages/pandas-rust
 	url = git@github.com:codepod-sandbox/pandas-rust.git
-[submodule "packages/rust-ports/tokei"]
-	path = packages/rust-ports/tokei
-	url = https://github.com/XAMPPRocky/tokei.git
-	branch = master
+[submodule "packages/rust-ports/grex"]
+	path = packages/rust-ports/grex
+	url = https://github.com/pemistahl/grex.git
+	branch = main

@@ -75,11 +75,21 @@ pub fn plan_invocation_with_sdk(
 
     plan.env.push(("CODEPOD_LINK_INJECTED".to_string(), "1".to_string()));
 
+    // CPCC_NO_CLANG_LINKER skips the wasi-sdk clang linker injection so rust's
+    // default rust-lld handles the link. Needed for ports whose dep tree
+    // includes cdylib targets with wasm-bindgen (e.g. grex's wasm browser
+    // entry point) — wasi-sdk's lld rejects these because `_initialize`
+    // isn't defined. --whole-archive + --export flags injected via RUSTFLAGS
+    // work identically under rust-lld and wasi-sdk's lld, so precedence
+    // semantics (§Override And Link Precedence) are preserved either way.
+    let skip_clang_linker = std::env::var_os("CPCC_NO_CLANG_LINKER").is_some();
     if let Some(c) = clang {
-        plan.env.push((
-            "CARGO_TARGET_WASM32_WASIP1_LINKER".to_string(),
-            c.display().to_string(),
-        ));
+        if !skip_clang_linker {
+            plan.env.push((
+                "CARGO_TARGET_WASM32_WASIP1_LINKER".to_string(),
+                c.display().to_string(),
+            ));
+        }
     }
 
     if let Some(archive) = &env.archive {
@@ -87,14 +97,26 @@ pub fn plan_invocation_with_sdk(
         // archive, then per-Tier-1-symbol --export framing so the
         // implementation-signature check can find the markers in the pre-opt
         // wasm.
+        //
+        // When wasi-sdk clang is the linker, flags must be wrapped with
+        // `-Wl,` so clang passes them through to lld. When rust-lld is used
+        // directly (CPCC_NO_CLANG_LINKER=1), the `-Wl,` prefix must be
+        // omitted — rust-lld receives -C link-arg values verbatim and doesn't
+        // understand `-Wl,` itself.
+        let (wa_open, wa_close, flag_prefix) = if skip_clang_linker {
+            ("--whole-archive", "--no-whole-archive", "--export=")
+        } else {
+            ("-Wl,--whole-archive", "-Wl,--no-whole-archive", "-Wl,--export=")
+        };
+
         let mut rustflags = String::new();
-        rustflags.push_str("-C link-arg=-Wl,--whole-archive ");
+        rustflags.push_str(&format!("-C link-arg={wa_open} "));
         rustflags.push_str(&format!("-C link-arg={} ", archive.display()));
-        rustflags.push_str("-C link-arg=-Wl,--no-whole-archive ");
+        rustflags.push_str(&format!("-C link-arg={wa_close} "));
         for sym in crate::TIER1 {
-            rustflags.push_str(&format!("-C link-arg=-Wl,--export={sym} "));
+            rustflags.push_str(&format!("-C link-arg={flag_prefix}{sym} "));
             rustflags.push_str(&format!(
-                "-C link-arg=-Wl,--export=__codepod_guest_compat_marker_{sym} "
+                "-C link-arg={flag_prefix}__codepod_guest_compat_marker_{sym} "
             ));
         }
         plan.env.push((
