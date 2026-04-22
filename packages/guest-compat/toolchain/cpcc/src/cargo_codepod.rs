@@ -5,6 +5,7 @@
 //! preservation, and post-link `wasm-opt`.
 
 use anyhow::{anyhow, Result};
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Subcommand {
@@ -50,6 +51,15 @@ pub struct InvocationPlan {
 /// injected when an archive is present — bare `cargo codepod build` with no
 /// archive surfaces "missing archive" instead of a confusing link error.
 pub fn plan_invocation(sub: Subcommand, forwarded: &[String]) -> Result<InvocationPlan> {
+    plan_invocation_with_sdk(sub, forwarded, None)
+}
+
+/// Variant that takes an explicit clang path. `None` skips linker injection.
+pub fn plan_invocation_with_sdk(
+    sub: Subcommand,
+    forwarded: &[String],
+    clang: Option<&Path>,
+) -> Result<InvocationPlan> {
     let env = crate::env::Env::from_process();
     let mut plan = InvocationPlan::default();
 
@@ -63,6 +73,13 @@ pub fn plan_invocation(sub: Subcommand, forwarded: &[String]) -> Result<Invocati
     }
 
     plan.env.push(("CODEPOD_LINK_INJECTED".to_string(), "1".to_string()));
+
+    if let Some(c) = clang {
+        plan.env.push((
+            "CARGO_TARGET_WASM32_WASIP1_LINKER".to_string(),
+            c.display().to_string(),
+        ));
+    }
 
     if let Some(archive) = &env.archive {
         // §Override And Link Precedence: --whole-archive bracket the compat
