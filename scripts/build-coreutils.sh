@@ -11,8 +11,13 @@ set -euo pipefail
 #   cargo-codepod — the Phase A wrapper. Injects --whole-archive of
 #                   libcodepod_guest_compat.a via RUSTFLAGS, exports Tier 1
 #                   markers, preserves pre-opt wasms for cpcheck, runs wasm-opt.
-#                   Required for every coreutils .wasm to pass the §Verifying
-#                   Precedence check. Task 3 makes this the default.
+#                   Applied to codepod-coreutils, true-cmd-wasm, false-cmd-wasm.
+#
+# codepod-shell-exec is NEVER routed through cargo-codepod: it's the host-side
+# shell runtime (exports __run_command / __alloc / __dealloc), not a consumer
+# of libcodepod_guest_compat.a. Routing it through cargo-codepod would inject
+# --whole-archive of the 16 Tier 1 symbols and drop __run_command — breaking
+# every sandbox test. Shell-exec always builds with plain cargo.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_DIR="$REPO_ROOT/target/wasm32-wasip1/release"
@@ -36,12 +41,10 @@ case "$ENGINE" in
   *) echo "--engine must be cargo or cargo-codepod (got: $ENGINE)" >&2; exit 2 ;;
 esac
 
-echo "Building coreutils + shell + shell-exec to wasm32-wasip1 (engine=$ENGINE)..."
+echo "Building coreutils + test fixtures to wasm32-wasip1 (engine=$ENGINE)..."
 
 if [[ "$ENGINE" == "cargo-codepod" ]]; then
-  # Ensure the wrapper and archive exist. The Makefile rule at
-  # packages/guest-compat/Makefile:43-44 rebuilds the toolchain on every
-  # invocation; mirror that here so edits propagate.
+  # Ensure the wrapper and archive exist.
   cargo build --release -p cpcc-toolchain
   make -C "$REPO_ROOT/packages/guest-compat" lib
   mkdir -p "$PRE_OPT_DIR"
@@ -55,18 +58,24 @@ if [[ "$ENGINE" == "cargo-codepod" ]]; then
     CARGO_TARGET_DIR="$REPO_ROOT/target" \
     "$REPO_ROOT/target/release/cargo-codepod" codepod build --release \
       -p codepod-coreutils \
-      -p codepod-shell-exec \
       -p true-cmd-wasm \
       -p false-cmd-wasm
 else
   cargo build \
     -p codepod-coreutils \
-    -p codepod-shell-exec \
     -p true-cmd-wasm \
     -p false-cmd-wasm \
     --target wasm32-wasip1 \
     --release
 fi
+
+# codepod-shell-exec always builds via plain cargo — it is the host runtime,
+# not a consumer of the guest-compat library. See header comment.
+echo "Building codepod-shell-exec to wasm32-wasip1 (plain cargo, always)..."
+cargo build \
+  -p codepod-shell-exec \
+  --target wasm32-wasip1 \
+  --release
 
 echo ""
 echo "Built binaries:"
