@@ -30,6 +30,7 @@ members = [
 ]
 exclude = [
   "packages/sips",
+  "packages/rust-ports/grex",
 ]
 resolver = "2"
 
