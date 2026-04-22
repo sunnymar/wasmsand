@@ -17,10 +17,9 @@ fn main() -> Result<ExitCode> {
     let sub = Subcommand::parse(&sub_name)?;
 
     if sub == Subcommand::DownloadToolchain {
-        // Implemented in Task 11.
-        return Err(anyhow!(
-            "cargo-codepod: download-toolchain not yet implemented (Task 11)"
-        ));
+        let msg = cpcc_toolchain::cargo_codepod::download_toolchain()?;
+        println!("cargo-codepod: {msg}");
+        return Ok(ExitCode::SUCCESS);
     }
 
     let mut dry_run = false;

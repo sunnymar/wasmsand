@@ -6,6 +6,7 @@
 
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Subcommand {
@@ -135,4 +136,34 @@ pub fn profile_from_args(forwarded: &[String]) -> &'static str {
     } else {
         "debug"
     }
+}
+
+/// Phase A `download-toolchain`: ensures `wasm32-wasip1` is available via
+/// rustup. Returns Ok with a status message; exits 0 on success even if
+/// the target was already installed. §Phase B will replace this with a
+/// codepod toolchain distribution download.
+pub fn download_toolchain() -> Result<String> {
+    // `rustup target list --installed` lists targets with no extra noise.
+    let listing = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .map_err(|e| anyhow!("rustup not available: {e}"))?;
+    if !listing.status.success() {
+        return Err(anyhow!(
+            "rustup target list failed: {}",
+            String::from_utf8_lossy(&listing.stderr)
+        ));
+    }
+    let installed = String::from_utf8_lossy(&listing.stdout);
+    if installed.lines().any(|l| l.trim() == "wasm32-wasip1") {
+        return Ok("wasm32-wasip1 is already installed".into());
+    }
+    let install = Command::new("rustup")
+        .args(["target", "add", "wasm32-wasip1"])
+        .status()
+        .map_err(|e| anyhow!("rustup target add failed to spawn: {e}"))?;
+    if !install.success() {
+        return Err(anyhow!("rustup target add wasm32-wasip1 failed"));
+    }
+    Ok("installed wasm32-wasip1 via rustup".into())
 }
