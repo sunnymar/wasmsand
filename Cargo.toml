@@ -21,6 +21,8 @@ members = [
   "packages/guest-compat/toolchain/cpcc",
   # Alternate-path Rust sys crate: plain `cargo build --target=wasm32-wasip1` without cargo-codepod
   "packages/guest-compat/rust/codepod-guest-compat-sys",
+  # Safe Rust wrappers over the Tier 1 ABI
+  "packages/guest-compat/rust/codepod-guest-compat",
 ]
 exclude = [
   "packages/sips",
