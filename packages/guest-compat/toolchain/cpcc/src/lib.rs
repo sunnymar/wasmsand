@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod cargo_codepod;
 pub mod conform;
 pub mod env;
 pub mod precheck;

@@ -25,6 +25,10 @@ path = "src/bin/cpcheck.rs"
 name = "cpconf"
 path = "src/bin/cpconf.rs"
 
+[[bin]]
+name = "cargo-codepod"
+path = "src/bin/cargo-codepod.rs"
+
 [lib]
 path = "src/lib.rs"
 
