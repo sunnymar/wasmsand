@@ -1,10 +1,27 @@
 # C ABI Compatibility For codepod
 
+> **Superseded for architectural direction by
+> [`2026-04-19-guest-compat-runtime-design.md`](2026-04-19-guest-compat-runtime-design.md).**
+> That document generalizes this C-only contract into a shared guest
+> compatibility runtime that hosts both C and Rust frontends on a single
+> compiled archive, with paired driver wrappers (`codepod-cc` /
+> `cargo-codepod`) and a conformance tree. This spec stays as the
+> authoritative behavioral description of the C-facing Tier 1 semantics —
+> individual symbol contracts (dup2, getgroups, sched\_\*, signal, alarm,
+> etc.) are not duplicated there and should be read from here. Everything
+> else — repository layout, link-order policy, toolchain integration,
+> verification strategy, and migration path — lives in the runtime design
+> doc.
+
 ## Status
 
-Proposed normative platform specification.
+Proposed normative platform specification (behavioral contract subset;
+architectural direction is now in the guest compatibility runtime design).
 
-This document defines the contract for porting C programs to codepod. It is intentionally stricter than "whatever happens to work with `wasi-sdk` today." If a behavior is not described here, package authors must not rely on it.
+This document defines the behavioral contract for porting C programs to
+codepod. It is intentionally stricter than "whatever happens to work with
+`wasi-sdk` today." If a behavior is not described here, package authors
+must not rely on it.
 
 ## Goals
 

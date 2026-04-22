@@ -1,5 +1,6 @@
 /**
- * End-to-end checks for the phase-1 C compatibility canaries.
+ * End-to-end checks for the Phase A C canaries shipped by the codepod
+ * guest compatibility runtime.
  */
 import { describe, it, afterEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';

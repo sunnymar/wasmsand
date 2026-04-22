@@ -10,7 +10,9 @@
 extern uint32_t codepod_guest_compat_version;
 
 /*
- * Narrow phase-1 command-execution shim for codepod guests.
+ * Narrow Phase A command-execution shim for codepod guests, part of the
+ * codepod guest compatibility runtime (see
+ * docs/superpowers/specs/2026-04-19-guest-compat-runtime-design.md).
  *
  * This is a codepod extension layer on top of wasi-libc, not a POSIX process
  * API. Only read-mode popen is supported, and codepod_pclose() returns the

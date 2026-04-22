@@ -43,9 +43,9 @@ Socket data is base64-encoded in JSON since the bridge protocol is JSON-based.
 | `host_is_extension` | `(name_ptr, name_len) → i32` | Returns 1 if the named extension is available, 0 otherwise. |
 | `host_run_command` | `(req_ptr, req_len, out_ptr, out_cap) → i32` | Runs a shell command and captures output. Request: `{ cmd, stdin? }`. Response: `{ exit_code, stdout, stderr }`. The return value is the byte count written, or the required byte count if `out_cap` is too small. **Async (JSPI)**. |
 
-`host_run_command` is the low-level guest extension used by the Python subprocess shim today. It is also the intended primitive for optional C-compat helpers such as `codepod_system()` and `codepod_popen()`. In the phase-1 C shim, `codepod_pclose()` reports the captured command exit code, and JSON string decoding supports the standard short escapes plus ASCII-range `\u00XX` escapes only. This is an extension API for command execution, not a POSIX process syscall surface.
+`host_run_command` is the low-level guest extension used by the Python subprocess shim today. It is also the intended primitive for optional guest-compat helpers such as `codepod_system()` and `codepod_popen()`. In the Phase A C frontend, `codepod_pclose()` reports the captured command exit code, and JSON string decoding supports the standard short escapes plus ASCII-range `\u00XX` escapes only. This is an extension API for command execution, not a POSIX process syscall surface.
 
-The shared C compatibility layer also ships narrow libc header overrides in
+The codepod guest compatibility runtime (see [`docs/superpowers/specs/2026-04-19-guest-compat-runtime-design.md`](../superpowers/specs/2026-04-19-guest-compat-runtime-design.md)) also ships narrow libc header overrides in
 `packages/guest-compat/include/`, currently including:
 
 - `sched.h` for single-CPU affinity behavior

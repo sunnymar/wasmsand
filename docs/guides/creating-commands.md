@@ -145,38 +145,52 @@ The resolver follows symlinks through the VFS, reads the target tool file, and v
 
 ## Building C executables
 
-For C programs, use the host-side builder in
-[`scripts/build-c-port.sh`](../../scripts/build-c-port.sh) together with the
-phase-1 compatibility package under `packages/guest-compat/`.
+For C programs, use `cpcc` — the clang wrapper shipped by the codepod guest
+compatibility runtime (see
+[`docs/superpowers/specs/2026-04-19-guest-compat-runtime-design.md`](../superpowers/specs/2026-04-19-guest-compat-runtime-design.md)).
+`cpcc` and its companions (`cpar`, `cpranlib`, `cpcheck`, `cpconf`) live
+under `packages/guest-compat/toolchain/cpcc/` and build as workspace
+release binaries.
 
-- The builder wraps `clang` from `wasi-sdk`; codepod does not provide an
+- `cpcc` wraps `clang` from `wasi-sdk`; codepod does not provide an
   in-sandbox compiler.
 - Plain file/stdio programs can target `wasm32-wasip1` directly.
 - Command execution helpers such as `codepod_system()` and
   `codepod_popen()` are optional extensions, not part of baseline WASI.
-- Multi-call ports such as BusyBox are a later recipe path; Task 3 only
-  establishes the shared builder they will consume.
 - Shared libraries and full POSIX thread/process semantics are out of scope.
 
-Small ports can call the builder directly:
+To produce the `cp*` binaries once, from the repo root:
 
 ```bash
-scripts/build-c-port.sh \
-  --source packages/guest-compat/examples/stdio_canary.c \
-  --include packages/guest-compat/include \
-  --output /tmp/stdio-canary.wasm
+cargo build --release -p cpcc-toolchain
 ```
 
-Recipe-style ports can also reuse the discovered toolchain settings:
+Small ports can call `cpcc` directly — set `CPCC_INCLUDE` to pick up the
+Tier 1 compat headers and, for link steps, `CPCC_ARCHIVE` to auto-link
+`libcodepod_guest_compat.a` with `--whole-archive` framing:
 
 ```bash
-eval "$(scripts/build-c-port.sh env)"
-make CC="$CC" AR="$AR" RANLIB="$RANLIB"
+CPCC_INCLUDE=packages/guest-compat/include \
+./target/release/cpcc \
+  packages/guest-compat/conformance/c/stdio-canary.c \
+  -o /tmp/stdio-canary.wasm
 ```
 
-The exported `CC` is an absolute `scripts/build-c-port.sh cc` wrapper, so it
-continues to work when an upstream `make` recipe spawns child compiler
-processes in another directory.
+Recipe-style ports (autoconf, CMake, upstream `make`) consume the
+companion wrappers as `CC` / `AR` / `RANLIB`:
+
+```bash
+make CC=./target/release/cpcc \
+     AR=./target/release/cpar \
+     RANLIB=./target/release/cpranlib
+```
+
+Because each companion is a Rust binary that forwards to the right
+`wasi-sdk` tool, they remain consistent when an upstream recipe spawns
+child compiler processes in another directory.
+
+Multi-call ports such as BusyBox (`packages/c-ports/busybox/`) already
+follow this pattern and are a good working reference.
 
 ## What Your Executable Can Do
 
