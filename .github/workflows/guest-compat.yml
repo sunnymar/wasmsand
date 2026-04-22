@@ -70,3 +70,18 @@ jobs:
       - name: Smoke-run grex via wasmtime
         run: |
           wasmtime target/rust-ports/grex/wasm32-wasip1/release/grex.wasm -- --version
+
+      - name: Build codepod-wasi-postlink
+        run: cargo build --release -p codepod-wasi-postlink
+
+      - name: Run grex upstream test suite on wasm32-wasip1
+        # Upstream grex's tests were gated out of wasm by `#![cfg(not(target_family = "wasm"))]`.
+        # Our build.rs strips that gate, and the runner script
+        # (`run-wasi-test.sh`) post-link rewrites panicky stdlib fns
+        # (env::temp_dir etc.) to codepod-wasi-shims replacements before
+        # wasmtime. LTO must be off so stdlib panicking fns keep their
+        # real sret ABI — see run-wasi-test.sh's header for rationale.
+        working-directory: packages/rust-ports/grex-wasi-tests
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "off"
+        run: cargo test --release
