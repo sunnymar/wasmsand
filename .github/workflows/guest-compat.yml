@@ -59,7 +59,7 @@ jobs:
         run: ./packages/c-ports/busybox/scripts/signature-check.sh
 
       - name: Build coreutils via cargo-codepod
-        run: ./scripts/build-coreutils.sh --engine=cargo-codepod
+        run: ./scripts/build-coreutils.sh --engine=cargo-codepod --copy-fixtures
 
       - name: Signature-check every coreutils binary (§Verifying Precedence)
         run: ./scripts/guest-compat-check-coreutils.sh
@@ -85,3 +85,14 @@ jobs:
         env:
           CARGO_PROFILE_RELEASE_LTO: "off"
         run: cargo test --release
+
+      - name: Install Deno
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+      - name: Run BusyBox upstream testsuite in sandbox
+        run: deno run -A --no-check scripts/run-busybox-testsuite-in-sandbox.ts
+
+      - name: Run coreutils test_coreutils.py in sandbox
+        run: deno run -A --no-check scripts/run-coreutils-pysuite-in-sandbox.ts
