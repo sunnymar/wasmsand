@@ -2,7 +2,7 @@
 
 **Runner**: `scripts/run-coreutils-pysuite-in-sandbox.ts`
 **Strategy**: Fresh Deno subprocess per section (25 sections × 1 sandbox each)
-**Total elapsed**: 101.9s
+**Total elapsed**: 102.6s
 **Test script**: `packages/coreutils/tests/test_coreutils.py` (unmodified)
 **Sandbox fixtures**: `packages/orchestrator/src/platform/__tests__/fixtures/`
 
@@ -42,31 +42,31 @@ specified `register_*_tests()` function is called.
 
 | Section | PASS | FAIL | SKIP | Time |
 |---|---|---|---|---|
-| `register_echo_tests` | 17 | 0 | 0 | 0.7s |
+| `register_echo_tests` | 17 | 0 | 0 | 0.6s |
 | `register_basename_tests` | 8 | 4 | 0 | 0.5s |
-| `register_seq_tests` | 8 | 2 | 0 | 0.9s |
-| `register_wc_tests` | 10 | 0 | 0 | 0.7s |
-| `register_cut_tests` | 8 | 2 | 0 | 0.7s |
+| `register_seq_tests` | 8 | 2 | 0 | 0.5s |
+| `register_wc_tests` | 10 | 0 | 0 | 0.5s |
+| `register_cut_tests` | 8 | 2 | 0 | 0.5s |
 | `register_head_tests` | 5 | 3 | 0 | 0.5s |
-| `register_tail_tests` | 7 | 1 | 0 | 0.4s |
-| `register_sort_tests` | 9 | 1 | 0 | 0.4s |
+| `register_tail_tests` | 7 | 1 | 0 | 0.5s |
+| `register_sort_tests` | 9 | 1 | 0 | 0.5s |
 | `register_uniq_tests` | 9 | 0 | 0 | 0.5s |
 | `register_base64_tests` | 7 | 1 | 0 | 0.5s |
-| `register_fold_tests` | 5 | 0 | 0 | 0.4s |
-| `register_paste_tests` | 6 | 0 | 0 | 0.4s |
+| `register_fold_tests` | 5 | 0 | 0 | 0.6s |
+| `register_paste_tests` | 6 | 0 | 0 | 0.7s |
 | `register_tr_tests` | 10 | 0 | 0 | 0.5s |
 | `register_dirname_tests` | 7 | 0 | 0 | 0.5s |
-| `register_basename_edge_tests` | 5 | 0 | 0 | 0.4s |
+| `register_basename_edge_tests` | 5 | 0 | 0 | 0.5s |
 | `register_seq_extra_tests` | 0 | 0 | 0 | 90.1s (TIMEOUT) |
 | `register_sort_extra_tests` | 3 | 1 | 0 | 0.5s |
-| `register_head_tail_extra_tests` | 1 | 2 | 0 | 0.4s |
-| `register_wc_extra_tests` | 3 | 0 | 0 | 0.4s |
-| `register_cut_extra_tests` | 3 | 0 | 0 | 0.4s |
-| `register_tr_extra_tests` | 3 | 0 | 0 | 0.4s |
-| `register_base64_extra_tests` | 3 | 1 | 0 | 0.4s |
+| `register_head_tail_extra_tests` | 1 | 2 | 0 | 0.5s |
+| `register_wc_extra_tests` | 3 | 0 | 0 | 0.5s |
+| `register_cut_extra_tests` | 3 | 0 | 0 | 0.5s |
+| `register_tr_extra_tests` | 3 | 0 | 0 | 0.5s |
+| `register_base64_extra_tests` | 3 | 1 | 0 | 0.5s |
 | `register_uniq_extra_tests` | 2 | 1 | 0 | 0.5s |
-| `register_fold_extra_tests` | 3 | 0 | 0 | 0.4s |
-| `register_paste_extra_tests` | 2 | 1 | 0 | 0.4s |
+| `register_fold_extra_tests` | 3 | 0 | 0 | 0.5s |
+| `register_paste_extra_tests` | 2 | 1 | 0 | 0.5s |
 
 ## Classification Key
 
