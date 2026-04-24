@@ -65,31 +65,6 @@ export class ProcessManager {
     }
   }
 
-  /** Register one multicall binary and expose selected applets as aliases. */
-  registerMulticallTool(name: string, wasmPath: string, applets: string[]): void {
-    this.registerTool(name, wasmPath);
-
-    for (const applet of applets) {
-      this.registry.set(applet, wasmPath);
-    }
-
-    try {
-      this.vfs.withWriteAccess(() => {
-        for (const applet of applets) {
-          const appletPath = `/usr/bin/${applet}`;
-          try {
-            this.vfs.unlink(appletPath);
-          } catch {
-            // Missing alias target is fine.
-          }
-          this.vfs.symlink(`/usr/bin/${name}`, appletPath);
-        }
-      });
-    } catch {
-      // VFS may not have /usr/bin yet (e.g. VfsProxy in worker) — non-fatal
-    }
-  }
-
   /** Register and preload a tool from VFS — for runtime-installed packages. */
   async registerAndLoadTool(name: string, wasmPath: string): Promise<void> {
     this.registerTool(name, wasmPath);

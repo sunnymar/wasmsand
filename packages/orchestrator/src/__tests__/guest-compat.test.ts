@@ -182,7 +182,11 @@ describe('Guest compatibility canaries', () => {
 
   const busyboxIt = HAS_BUSYBOX_FIXTURE ? it : it.skip;
 
-  busyboxIt('registers busybox applets as symlinked commands', async () => {
+  busyboxIt('user can install busybox applet symlinks via `busybox --install -s`', async () => {
+    // The sandbox does NOT auto-remap coreutils to busybox multicall: by
+    // default `/usr/bin/grep` is the standalone GNU-style coreutils
+    // fixture. Consumers that want BusyBox semantics install the
+    // symlinks themselves from shell, using BusyBox's own `--install`.
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
       adapter: new NodeAdapter(),
@@ -190,14 +194,27 @@ describe('Guest compatibility canaries', () => {
 
     sandbox.writeFile('/tmp/data.txt', new TextEncoder().encode('foo\nbar\n'));
 
-    const linkResult = await sandbox.run('readlink /usr/bin/grep');
-    const aliasResult = await sandbox.run('grep foo /tmp/data.txt');
-    const busyboxResult = await sandbox.run('busybox seq 3');
+    // User opts in: install BusyBox applet symlinks into a directory on PATH.
+    // Our BusyBox build has CONFIG_FEATURE_INSTALLER=n, so we drive it from
+    // shell using `busybox --list` + `ln -s`, which is what any BusyBox
+    // distribution bootstrap script does.
+    const install = await sandbox.run(
+      'mkdir -p /tmp/bb-bin && ' +
+      'for a in $(busybox --list); do ln -sf /usr/bin/busybox /tmp/bb-bin/$a; done',
+    );
+    expect(install.exitCode).toBe(0);
 
-    expect(linkResult.exitCode).toBe(0);
+    // After install, `/tmp/bb-bin/grep` is a symlink to `/usr/bin/busybox`
+    // so shell lookups in that directory dispatch to the multicall binary.
+    const linkResult = await sandbox.run('readlink /tmp/bb-bin/grep');
     expect(linkResult.stdout.trim()).toBe('/usr/bin/busybox');
-    expect(aliasResult.exitCode).toBe(0);
-    expect(aliasResult.stdout.trim()).toBe('foo');
+
+    const bbGrep = await sandbox.run('PATH=/tmp/bb-bin:$PATH grep foo /tmp/data.txt');
+    expect(bbGrep.exitCode).toBe(0);
+    expect(bbGrep.stdout.trim()).toBe('foo');
+
+    // `busybox <applet>` form works regardless of PATH setup.
+    const busyboxResult = await sandbox.run('busybox seq 3');
     expect(busyboxResult.exitCode).toBe(0);
     expect(busyboxResult.stdout).toBe('1\n2\n3\n');
   });

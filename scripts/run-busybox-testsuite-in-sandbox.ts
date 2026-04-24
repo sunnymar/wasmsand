@@ -39,11 +39,11 @@ const FINDINGS_FILE = resolve(FINDINGS_DIR, '2026-04-22-busybox-testsuite-on-cod
 // Per-test timeout in ms — guards against bc/interactive test hangs
 const PER_TEST_TIMEOUT_MS = 30_000;
 
-// Tolerance: first run, capture all.
-const TOLERANCE = 999;
+// Any upstream test failure makes CI fail. The runner's job is to report
+// numbers; it is not the runner's job to decide what's "acceptable."
+// Known-open failures get tracked in the findings doc + ledger, not hidden
+// behind a tolerance knob that lets CI go green on red suites.
 
-// Applets enabled in the minimal .config
-const ENABLED_APPLETS = ['grep', 'head', 'seq', 'busybox'];
 
 // ---------------------------------------------------------------------------
 // Step 1: ensure busybox.wasm is built
@@ -113,8 +113,14 @@ async function setupSandbox(): Promise<Sandbox> {
   if (existsSync(BUSYBOX_CONFIG)) {
     sb.writeFile('/tmp/testsuite/.config', new Uint8Array(readFileSync(BUSYBOX_CONFIG)));
   }
+  // Install BusyBox applet symlinks in a PATH-prefixed directory so that
+  // `grep`/`head`/etc. from test scripts dispatch to busybox (multicall)
+  // rather than to the standalone coreutils fixtures. Enumerated from the
+  // live binary via `busybox --list` — whatever the current .config enables.
   await sb.run('mkdir -p /tmp/testsuite/runtest-tempdir-links');
-  for (const a of ENABLED_APPLETS) {
+  const listed = await sb.run('busybox --list');
+  const applets = listed.stdout.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  for (const a of applets) {
     await sb.run(`ln -sf /usr/bin/busybox /tmp/testsuite/runtest-tempdir-links/${a} 2>/dev/null || true`);
   }
   return sb;
@@ -400,9 +406,9 @@ ${e.excerpt}
 \`\`\`
 `).join('\n---\n');
 
-const toleranceNote = failed <= TOLERANCE
-  ? `**Exit policy**: ${failed} failure(s) ≤ tolerance (${TOLERANCE}). Exiting 0. First-run baseline.`
-  : `**Exit policy**: ${failed} failure(s) > tolerance (${TOLERANCE}). Exiting 1.`;
+const exitNote = failed === 0 && timedOutCount === 0
+  ? `**Exit policy**: all upstream tests green. Exiting 0.`
+  : `**Exit policy**: ${failed} upstream test failure(s) + ${timedOutCount} crash(es)/timeout(s). Exiting 1. Known-open items tracked in the acceptance ledger, not in runner-level tolerances.`;
 
 const sampleOutput = allResults
   .flatMap(r => r.stdout.split('\n').filter(l => l.match(/^(PASS|FAIL|SKIP|UNTESTED):/)))
@@ -460,7 +466,7 @@ Each \`.tests\` file is run in a fresh sandbox with a ${PER_TEST_TIMEOUT_MS / 10
 | \`test-env\` | ${tally['test-env']} |
 | \`unknown\` | ${tally['unknown']} |
 
-${toleranceNote}
+${exitNote}
 
 ## Classification Key
 
@@ -468,13 +474,6 @@ ${toleranceNote}
 - **\`runtime-gap\`**: Codepod should support this, currently doesn't. Tracked follow-up needed.
 - **\`test-env\`**: Test expects specific env (TTY, root, /proc, network) not provided by sandbox. Usually harness-setup fix.
 - **\`unknown\`**: Insufficient info; needs investigation.
-
-## Tolerance Justification
-
-First run: tolerance set to 999 (capture all). Reviewer should set a real threshold after:
-1. Deciding whether bc/interactive-stdin hang should block CI.
-2. Verifying grep path output (CWD-relative vs absolute) is a test-env issue vs runtime-gap.
-3. Setting tolerance to expected number of runtime-gaps once investigated.
 
 ## Per-Failure Details
 
@@ -494,11 +493,11 @@ console.log(`[busybox-testsuite] findings written to ${FINDINGS_FILE}`);
 // Exit code
 // ---------------------------------------------------------------------------
 
-if (failed > TOLERANCE) {
-  console.error(`\n[busybox-testsuite] FAIL: ${failed} failures exceed tolerance ${TOLERANCE}`);
+if (failed > 0) {
+  console.error(`\n[busybox-testsuite] FAIL: ${failed} upstream test failure(s).`);
   console.error(`  needs-fork: ${tally['needs-fork']}, runtime-gap: ${tally['runtime-gap']}, test-env: ${tally['test-env']}, unknown: ${tally['unknown']}`);
   Deno.exit(1);
 } else {
-  console.log(`\n[busybox-testsuite] OK: ${passed} pass, ${failed} fail (within tolerance ${TOLERANCE}), ${skipped} skip, ${untested} untested`);
+  console.log(`\n[busybox-testsuite] OK: ${passed} pass, ${skipped} skip, ${untested} untested`);
   Deno.exit(0);
 }

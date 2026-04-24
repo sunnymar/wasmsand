@@ -2,7 +2,7 @@
 
 **Runner**: `scripts/run-coreutils-pysuite-in-sandbox.ts`
 **Strategy**: Fresh Deno subprocess per section (25 sections × 1 sandbox each)
-**Total elapsed**: 102.6s
+**Total elapsed**: 21.0s
 **Test script**: `packages/coreutils/tests/test_coreutils.py` (unmodified)
 **Sandbox fixtures**: `packages/orchestrator/src/platform/__tests__/fixtures/`
 
@@ -22,51 +22,51 @@ specified `register_*_tests()` function is called.
 
 | Category | Count |
 |---|---|
-| PASS | 144 |
-| FAIL | 20 |
+| PASS | 150 |
+| FAIL | 18 |
 | SKIP | 0 |
-| **Total** | **164** |
+| **Total** | **168** |
 
 ### Failure breakdown
 
 | Classification | Count |
 |---|---|
 | `needs-fork` | 0 |
-| `runtime-gap` | 20 |
+| `runtime-gap` | 18 |
 | `test-env` | 0 |
 | `unknown` | 0 |
 
-**Exit policy**: 1 section(s) timed out (register_seq_extra_tests). Results are partial. Exiting 0 (partial results treated as baseline). BLOCKED: needs investigation.
+**Exit policy**: 18 failure(s). Exiting 1. Known-open failures tracked in the ledger; runner does not silently accept them.
 
 ## Per-Section Results
 
 | Section | PASS | FAIL | SKIP | Time |
 |---|---|---|---|---|
-| `register_echo_tests` | 17 | 0 | 0 | 0.6s |
-| `register_basename_tests` | 8 | 4 | 0 | 0.5s |
-| `register_seq_tests` | 8 | 2 | 0 | 0.5s |
-| `register_wc_tests` | 10 | 0 | 0 | 0.5s |
-| `register_cut_tests` | 8 | 2 | 0 | 0.5s |
-| `register_head_tests` | 5 | 3 | 0 | 0.5s |
-| `register_tail_tests` | 7 | 1 | 0 | 0.5s |
-| `register_sort_tests` | 9 | 1 | 0 | 0.5s |
-| `register_uniq_tests` | 9 | 0 | 0 | 0.5s |
-| `register_base64_tests` | 7 | 1 | 0 | 0.5s |
-| `register_fold_tests` | 5 | 0 | 0 | 0.6s |
-| `register_paste_tests` | 6 | 0 | 0 | 0.7s |
-| `register_tr_tests` | 10 | 0 | 0 | 0.5s |
-| `register_dirname_tests` | 7 | 0 | 0 | 0.5s |
-| `register_basename_edge_tests` | 5 | 0 | 0 | 0.5s |
-| `register_seq_extra_tests` | 0 | 0 | 0 | 90.1s (TIMEOUT) |
-| `register_sort_extra_tests` | 3 | 1 | 0 | 0.5s |
-| `register_head_tail_extra_tests` | 1 | 2 | 0 | 0.5s |
-| `register_wc_extra_tests` | 3 | 0 | 0 | 0.5s |
-| `register_cut_extra_tests` | 3 | 0 | 0 | 0.5s |
+| `register_echo_tests` | 17 | 0 | 0 | 1.1s |
+| `register_basename_tests` | 8 | 4 | 0 | 0.8s |
+| `register_seq_tests` | 8 | 2 | 0 | 0.9s |
+| `register_wc_tests` | 10 | 0 | 0 | 0.8s |
+| `register_cut_tests` | 8 | 2 | 0 | 0.8s |
+| `register_head_tests` | 7 | 1 | 0 | 0.8s |
+| `register_tail_tests` | 7 | 1 | 0 | 0.8s |
+| `register_sort_tests` | 9 | 1 | 0 | 0.9s |
+| `register_uniq_tests` | 9 | 0 | 0 | 0.9s |
+| `register_base64_tests` | 7 | 1 | 0 | 0.8s |
+| `register_fold_tests` | 5 | 0 | 0 | 0.8s |
+| `register_paste_tests` | 6 | 0 | 0 | 0.8s |
+| `register_tr_tests` | 10 | 0 | 0 | 0.8s |
+| `register_dirname_tests` | 7 | 0 | 0 | 1.0s |
+| `register_basename_edge_tests` | 5 | 0 | 0 | 1.3s |
+| `register_seq_extra_tests` | 4 | 0 | 0 | 1.1s |
+| `register_sort_extra_tests` | 3 | 1 | 0 | 0.8s |
+| `register_head_tail_extra_tests` | 1 | 2 | 0 | 0.8s |
+| `register_wc_extra_tests` | 3 | 0 | 0 | 0.9s |
+| `register_cut_extra_tests` | 3 | 0 | 0 | 0.9s |
 | `register_tr_extra_tests` | 3 | 0 | 0 | 0.5s |
 | `register_base64_extra_tests` | 3 | 1 | 0 | 0.5s |
-| `register_uniq_extra_tests` | 2 | 1 | 0 | 0.5s |
-| `register_fold_extra_tests` | 3 | 0 | 0 | 0.5s |
-| `register_paste_extra_tests` | 2 | 1 | 0 | 0.5s |
+| `register_uniq_extra_tests` | 2 | 1 | 0 | 0.8s |
+| `register_fold_extra_tests` | 3 | 0 | 0 | 0.6s |
+| `register_paste_extra_tests` | 2 | 1 | 0 | 0.9s |
 
 ## Classification Key
 
@@ -75,9 +75,11 @@ specified `register_*_tests()` function is called.
 - **`test-env`**: Test expects specific env (TTY, root, /proc, network) not in sandbox. Usually harness-setup fix.
 - **`unknown`**: Needs investigation.
 
-## Tolerance Justification
+## Exit Policy
 
-First run: tolerance set to 999 (capture all). Reviewer should set a real threshold after reviewing.
+Any failure or timeout fails the run. Known-open failures are tracked in
+`docs/superpowers/acceptance/2026-04-22-guest-compat-runtime-acceptance.md`
+under "Known-open items," not hidden behind a tolerance threshold.
 
 ## Per-Failure Details
 
@@ -154,30 +156,12 @@ First run: tolerance set to 999 (capture all). Reviewer should set a real thresh
 
 ---
 
-### FAIL: head_c5
+### FAIL: head_no_trailing_newline
 
 - **Tool**: `head`
 - **Classification**: `runtime-gap`
 - **Reason**: Output mismatch — possible coreutils WASM behavior gap vs expected output
-- **Message**: got ''
-
----
-
-### FAIL: head_n_negative
-
-- **Tool**: `head`
-- **Classification**: `runtime-gap`
-- **Reason**: Output mismatch — possible coreutils WASM behavior gap vs expected output
-- **Message**: got ''
-
----
-
-### FAIL: head_byte_syntax
-
-- **Tool**: `head`
-- **Classification**: `runtime-gap`
-- **Reason**: Output mismatch — possible coreutils WASM behavior gap vs expected output
-- **Message**: got ''
+- **Message**: got 'a\n'
 
 ---
 
@@ -263,4 +247,4 @@ First run: tolerance set to 999 (capture all). Reviewer should set a real thresh
 
 ## Timed-Out Sections
 
-- `register_seq_extra_tests`
+_None._

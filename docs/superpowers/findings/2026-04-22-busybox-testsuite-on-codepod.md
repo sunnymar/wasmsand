@@ -1,7 +1,7 @@
 # BusyBox Upstream Testsuite on Codepod — 2026-04-24
 
 **Runner**: `scripts/run-busybox-testsuite-in-sandbox.ts`
-**Elapsed**: 4.5s
+**Elapsed**: 13.5s
 **BusyBox binary**: `packages/c-ports/busybox/build/busybox.wasm`
 **Sandbox fixtures**: `packages/orchestrator/src/platform/__tests__/fixtures/`
 
@@ -49,7 +49,7 @@ Each `.tests` file is run in a fresh sandbox with a 30s timeout to protect again
 | `test-env` | 0 |
 | `unknown` | 6 |
 
-**Exit policy**: 8 failure(s) ≤ tolerance (999). Exiting 0. First-run baseline.
+**Exit policy**: 8 upstream test failure(s) + 0 crash(es)/timeout(s). Exiting 1. Known-open items tracked in the acceptance ledger, not in runner-level tolerances.
 
 ## Classification Key
 
@@ -57,13 +57,6 @@ Each `.tests` file is run in a fresh sandbox with a 30s timeout to protect again
 - **`runtime-gap`**: Codepod should support this, currently doesn't. Tracked follow-up needed.
 - **`test-env`**: Test expects specific env (TTY, root, /proc, network) not provided by sandbox. Usually harness-setup fix.
 - **`unknown`**: Insufficient info; needs investigation.
-
-## Tolerance Justification
-
-First run: tolerance set to 999 (capture all). Reviewer should set a real threshold after:
-1. Deciding whether bc/interactive-stdin hang should block CI.
-2. Verifying grep path output (CWD-relative vs absolute) is a test-env issue vs runtime-gap.
-3. Setting tolerance to expected number of runtime-gaps once investigated.
 
 ## Per-Failure Details
 

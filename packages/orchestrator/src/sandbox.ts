@@ -489,10 +489,6 @@ export class Sandbox {
     for (const [name, path] of tools) {
       mgr.registerTool(name, path);
     }
-    const busyboxPath = tools.get('busybox');
-    if (busyboxPath) {
-      mgr.registerMulticallTool('busybox', busyboxPath, ['grep', 'head', 'seq']);
-    }
     if (!tools.has('python3')) {
       mgr.registerTool('python3', `${wasmDir}/python3.wasm`);
     }

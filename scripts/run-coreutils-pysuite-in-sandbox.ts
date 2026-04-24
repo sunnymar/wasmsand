@@ -33,8 +33,11 @@ const SECTION_RUNNER = resolve(import.meta.dirname, 'run-coreutils-section.ts');
 const FINDINGS_DIR = resolve(REPO_ROOT, 'docs/superpowers/findings');
 const FINDINGS_FILE = resolve(FINDINGS_DIR, '2026-04-22-coreutils-pysuite-on-codepod.md');
 
-// Tolerance: first run, capture all.
-const TOLERANCE = 999;
+// Any upstream test failure makes CI fail. The runner's job is to report
+// numbers; it is not the runner's job to decide what's "acceptable."
+// Known-open failures get tracked in the findings doc + ledger, not hidden
+// behind a tolerance knob that lets CI go green on red suites.
+const TOLERANCE = 0;
 
 // All sections in order (matches main() in test_coreutils.py)
 const SECTIONS: string[] = [
@@ -314,10 +317,10 @@ const failSections = failEntries.map(e => `
 `).join('\n---\n');
 
 const toleranceNote = timedOutSections.length > 0
-  ? `**Exit policy**: ${timedOutSections.length} section(s) timed out (${timedOutSections.join(', ')}). Results are partial. Exiting 0 (partial results treated as baseline). BLOCKED: needs investigation.`
-  : failed <= TOLERANCE
-  ? `**Exit policy**: ${failed} failure(s) ≤ tolerance (${TOLERANCE}). Exiting 0. First-run baseline.`
-  : `**Exit policy**: ${failed} failure(s) > tolerance (${TOLERANCE}). Exiting 1.`;
+  ? `**Exit policy**: ${timedOutSections.length} section(s) timed out (${timedOutSections.join(', ')}). Timeouts fail the run; investigate.`
+  : failed === 0
+  ? `**Exit policy**: all sections green. Exiting 0.`
+  : `**Exit policy**: ${failed} failure(s). Exiting 1. Known-open failures tracked in the ledger; runner does not silently accept them.`;
 
 const doc = `# Coreutils test_coreutils.py on Codepod — ${new Date().toISOString().split('T')[0]}
 
@@ -372,11 +375,11 @@ ${sectionSummaryRows}
 - **\`test-env\`**: Test expects specific env (TTY, root, /proc, network) not in sandbox. Usually harness-setup fix.
 - **\`unknown\`**: Needs investigation.
 
-## Tolerance Justification
+## Exit Policy
 
-${TOLERANCE === 999
-  ? 'First run: tolerance set to 999 (capture all). Reviewer should set a real threshold after reviewing.'
-  : `Tolerance is ${TOLERANCE}.`}
+Any failure or timeout fails the run. Known-open failures are tracked in
+\`docs/superpowers/acceptance/2026-04-22-guest-compat-runtime-acceptance.md\`
+under "Known-open items," not hidden behind a tolerance threshold.
 
 ## Per-Failure Details
 
@@ -396,10 +399,12 @@ console.log(`[coreutils-pysuite] findings written to ${FINDINGS_FILE}`);
 // Exit
 // ---------------------------------------------------------------------------
 
-if (failed > TOLERANCE) {
-  console.error(`\n[coreutils-pysuite] FAIL: ${failed} failures exceed tolerance ${TOLERANCE}`);
+if (failed > 0 || timedOutSections.length > 0) {
+  console.error(
+    `\n[coreutils-pysuite] FAIL: ${failed} failure(s), ${timedOutSections.length} timeout(s).`,
+  );
   Deno.exit(1);
 } else {
-  console.log(`\n[coreutils-pysuite] OK: ${passed} pass, ${failed} fail (within tolerance), ${skipped} skip`);
+  console.log(`\n[coreutils-pysuite] OK: ${passed} pass, ${skipped} skip`);
   Deno.exit(0);
 }
