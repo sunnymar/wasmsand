@@ -60,9 +60,13 @@ fn main() {
             pos[0].parse::<f64>().unwrap_or_else(|_| die("invalid argument")),
         ),
         2 => {
+            // Default step is 1.0 regardless of whether start > end. POSIX
+            // seq with `seq 5 3` produces no output (not 5 4 3) because the
+            // implicit step is positive and the loop condition `current <=
+            // last` is false at entry.
             let a = pos[0].parse::<f64>().unwrap_or_else(|_| die("invalid argument"));
             let b = pos[1].parse::<f64>().unwrap_or_else(|_| die("invalid argument"));
-            (a, if a <= b { 1.0 } else { -1.0 }, b)
+            (a, 1.0, b)
         }
         3 => {
             let a = pos[0].parse::<f64>().unwrap_or_else(|_| die("invalid argument"));
