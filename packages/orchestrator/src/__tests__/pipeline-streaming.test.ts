@@ -55,7 +55,7 @@ describe('Streaming Pipelines', () => {
 
   it('external-only pipeline: seq | head captures output', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
-    const result = await sandbox.run('seq 1 5 | head -3');
+    const result = await sandbox.run('seq 1 5 | head -n 3');
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('1\n2\n3');
   });
@@ -85,7 +85,7 @@ describe('Streaming Pipelines', () => {
 
   it('5-stage pipeline: seq | head | cat | grep | wc', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
-    const result = await sandbox.run('seq 1 10 | head -5 | cat | grep -E "^[0-9]" | wc -l');
+    const result = await sandbox.run('seq 1 10 | head -n 5 | cat | grep -E "^[0-9]" | wc -l');
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('5');
   });
