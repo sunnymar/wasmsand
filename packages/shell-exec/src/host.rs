@@ -88,6 +88,16 @@ pub enum WriteMode {
 pub trait HostInterface {
     /// Spawn a child process. Returns the child PID.
     ///
+    /// `program` is the tool-lookup key (resolved against the registered
+    /// tool registry and VFS /usr/bin).
+    ///
+    /// `argv0` optionally overrides `argv[0]` that the child sees.  When
+    /// `None`, the child receives `argv[0] = program` (the common POSIX
+    /// case). When `Some`, the child receives the override — required
+    /// for multicall binaries (e.g. BusyBox) where a symlink
+    /// `/tmp/bin/grep -> /usr/bin/busybox` must run the busybox tool
+    /// with `argv[0] = "grep"` so it dispatches the grep applet.
+    ///
     /// `stdin_data` is piped to the child's stdin (via a static fd target on
     /// the host side). stdout/stderr flow through the kernel fd table entries
     /// identified by `stdin_fd`, `stdout_fd`, `stderr_fd`.
@@ -97,6 +107,7 @@ pub trait HostInterface {
     fn spawn(
         &self,
         program: &str,
+        argv0: Option<&str>,
         args: &[&str],
         env: &[(&str, &str)],
         cwd: &str,
@@ -438,6 +449,7 @@ impl HostInterface for WasmHost {
     fn spawn(
         &self,
         program: &str,
+        argv0: Option<&str>,
         args: &[&str],
         env: &[(&str, &str)],
         cwd: &str,
@@ -457,6 +469,9 @@ impl HostInterface for WasmHost {
             "stderr_fd": stderr_fd,
             "nice": nice,
         });
+        if let Some(v) = argv0 {
+            req["argv0"] = serde_json::Value::String(v.to_string());
+        }
         if !stdin_data.is_empty() {
             req["stdin_data"] = serde_json::Value::String(stdin_data.to_string());
         }

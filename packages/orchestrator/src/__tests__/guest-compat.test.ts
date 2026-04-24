@@ -209,9 +209,25 @@ describe('Guest compatibility canaries', () => {
     const linkResult = await sandbox.run('readlink /tmp/bb-bin/grep');
     expect(linkResult.stdout.trim()).toBe('/usr/bin/busybox');
 
+    // Invoking `grep` via PATH must actually dispatch the BusyBox applet
+    // (not the standalone GNU-style coreutil that `/usr/bin/grep` points
+    // at by default).  BusyBox's --help banner begins with "BusyBox v...
+    // multi-call binary." — GNU grep's help text does not mention BusyBox,
+    // so this discriminates which binary actually ran.
+    const bbHelp = await sandbox.run('PATH=/tmp/bb-bin:$PATH grep --help 2>&1');
+    expect(bbHelp.stdout + bbHelp.stderr).toContain('BusyBox');
+
     const bbGrep = await sandbox.run('PATH=/tmp/bb-bin:$PATH grep foo /tmp/data.txt');
     expect(bbGrep.exitCode).toBe(0);
     expect(bbGrep.stdout.trim()).toBe('foo');
+
+    // Invoking an applet through the symlink by absolute path also dispatches
+    // BusyBox's applet — argv[0] must carry the applet name ("grep"), not
+    // the symlink target ("busybox"), or multicall dispatch selects the
+    // wrong (default) applet.
+    const bbAbsGrep = await sandbox.run('/tmp/bb-bin/grep foo /tmp/data.txt');
+    expect(bbAbsGrep.exitCode).toBe(0);
+    expect(bbAbsGrep.stdout.trim()).toBe('foo');
 
     // `busybox <applet>` form works regardless of PATH setup.
     const busyboxResult = await sandbox.run('busybox seq 3');

@@ -13,6 +13,7 @@ pub mod mock {
     #[derive(Debug, Clone)]
     pub struct SpawnCall {
         pub program: String,
+        pub argv0: Option<String>,
         pub args: Vec<String>,
         pub stdin: String,
     }
@@ -146,6 +147,7 @@ pub mod mock {
         fn spawn(
             &self,
             program: &str,
+            argv0: Option<&str>,
             args: &[&str],
             _env: &[(&str, &str)],
             _cwd: &str,
@@ -168,6 +170,7 @@ pub mod mock {
             // Record the call for later assertion.
             self.spawn_calls.borrow_mut().push(SpawnCall {
                 program: program.to_string(),
+                argv0: argv0.map(|s| s.to_string()),
                 args: args.iter().map(|s| s.to_string()).collect(),
                 stdin: effective_stdin.clone(),
             });

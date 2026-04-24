@@ -2422,7 +2422,7 @@ fn builtin_nice(state: &mut ShellState, host: &dyn HostInterface, args: &[String
     let env_pairs: Vec<(&str, &str)> =
         state.env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
-    match host.spawn(prog, &spawn_args, &env_pairs, &state.cwd, "", state.stdin_fd, state.stdout_fd, 2, nice) {
+    match host.spawn(prog, None, &spawn_args, &env_pairs, &state.cwd, "", state.stdin_fd, state.stdout_fd, 2, nice) {
         Ok(pid) => match host.waitpid(pid) {
             Ok(result) => BuiltinResult::Result(result.exit_code),
             Err(_) => BuiltinResult::Result(1),

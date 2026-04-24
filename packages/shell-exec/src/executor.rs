@@ -276,6 +276,10 @@ fn exec_path(
     //   the immediate readlink target's basename is used so multicall applets
     //   (grep → /usr/bin/grep → /usr/bin/busybox) preserve their applet name.
     // - As a last resort, fall back to the basename of `resolved`.
+    //
+    // `argv[0]` is always the basename of the path the user typed, so multicall
+    // dispatch (BusyBox) sees the applet name even though the tool registry
+    // lookup targets the multicall binary.
     const S_TOOL: u32 = 0o100000;
     if let Ok(stat) = host.stat(&resolved) {
         if stat.mode & S_TOOL != 0 {
@@ -292,6 +296,9 @@ fn exec_path(
             } else {
                 resolved.rsplit('/').next().unwrap_or(resolved.as_str()).to_string()
             };
+            // argv[0] is the basename of the path the user invoked (not of the
+            // symlink target), so multicall dispatch can see the applet name.
+            let argv0 = cmd_path.rsplit('/').next().unwrap_or(cmd_path);
             let env_pairs: Vec<(&str, &str)> = state
                 .env
                 .iter()
@@ -300,6 +307,7 @@ fn exec_path(
             let pid = host
                 .spawn(
                     &tool_name_owned,
+                    Some(argv0),
                     args,
                     &env_pairs,
                     &state.cwd,
@@ -340,6 +348,7 @@ fn exec_path(
             let pid = host
                 .spawn(
                     "python3",
+                    None,
                     &python_args,
                     &env_pairs,
                     &state.cwd,
@@ -419,7 +428,13 @@ fn exec_shell_command(
 }
 
 /// Apply path resolution and command dispatch for external commands.
-/// Returns the resolved program name and arguments for spawning.
+/// Returns `(program, argv0_override, args)` for spawning:
+///   * `program` is the tool-lookup key
+///   * `argv0_override` is `Some(name)` when the caller's intended `argv[0]`
+///     differs from `program` (e.g. a BusyBox applet symlink resolved via
+///     PATH must run with `argv[0] = "grep"` but dispatch the `busybox`
+///     multicall binary).  `None` means "use program as argv[0]".
+///   * `args` are the resolved trailing arguments.
 /// If the command was fully handled (shebang, sh/bash dispatch),
 /// returns Err(ControlFlow) instead.
 fn dispatch_external_command(
@@ -428,7 +443,7 @@ fn dispatch_external_command(
     cmd_name: &str,
     args: &[&str],
     stdin_data: &str,
-) -> Result<(String, Vec<String>), ControlFlow> {
+) -> Result<(String, Option<String>, Vec<String>), ControlFlow> {
     // 1. Shebang check — if cmd_name contains '/'
     if cmd_name.contains('/') {
         match exec_path(state, host, cmd_name, args, stdin_data) {
@@ -456,6 +471,7 @@ fn dispatch_external_command(
     if is_python_interpreter(cmd_name) && !stdin_data.is_empty() && args.is_empty() {
         return Ok((
             cmd_name.to_string(),
+            None,
             vec!["-c".to_string(), stdin_data.to_string()],
         ));
     }
@@ -470,7 +486,92 @@ fn dispatch_external_command(
     let args_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
     let resolved_args = resolve_command_args(state, host, cmd_name, &args_refs);
 
-    Ok((cmd_name.to_string(), resolved_args))
+    // 6. POSIX PATH lookup for bare commands.  Walk `$PATH` and stat each
+    //    `<dir>/<cmd_name>`; the first match that is a regular file with the
+    //    executable bit set (S_TOOL for wasm tool stubs, or 0o111 for shell
+    //    scripts / host-mounted binaries) is the resolved command.
+    //
+    //    For S_TOOL hits, resolve the tool-registry key + argv[0] inline and
+    //    return via Ok so the caller's existing redirect-aware / pipeline-
+    //    aware spawn path runs host.spawn.  argv[0] is the basename the user
+    //    typed — for a BusyBox applet symlink (`grep -> /usr/bin/busybox`)
+    //    the tool key becomes "busybox" so multicall dispatch sees "grep".
+    //
+    //    For non-S_TOOL executables (shell scripts with the x-bit), fall
+    //    back to exec_path which reads the file and handles shebang / shell
+    //    dispatch.
+    //
+    //    Falling through (no match on PATH) preserves pre-PATH behaviour:
+    //    the command name is dispatched verbatim to host.spawn, where the
+    //    tool registry produces the familiar "command not found" for unknown
+    //    names.
+    if let Some(path_env) = state.env.get("PATH").cloned() {
+        const S_TOOL: u32 = 0o100000;
+        const X_BITS: u32 = 0o111;
+        for dir in path_env.split(':') {
+            if dir.is_empty() {
+                continue;
+            }
+            let candidate = if dir.ends_with('/') {
+                format!("{dir}{cmd_name}")
+            } else {
+                format!("{dir}/{cmd_name}")
+            };
+            let st = match host.stat(&candidate) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if !st.exists || !st.is_file {
+                continue;
+            }
+            let is_tool = st.mode & S_TOOL != 0;
+            let is_exec = st.mode & X_BITS != 0;
+            if !is_tool && !is_exec {
+                continue;
+            }
+
+            if is_tool {
+                // Resolve the tool-registry key.  Stubs directly in /usr/bin
+                // or /bin are registered under their basename.  Symlinks
+                // elsewhere follow one level so multicall applets (e.g.
+                // /tmp/bb-bin/grep -> /usr/bin/busybox) keep the applet
+                // name as argv[0] while dispatching the multicall binary.
+                let tool_name: String = if candidate.starts_with("/usr/bin/")
+                    || candidate.starts_with("/bin/")
+                {
+                    cmd_name.to_string()
+                } else if let Ok(target) = host.readlink(&candidate) {
+                    target
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(target.as_str())
+                        .to_string()
+                } else {
+                    cmd_name.to_string()
+                };
+                let argv0 = if tool_name == cmd_name {
+                    None
+                } else {
+                    Some(cmd_name.to_string())
+                };
+                return Ok((tool_name, argv0, resolved_args));
+            }
+
+            // Non-S_TOOL executable: a host-mounted binary or a shell
+            // script.  Delegate to exec_path so shebang / shell-script
+            // semantics apply.
+            let resolved_refs: Vec<&str> = resolved_args.iter().map(|s| s.as_str()).collect();
+            return match exec_path(state, host, &candidate, &resolved_refs, stdin_data) {
+                Ok(flow) => Err(flow),
+                Err(e) => {
+                    crate::shell_eprintln!("{}", e);
+                    Err(ControlFlow::Normal(RunResult::exit(127)))
+                }
+            };
+        }
+    }
+
+    Ok((cmd_name.to_string(), None, resolved_args))
 }
 
 /// Apply output redirects (stdout/stderr overwrite, append, merge, etc.)
@@ -1048,9 +1149,9 @@ pub fn exec_command(
             // ── Path resolution and command dispatch ─────────────────────
             // Host commands (extensions) are now routed through host_spawn
             // by the host ProcessManager — no separate extension_invoke needed.
-            let (spawn_program, spawn_args) =
+            let (spawn_program, spawn_argv0, spawn_args) =
                 match dispatch_external_command(state, host, cmd_name, &args, &stdin_data) {
-                    Ok((prog, resolved)) => (prog, resolved),
+                    Ok((prog, argv0, resolved)) => (prog, argv0, resolved),
                     Err(flow) => {
                         // Command was handled by dispatch (shebang, sh/bash)
                         let run = match flow {
@@ -1147,6 +1248,7 @@ pub fn exec_command(
             let pid = host
                 .spawn(
                     &spawn_program,
+                    spawn_argv0.as_deref(),
                     &spawn_args_refs,
                     &env_pairs,
                     &state.cwd,
@@ -1442,7 +1544,7 @@ pub fn exec_command(
                                     stdin_data = String::new();
                                     continue;
                                 }
-                                Ok((prog, resolved_args)) => {
+                                Ok((prog, argv0, resolved_args)) => {
                                     let env_pairs: Vec<(&str, &str)> = state
                                         .env
                                         .iter()
@@ -1455,6 +1557,7 @@ pub fn exec_command(
                                     match host
                                         .spawn(
                                             &prog,
+                                            argv0.as_deref(),
                                             &spawn_args_refs,
                                             &env_pairs,
                                             &state.cwd,
@@ -1757,7 +1860,7 @@ pub fn exec_command(
                                             }
                                             last_stage_was_spawned = false;
                                         }
-                                        Ok((prog, resolved_args)) => {
+                                        Ok((prog, argv0, resolved_args)) => {
                                             let env_pairs: Vec<(&str, &str)> = state
                                                 .env
                                                 .iter()
@@ -1768,6 +1871,7 @@ pub fn exec_command(
 
                                             match host.spawn(
                                                 &prog,
+                                                argv0.as_deref(),
                                                 &spawn_args_refs,
                                                 &env_pairs,
                                                 &state.cwd,
@@ -6416,8 +6520,9 @@ mod tests {
         let mut state = ShellState::new_default();
         let result = dispatch_external_command(&mut state, &host, "cat", &["file.txt"], "");
         // Should return Ok(...) with resolved args
-        let (prog, args) = result.unwrap();
+        let (prog, argv0, args) = result.unwrap();
         assert_eq!(prog, "cat");
+        assert_eq!(argv0, None);
         assert_eq!(args[0], "/home/user/file.txt");
     }
 

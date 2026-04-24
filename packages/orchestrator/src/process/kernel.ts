@@ -12,6 +12,13 @@ export interface SpawnRequest {
   stdout_fd: number;
   stderr_fd: number;
   stdin_data?: string;
+  /**
+   * Optional argv[0] override. When present, the child sees this as argv[0]
+   * instead of `prog`. Required for multicall binaries (e.g. BusyBox) where
+   * a symlink `grep -> busybox` must run the busybox wasm with `argv[0] =
+   * "grep"` so the applet dispatcher selects grep.
+   */
+  argv0?: string;
 }
 
 export interface ProcessEntry {
