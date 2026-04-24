@@ -57,6 +57,8 @@ static inline int seteuid(uid_t uid) { (void)uid; return 0; }
 static inline int setgid(gid_t gid) { (void)gid; return 0; }
 static inline int setegid(gid_t gid) { (void)gid; return 0; }
 
+/* waitpid/wait: stubbed in sys/wait.h compat header. */
+
 #endif /* !__wasilibc_unmodified_upstream */
 
 #endif /* CODEPOD_BUSYBOX_COMPAT_UNISTD_H */
