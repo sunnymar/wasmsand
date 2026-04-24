@@ -149,6 +149,37 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('signal-ok');
   });
 
+  it('spawns a tool via absolute path to its /usr/bin stub', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    // Invoking /usr/bin/seq directly (absolute path, not bare name) must work.
+    // Before the Gap-1 fix, exec_path would try to execute the S_TOOL stub
+    // content as a shell script and return exit code 127.
+    const result = await sandbox.run('/usr/bin/seq 1 3');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('1\n2\n3');
+  });
+
+  it('spawns a tool via a VFS symlink to a tool stub', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    // Create a VFS symlink /tmp/myseq → /usr/bin/seq (a tool stub).
+    // Running /tmp/myseq must dispatch the seq WASM, not try to execute
+    // the stub content as a shell script.
+    await sandbox.run('ln -sf /usr/bin/seq /tmp/myseq');
+    const result = await sandbox.run('/tmp/myseq 1 3');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('1\n2\n3');
+  });
+
   const busyboxIt = HAS_BUSYBOX_FIXTURE ? it : it.skip;
 
   busyboxIt('registers busybox applets as symlinked commands', async () => {

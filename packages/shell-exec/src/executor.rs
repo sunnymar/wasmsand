@@ -264,6 +264,60 @@ fn exec_path(
 ) -> Result<ControlFlow, ShellError> {
     let resolved = normalize_path(&state.resolve_path(cmd_path));
 
+    // S_TOOL flag (0o100000 = 0x8000): marks VFS tool stubs whose content is a
+    // WASM path, not executable text.  When the resolved file has this flag set
+    // (possibly via a symlink chain), dispatch to host.spawn() using the
+    // registered tool name instead of treating the content as a script.
+    //
+    // Tool name resolution follows VFS symlinks one level at a time:
+    // - If `resolved` itself is directly in /usr/bin or /bin, its basename IS
+    //   the registered tool name (e.g. /usr/bin/seq → "seq").
+    // - If `resolved` is a symlink elsewhere (e.g. /tmp/mygrep → /usr/bin/grep),
+    //   the immediate readlink target's basename is used so multicall applets
+    //   (grep → /usr/bin/grep → /usr/bin/busybox) preserve their applet name.
+    // - As a last resort, fall back to the basename of `resolved`.
+    const S_TOOL: u32 = 0o100000;
+    if let Ok(stat) = host.stat(&resolved) {
+        if stat.mode & S_TOOL != 0 {
+            // Derive the registered tool name from the path.  Tool stubs live in
+            // /usr/bin or /bin, so those basenames are always registered.  When
+            // `resolved` is somewhere else (e.g. /tmp/mygrep), follow one level
+            // of VFS symlink so multicall applets keep their applet name:
+            //   /tmp/mygrep  → readlink → /usr/bin/grep  → basename "grep" ✓
+            //   /usr/bin/seq → already in tool dir        → basename "seq"  ✓
+            let tool_name_owned: String = if resolved.starts_with("/usr/bin/") || resolved.starts_with("/bin/") {
+                resolved.rsplit('/').next().unwrap_or(resolved.as_str()).to_string()
+            } else if let Ok(target) = host.readlink(&resolved) {
+                target.rsplit('/').next().unwrap_or(resolved.as_str()).to_string()
+            } else {
+                resolved.rsplit('/').next().unwrap_or(resolved.as_str()).to_string()
+            };
+            let env_pairs: Vec<(&str, &str)> = state
+                .env
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let pid = host
+                .spawn(
+                    &tool_name_owned,
+                    args,
+                    &env_pairs,
+                    &state.cwd,
+                    stdin_data,
+                    state.stdin_fd,
+                    state.stdout_fd,
+                    2,
+                    0,
+                )
+                .map_err(|e| ShellError::HostError(e.to_string()))?;
+            let spawn_result = host
+                .waitpid(pid)
+                .map_err(|e| ShellError::HostError(e.to_string()))?;
+            state.last_exit_code = spawn_result.exit_code;
+            return Ok(ControlFlow::Normal(RunResult::exit(spawn_result.exit_code)));
+        }
+    }
+
     // Read the file
     let text = host
         .read_file_str(&resolved)
