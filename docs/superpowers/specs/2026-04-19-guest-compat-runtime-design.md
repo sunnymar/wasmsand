@@ -2,8 +2,13 @@
 
 ## Status
 
-Proposed design for a shared guest compatibility runtime. C and Rust are
-first-class frontends over the same runtime; neither is primary.
+Complete as of commit `2cb3d9c`. Implementation landed across Steps 1–5
+per §Migration Path. Acceptance proof points — including real-consumer
+testsuite runs with their honest pass/fail/skip numbers and tracked
+follow-ups — at
+[`docs/superpowers/acceptance/2026-04-22-guest-compat-runtime-acceptance.md`](../acceptance/2026-04-22-guest-compat-runtime-acceptance.md).
+
+C and Rust are first-class frontends over the same runtime; neither is primary.
 
 This document extends the existing C ABI compatibility work into a
 language-neutral platform feature. The goal is not "better C support" in
