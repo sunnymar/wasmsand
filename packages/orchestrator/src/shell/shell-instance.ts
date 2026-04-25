@@ -21,7 +21,7 @@ import type { ShellLike, StreamCallbacks } from './shell-like.js';
 import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import { createShellImports } from '../host-imports/shell-imports.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
-import { ProcessKernel, type SpawnRequest } from '../process/kernel.js';
+import { ProcessKernel, NO_PARENT_PID, type SpawnRequest } from '../process/kernel.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import { createBufferTarget, createNullTarget, createStaticTarget, bufferToString, type FdTarget } from '../wasi/fd-target.js';
 
@@ -136,10 +136,16 @@ export class ShellInstance implements ShellLike {
 
     // ── Process kernel for pipe/spawn/waitpid/close_fd ──
     const kernel = new ProcessKernel();
-    // Set the shell's fd targets in the kernel (pid 0)
-    kernel.setFdTarget(0, 0, createNullTarget());    // stdin: no terminal input
-    kernel.setFdTarget(0, 1, createBufferTarget());   // stdout: captured (no limit on kernel fd)
-    kernel.setFdTarget(0, 2, createBufferTarget());   // stderr: captured (no limit on kernel fd)
+    // The shell isn't special — it just happens to be the first process
+    // to call allocPid on this kernel, so it gets PID 1 (Unix init by
+    // convention).  When a Python script or another tool spawns a fresh
+    // shell as a child later, that nested shell calls allocPid on its
+    // own kernel (because each ShellInstance owns one) and is similarly
+    // PID 1 inside its own container.
+    const shellPid = kernel.allocPid(NO_PARENT_PID, 'shell');
+    kernel.setFdTarget(shellPid, 0, createNullTarget());    // stdin: no terminal input
+    kernel.setFdTarget(shellPid, 1, createBufferTarget());   // stdout: captured (no limit on kernel fd)
+    kernel.setFdTarget(shellPid, 2, createBufferTarget());   // stderr: captured (no limit on kernel fd)
 
     // Build runCommand callback for Python _codepod.spawn() / subprocess support.
     // Each call creates a fresh ShellInstance so we don't re-enter the busy one.
@@ -159,16 +165,16 @@ export class ShellInstance implements ShellLike {
     // Kernel imports provide codepod-namespace syscalls (network, process mgmt)
     const kernelImports = createKernelImports({
       memory: memoryProxy,
-      callerPid: 0,
+      callerPid: shellPid,
       kernel,
       networkBridge: options?.networkBridge,
       nativeModules: mgr.nativeModules,
       runCommand,
-      spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>) => {
+      spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => {
         if (options?.syncSpawn) {
-          return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn);
+          return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn, parentPid);
         }
-        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes, options?.networkBridge, options?.extensionRegistry, runCommand);
+        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes, options?.networkBridge, options?.extensionRegistry, runCommand, parentPid);
       },
     });
 
@@ -836,24 +842,22 @@ function spawnAsyncProcess(
   networkBridge?: NetworkBridgeLike,
   extensionRegistry?: ExtensionRegistry,
   runCommand?: (cmd: string, stdin: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
+  parentPid: number = NO_PARENT_PID,
 ): number {
   // Tool allowlist check
   if (!mgr.isToolAllowed(req.prog)) {
-    const pid = kernel.allocPid();
-    kernel.initProcess(pid);
+    const pid = kernel.allocPid(parentPid, req.prog);
     for (const [fd, target] of fdTable) kernel.setFdTarget(pid, fd, target);
     const errMsg = new TextEncoder().encode(`${req.prog}: tool not allowed by security policy\n`);
     const stderrTarget = fdTable.get(2);
     if (stderrTarget?.type === 'buffer') { stderrTarget.buf.push(errMsg); stderrTarget.total += errMsg.byteLength; }
     else if (stderrTarget?.type === 'pipe_write') stderrTarget.pipe.write(errMsg);
     for (const [fd] of fdTable) kernel.closeFd(pid, fd);
-    kernel.registerExited(pid, 126);
+    kernel.registerExited(pid, 126, parentPid);
     return pid;
   }
 
-  const pid = kernel.allocPid();
-  kernel.initProcess(pid);
-  kernel.registerPending(pid, `${req.prog} ${req.args.join(' ')}`);
+  const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(' ')}`);
 
   // Check for host commands (TypeScript handlers) first
   const hostCmdEntry = mgr.getHostCommand(req.prog);
@@ -1014,7 +1018,10 @@ function spawnAsyncProcess(
       extensionRegistry,
       nativeModules: mgr.nativeModules,
       runCommand,
-      spawnProcess: (req2, fdTable2) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry, runCommand),
+      // The child's spawn calls record the child's pid as the new
+      // grandchild's ppid — this is how getppid() resolves to the real
+      // parent at every level of the process tree.
+      spawnProcess: (req2, fdTable2, grandparentPid) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry, runCommand, grandparentPid),
     });
     imports.codepod = childKernelImports as unknown as Record<string, WebAssembly.ImportValue>;
 
@@ -1088,9 +1095,9 @@ function spawnSyncProcess(
   fdTable: Map<number, FdTarget>,
   kernel: ProcessKernel,
   syncSpawn: NonNullable<ShellInstanceOptions['syncSpawn']>,
+  parentPid: number = NO_PARENT_PID,
 ): number {
-  const pid = kernel.allocPid();
-  kernel.initProcess(pid);
+  const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(' ')}`);
 
   // Store fd targets in the kernel for cleanup
   for (const [fd, target] of fdTable) {

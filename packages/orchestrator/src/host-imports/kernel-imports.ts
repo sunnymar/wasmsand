@@ -55,8 +55,11 @@ export interface KernelImportsOptions {
   /** Run a shell command and collect output. Used by Python _codepod.spawn(). */
   runCommand?: (cmd: string, stdin: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
-  /** Called by host_spawn to actually create and start a WASM process. */
-  spawnProcess?: (req: SpawnRequest, fdTable: Map<number, FdTarget>) => number;
+  /** Called by host_spawn to actually create and start a WASM process.
+   *  `parentPid` is the PID of the in-sandbox process making the spawn
+   *  call — set on the child as ppid so getppid() inside the child
+   *  resolves to its real spawning parent. */
+  spawnProcess?: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => number;
 
   /** Registry of dynamically loaded native Python module WASMs. */
   nativeModules?: NativeModuleRegistry;
@@ -93,9 +96,40 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         if (req.stdin_data) {
           fdTable.set(0, createStaticTarget(new TextEncoder().encode(req.stdin_data)));
         }
-        return opts.spawnProcess(req, fdTable);
+        return opts.spawnProcess(req, fdTable, callerPid);
       }
       return -1;
+    },
+
+    // host_getpid() -> i32
+    // Returns the pid of the calling process within the codepod kernel.
+    host_getpid(): number {
+      return callerPid;
+    },
+
+    // host_getppid() -> i32
+    // Returns the parent pid of the calling process, or 0 if no
+    // in-sandbox parent (the topmost process — typically the shell —
+    // sees getppid() == 0, mirroring Linux init).
+    host_getppid(): number {
+      return opts.kernel ? opts.kernel.getPpid(callerPid) : 0;
+    },
+
+    // host_kill(pid, sig) -> i32
+    // Best-effort signal delivery: cancels the target's WASI host so it
+    // exits with WasiExitError(124).  This is enough for `kill -TERM` /
+    // `kill -9` style termination from one in-sandbox process to another.
+    // Returns 0 on success, -1 with errno=ESRCH (3) if no such process,
+    // mirroring kill(2).
+    host_kill(pid: number, sig: number): number {
+      if (!opts.kernel) return -1;
+      const exists = opts.kernel
+        .listProcesses()
+        .some(p => p.pid === pid && p.state !== 'exited');
+      if (!exists) return -1;
+      // sig 0 is the existence probe — POSIX requires no signal sent.
+      if (sig === 0) return 0;
+      return opts.kernel.killProcess(pid, sig) ? 0 : -1;
     },
 
     // host_waitpid(pid, out_ptr, out_cap) -> i32
