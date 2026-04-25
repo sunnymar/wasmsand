@@ -302,8 +302,10 @@ class AsyncifyAsyncBridge implements AsyncBridge {
   /**
    * Wrap a WASM export so the host can drive the unwind/rewind loop.
    *
-   * Three reasons WASM unwinds, distinguished by which "pending" slot
-   * is set on the bridge:
+   * This is the asyncify-scheduler variant: async imports also use
+   * Asyncify (via wrapImport, which suspends on Promise returns by
+   * triggering an unwind), so the loop has to handle three reasons
+   * for unwinding:
    *   - pendingSetjmp     : host_setjmp was called; capture the
    *                         unwound buffer into jmpBufStates and
    *                         rewind back to the setjmp call site.
@@ -314,6 +316,9 @@ class AsyncifyAsyncBridge implements AsyncBridge {
    *   - pendingPromise    : an async host import returned a Promise;
    *                         await it, then rewind so the import sees
    *                         state=REWINDING and returns the result.
+   *
+   * Used when JSPI (the preferred scheduler) is unavailable on the
+   * host — see wrapExportJspi for the JSPI-scheduler variant.
    */
   wrapExport(fn: (...args: number[]) => number): (...args: number[]) => Promise<number> {
     return async (...args: number[]): Promise<number> => {
@@ -339,6 +344,40 @@ class AsyncifyAsyncBridge implements AsyncBridge {
           result = fn(...args);
           // asyncify_stop_rewind happens inside wrapImport when state===2.
         }
+      }
+      return result;
+    };
+  }
+
+  /**
+   * JSPI-scheduler variant of wrapExport.  fn is the WebAssembly
+   * .promising-wrapped export, so async-import suspends propagate
+   * naturally as Promise resolutions through fn's return.  We only
+   * have to catch Asyncify unwinds (setjmp/longjmp) — pendingPromise
+   * is never set in this path because async imports don't go through
+   * bridge.wrapImport when JSPI handles them.
+   */
+  wrapExportJspi(fn: (...args: number[]) => Promise<number>): (...args: number[]) => Promise<number> {
+    return async (...args: number[]): Promise<number> => {
+      const exps = this.exports!;
+      let result = await fn(...args);
+      while (exps.getState() === 1) {
+        exps.stopUnwind();
+        if (this.pendingSetjmp !== null) {
+          const envPtr = this.pendingSetjmp;
+          this.pendingSetjmp = null;
+          this.captureBuffer(envPtr);
+        } else if (this.pendingLongjmp !== null) {
+          this.restoreBuffer(this.pendingLongjmp.envPtr);
+          // pendingLongjmp is consumed inside hostSetjmp on rewind.
+        } else {
+          throw new Error(
+            'asyncify unwound without a setjmp/longjmp pending; ' +
+            'async-import suspensions should go through JSPI on this path'
+          );
+        }
+        exps.startRewind(exps.dataAddr);
+        result = await fn(...args);
       }
       return result;
     };

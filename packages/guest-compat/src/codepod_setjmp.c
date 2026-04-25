@@ -51,13 +51,20 @@ static char codepod_asyncify_buf[CODEPOD_ASYNCIFY_BUF_SIZE]
 /* Exported so the host can locate the buffer post-instantiation.
  * Returns a pointer to the start of the 8-byte header — the host
  * then writes the [start, end] u32 pair and uses the same address
- * as the dataAddr argument to asyncify_start_unwind/_rewind. */
-__attribute__((export_name("codepod_asyncify_buf_addr")))
+ * as the dataAddr argument to asyncify_start_unwind/_rewind.
+ *
+ * `used` is mandatory: nothing inside the guest calls these, so
+ * `--gc-sections` would strip them and the host would have no way
+ * to locate the asyncify save-state buffer.  `export_name` alone
+ * names the export but doesn't anchor it against GC. */
+__attribute__((visibility("default"), used,
+               export_name("codepod_asyncify_buf_addr")))
 void *codepod_asyncify_buf_addr(void) {
     return codepod_asyncify_buf;
 }
 
-__attribute__((export_name("codepod_asyncify_buf_size")))
+__attribute__((visibility("default"), used,
+               export_name("codepod_asyncify_buf_size")))
 int codepod_asyncify_buf_size(void) {
     return CODEPOD_ASYNCIFY_BUF_SIZE;
 }
