@@ -16,6 +16,7 @@ import {
 } from './inode.js';
 import { deepCloneRoot } from './snapshot.js';
 import type { MountEntry, VirtualProvider } from './provider.js';
+import type { ProcessInfo } from './proc-provider.js';
 import { DevProvider } from './dev-provider.js';
 import { ProcProvider } from './proc-provider.js';
 
@@ -67,6 +68,14 @@ export class VFS {
   private providers: Map<string, VirtualProvider> = new Map();
   /** Optional callback invoked after mutating VFS operations. */
   private onChangeCallback: (() => void) | null = null;
+  /**
+   * Source for /proc/<pid>/* entries.  The VFS itself doesn't own
+   * a process kernel — the ShellInstance does — so this is a
+   * callback set externally after the kernel is wired up.  Falls
+   * back to an empty list if unset (e.g., during construction or
+   * for raw VFS instances used in unit tests).
+   */
+  private processListProvider: (() => ProcessInfo[]) | null = null;
 
   constructor(options?: VfsOptions) {
     this.root = createDirInode(0o555);
@@ -81,6 +90,7 @@ export class VFS {
       new ProcProvider(
         () => this.getStorageStats(),
         () => this.getMountList(),
+        () => this.processListProvider?.() ?? [],
       ),
     );
   }
@@ -114,6 +124,7 @@ export class VFS {
           vfs.providers.set(mount, new ProcProvider(
             () => vfs.getStorageStats(),
             () => vfs.getMountList(),
+            () => vfs.processListProvider?.() ?? [],
           ));
         } else {
           // User mounts: share the provider instance
@@ -199,6 +210,41 @@ export class VFS {
   /** Set a callback to be invoked after mutating VFS operations. */
   setOnChange(cb: (() => void) | null): void {
     this.onChangeCallback = cb;
+  }
+
+  /**
+   * Wire the source of /proc/<pid>/* entries.  Called by the
+   * ShellInstance once its ProcessKernel exists; the ProcProvider
+   * built at VFS-construction time queries through this on every
+   * read so newly-spawned processes appear without re-registration.
+   */
+  setProcessListProvider(fn: (() => ProcessInfo[]) | null): void {
+    this.processListProvider = fn;
+  }
+
+  /**
+   * If `path` resolves to a streaming provider entry — one whose
+   * provider implements streamRead/streamWrite — return a pair of
+   * functions that the FdTable can call per syscall.  Otherwise
+   * return null and the caller falls back to the static
+   * load-and-slice path through readFile/writeFile.
+   *
+   * Used by FdTable.open: streaming files don't materialize a
+   * buffer at open time, so /dev/urandom can be read forever
+   * without holding any backing memory.
+   */
+  streamFile(path: string): {
+    read?: (length: number) => Uint8Array;
+    write?: (data: Uint8Array) => number;
+  } | null {
+    const match = this.matchProvider(path);
+    if (!match) return null;
+    const { provider, subpath } = match;
+    if (!provider.streamRead && !provider.streamWrite) return null;
+    return {
+      read: provider.streamRead ? (n: number) => provider.streamRead!(subpath, n) : undefined,
+      write: provider.streamWrite ? (d: Uint8Array) => provider.streamWrite!(subpath, d) : undefined,
+    };
   }
 
   /** Notify the onChange callback if set and not during init/restore. */

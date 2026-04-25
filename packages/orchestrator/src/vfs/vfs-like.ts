@@ -21,4 +21,16 @@ export interface VfsLike {
   readlink(path: string): string;
   chmod(path: string, mode: number): void;
   withWriteAccess(fn: () => void): void;
+  /**
+   * Optional: detect a streaming-capable provider entry (e.g.
+   * /dev/urandom, /dev/zero) so the FdTable can skip the
+   * materialize-at-open path and route every syscall through the
+   * provider directly.  Returns null for ordinary files and for
+   * VFS implementations (VfsProxy) that can't expose streaming
+   * across their boundary.
+   */
+  streamFile?(path: string): {
+    read?: (length: number) => Uint8Array;
+    write?: (data: Uint8Array) => number;
+  } | null;
 }

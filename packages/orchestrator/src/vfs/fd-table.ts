@@ -21,6 +21,16 @@ interface FdEntry {
   buffer: Uint8Array;
   offset: number;
   dirty: boolean;
+  /**
+   * Per-syscall stream callbacks for endless / device-style files
+   * (/dev/urandom, /dev/zero, /dev/null, /dev/full).  When present,
+   * read/write bypass the buffer-and-offset model entirely and
+   * route to these closures, so we never materialize an infinite
+   * stream into linear memory at open time.  Mutually exclusive
+   * with `buffer` being meaningful (it stays empty in that case).
+   */
+  streamRead?: (length: number) => Uint8Array;
+  streamWrite?: (data: Uint8Array) => number;
 }
 
 const FIRST_FD = 3; // 0 = stdin, 1 = stdout, 2 = stderr
@@ -43,6 +53,26 @@ export class FdTable {
 
   /** Open a file and return its fd number. */
   open(path: string, mode: OpenMode): number {
+    // Streaming providers (/dev/urandom, /dev/zero, /dev/null,
+    // /dev/full) bypass the materialize-at-open path entirely:
+    // every read/write per fd_read/fd_write syscall calls the
+    // provider directly, so we never hold an infinite stream in
+    // a Uint8Array.
+    const stream = this.vfs.streamFile?.(path) ?? null;
+    if (stream) {
+      const fd = this.nextFd++;
+      this.entries.set(fd, {
+        path,
+        mode,
+        buffer: new Uint8Array(0),
+        offset: 0,
+        dirty: false,
+        streamRead: stream.read,
+        streamWrite: stream.write,
+      });
+      return fd;
+    }
+
     let buffer: Uint8Array;
 
     if (mode === 'r' || mode === 'rw') {
@@ -77,6 +107,13 @@ export class FdTable {
   /** Read from an open fd into buf. Returns the number of bytes read. */
   read(fd: number, buf: Uint8Array): number {
     const entry = this.getEntry(fd);
+    if (entry.streamRead) {
+      const data = entry.streamRead(buf.byteLength);
+      buf.set(data);
+      // No offset bookkeeping for streams — they're endless or
+      // EOF-once (/dev/null returns 0 bytes) and don't seek.
+      return data.byteLength;
+    }
     const available = entry.buffer.byteLength - entry.offset;
 
     if (available <= 0) {
@@ -92,6 +129,11 @@ export class FdTable {
   /** Write data to an open fd. Returns the number of bytes written. */
   write(fd: number, data: Uint8Array): number {
     const entry = this.getEntry(fd);
+    if (entry.streamWrite) {
+      // Stream-write returns bytes-accepted; can be 0 (e.g.
+      // /dev/full) which libc translates into errno=ENOSPC.
+      return entry.streamWrite(data);
+    }
     const newLength = Math.max(entry.buffer.byteLength, entry.offset + data.byteLength);
 
     if (newLength > entry.buffer.byteLength) {

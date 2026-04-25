@@ -1,7 +1,7 @@
 /**
  * /proc virtual provider.
  *
- * Provides synthetic proc files:
+ * Top-level synthetic files:
  * - /proc/uptime    — seconds since VFS creation
  * - /proc/version   — sandbox version string
  * - /proc/cpuinfo   — processor entries
@@ -10,14 +10,27 @@
  * - /proc/diskstats — VFS storage statistics (JSON)
  * - /proc/mounts    — fstab-style mount table; df/mount/getmntent
  *                    parse this to enumerate filesystems.
+ *
+ * Per-process directories: `/proc/<pid>/...` for every process the
+ * kernel knows about.  The set is queried live via getProcessList,
+ * so newly-spawned processes appear without any registration step.
+ *   - stat    — Linux scheduler-style single line
+ *               (pid, comm, state, ppid, then zeroes)
+ *   - status  — multi-line human-readable summary
+ *   - cmdline — argv NUL-separated, no trailing NUL (matches Linux)
+ *   - comm    — basename of the executable, single line
  */
 
 import { VfsError } from './inode.js';
-import type { VirtualProvider } from './provider.js';
+import type { MountEntry, VirtualProvider } from './provider.js';
 
-const PROC_FILES = new Set([
+/** Top-level (non-pid) entries served by /proc. */
+const PROC_TOP_FILES = new Set([
   'uptime', 'version', 'cpuinfo', 'meminfo', 'loadavg', 'diskstats', 'mounts',
 ]);
+
+/** Per-pid file names served under /proc/<pid>/. */
+const PROC_PID_FILES = new Set(['stat', 'status', 'cmdline', 'comm']);
 
 const VERSION_STRING = 'codepod 1.0.0 (WASI sandbox)\n';
 
@@ -28,7 +41,38 @@ export interface StorageStats {
   fileCountLimit: number | undefined;
 }
 
-import type { MountEntry } from './provider.js';
+export interface ProcessInfo {
+  pid: number;
+  ppid: number;
+  state: string;
+  exit_code: number;
+  command: string;
+}
+
+/** Parsed /proc subpath: either a top-level file, a pid root, or
+ *  a per-pid file. */
+type ProcPath =
+  | { kind: 'root' }
+  | { kind: 'top'; name: string }
+  | { kind: 'pid_dir'; pid: number }
+  | { kind: 'pid_file'; pid: number; name: string }
+  | { kind: 'unknown'; subpath: string };
+
+function parseProcSubpath(subpath: string): ProcPath {
+  if (subpath === '') return { kind: 'root' };
+  const slash = subpath.indexOf('/');
+  if (slash === -1) {
+    if (PROC_TOP_FILES.has(subpath)) return { kind: 'top', name: subpath };
+    if (/^\d+$/.test(subpath)) return { kind: 'pid_dir', pid: parseInt(subpath, 10) };
+    return { kind: 'unknown', subpath };
+  }
+  const head = subpath.slice(0, slash);
+  const tail = subpath.slice(slash + 1);
+  if (/^\d+$/.test(head) && PROC_PID_FILES.has(tail)) {
+    return { kind: 'pid_file', pid: parseInt(head, 10), name: tail };
+  }
+  return { kind: 'unknown', subpath };
+}
 
 export class ProcProvider implements VirtualProvider {
   readonly fsType = 'proc';
@@ -36,55 +80,163 @@ export class ProcProvider implements VirtualProvider {
   private readonly createdAt: number;
   private readonly getStorageStats?: () => StorageStats;
   private readonly getMountList?: () => MountEntry[];
+  private readonly getProcessList?: () => ProcessInfo[];
 
   constructor(
     getStorageStats?: () => StorageStats,
     getMountList?: () => MountEntry[],
+    getProcessList?: () => ProcessInfo[],
   ) {
     this.createdAt = Date.now();
     this.getStorageStats = getStorageStats;
     this.getMountList = getMountList;
+    this.getProcessList = getProcessList;
   }
 
   readFile(subpath: string): Uint8Array {
-    const content = this.generateContent(subpath);
-    return new TextEncoder().encode(content);
+    return new TextEncoder().encode(this.generateContent(subpath));
   }
 
   writeFile(subpath: string, _data: Uint8Array): void {
     if (subpath === '') {
       throw new VfsError('EISDIR', 'is a directory: /proc');
     }
-    if (PROC_FILES.has(subpath)) {
+    if (this.exists(subpath)) {
       throw new VfsError('EROFS', `read-only file system: /proc/${subpath}`);
     }
     throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
   }
 
   exists(subpath: string): boolean {
-    if (subpath === '') return true; // /proc itself
-    return PROC_FILES.has(subpath);
+    const p = parseProcSubpath(subpath);
+    switch (p.kind) {
+      case 'root': return true;
+      case 'top': return true;
+      case 'pid_dir': return this.findProcess(p.pid) !== undefined;
+      case 'pid_file': return this.findProcess(p.pid) !== undefined;
+      case 'unknown': return false;
+    }
   }
 
   stat(subpath: string): { type: 'file' | 'dir'; size: number } {
-    if (subpath === '') {
-      return { type: 'dir', size: PROC_FILES.size };
+    const p = parseProcSubpath(subpath);
+    switch (p.kind) {
+      case 'root': {
+        // Size of a directory is conventionally entry count; not
+        // semantically meaningful but stable enough for ls / find.
+        const procs = this.getProcessList?.() ?? [];
+        return { type: 'dir', size: PROC_TOP_FILES.size + procs.length };
+      }
+      case 'top': {
+        const content = this.generateContent(subpath);
+        return { type: 'file', size: new TextEncoder().encode(content).byteLength };
+      }
+      case 'pid_dir':
+        if (!this.findProcess(p.pid)) {
+          throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
+        }
+        return { type: 'dir', size: PROC_PID_FILES.size };
+      case 'pid_file': {
+        if (!this.findProcess(p.pid)) {
+          throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
+        }
+        const content = this.generateContent(subpath);
+        return { type: 'file', size: new TextEncoder().encode(content).byteLength };
+      }
+      case 'unknown':
+        throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
     }
-    if (PROC_FILES.has(subpath)) {
-      const content = this.generateContent(subpath);
-      return { type: 'file', size: new TextEncoder().encode(content).byteLength };
-    }
-    throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
   }
 
   readdir(subpath: string): Array<{ name: string; type: 'file' | 'dir' }> {
-    if (subpath !== '') {
-      throw new VfsError('ENOTDIR', `not a directory: /proc/${subpath}`);
+    const p = parseProcSubpath(subpath);
+    if (p.kind === 'root') {
+      const entries: Array<{ name: string; type: 'file' | 'dir' }> = [];
+      for (const name of PROC_TOP_FILES) entries.push({ name, type: 'file' });
+      const procs = this.getProcessList?.() ?? [];
+      for (const proc of procs) {
+        entries.push({ name: String(proc.pid), type: 'dir' });
+      }
+      return entries;
     }
-    return Array.from(PROC_FILES).map(name => ({ name, type: 'file' as const }));
+    if (p.kind === 'pid_dir') {
+      if (!this.findProcess(p.pid)) {
+        throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
+      }
+      return Array.from(PROC_PID_FILES).map(name => ({ name, type: 'file' as const }));
+    }
+    throw new VfsError('ENOTDIR', `not a directory: /proc/${subpath}`);
+  }
+
+  private findProcess(pid: number): ProcessInfo | undefined {
+    return this.getProcessList?.().find(p => p.pid === pid);
+  }
+
+  /** Map kernel state strings to Linux /proc/<pid>/stat single-char
+   *  process-state codes.  We don't model stopped/traced/zombie
+   *  states distinctly (a zombie is a process that's exited but
+   *  not yet reaped — we surface that as 'Z'). */
+  private procState(p: ProcessInfo): string {
+    if (p.state === 'exited') return 'Z'; // zombie until reaped
+    return 'R'; // running (we don't track sleep states)
+  }
+
+  /** Extract the program name (the first whitespace-delimited word
+   *  of `command`) and truncate to 16 chars to match Linux comm. */
+  private procComm(p: ProcessInfo): string {
+    const tok = (p.command ?? '').trim().split(/\s+/)[0] ?? '';
+    const base = tok.includes('/') ? tok.slice(tok.lastIndexOf('/') + 1) : tok;
+    return base.slice(0, 15);
   }
 
   private generateContent(subpath: string): string {
+    const p = parseProcSubpath(subpath);
+
+    // Per-pid files
+    if (p.kind === 'pid_file') {
+      const proc = this.findProcess(p.pid);
+      if (!proc) {
+        throw new VfsError('ENOENT', `no such file or directory: /proc/${subpath}`);
+      }
+      switch (p.name) {
+        case 'stat': {
+          // pid (comm) state ppid pgrp session ...
+          // Most fields beyond ppid are irrelevant in the sandbox;
+          // emit zeroes so parsers that walk the line don't choke.
+          const comm = this.procComm(proc);
+          const state = this.procState(proc);
+          const ppid = proc.ppid;
+          const pgrp = proc.pid; // we don't track pgroups; mirror getpgid()=pid
+          const session = proc.pid;
+          const zeros = Array(40).fill('0').join(' ');
+          return `${proc.pid} (${comm}) ${state} ${ppid} ${pgrp} ${session} ${zeros}\n`;
+        }
+        case 'status': {
+          const comm = this.procComm(proc);
+          const state = this.procState(proc);
+          const stateName = state === 'R' ? 'R (running)' : 'Z (zombie)';
+          return (
+            `Name:\t${comm}\n` +
+            `State:\t${stateName}\n` +
+            `Pid:\t${proc.pid}\n` +
+            `PPid:\t${proc.ppid}\n` +
+            `Uid:\t1000\t1000\t1000\t1000\n` +
+            `Gid:\t1000\t1000\t1000\t1000\n` +
+            `Threads:\t1\n`
+          );
+        }
+        case 'cmdline':
+          // NUL-separated argv, no trailing NUL — matches Linux.
+          // The ProcessKernel keeps `command` as a space-joined string
+          // (it's what the spawn caller hands in for diagnostic
+          // tracking); split on whitespace to recover argv.
+          return (proc.command ?? '').trim().split(/\s+/).filter(Boolean).join('\0');
+        case 'comm':
+          return this.procComm(proc) + '\n';
+      }
+    }
+
+    // Top-level files
     switch (subpath) {
       case 'uptime': {
         const seconds = (Date.now() - this.createdAt) / 1000;
@@ -115,10 +267,11 @@ export class ProcProvider implements VirtualProvider {
         );
       case 'loadavg': {
         // Format: "<1m> <5m> <15m> <runnable>/<total> <last_pid>"
-        // We don't sample load yet — emit zeros for the averages and a
-        // best-effort process count of 1 (the shell).  Real values land
-        // with the per-PID /proc work + a kernel-side sampling loop.
-        return '0.00 0.00 0.00 1/1 1\n';
+        const procs = this.getProcessList?.() ?? [];
+        const running = procs.filter(p => p.state === 'running').length;
+        const total = procs.length;
+        const lastPid = procs.reduce((max, p) => Math.max(max, p.pid), 1);
+        return `0.00 0.00 0.00 ${running || 1}/${total || 1} ${lastPid}\n`;
       }
       case 'mounts': {
         // fstab(5) columns: fsname mountpoint fstype options dump pass.
@@ -149,7 +302,6 @@ export class ProcProvider implements VirtualProvider {
   }
 
   private getCpuCount(): number {
-    // Use navigator.hardwareConcurrency if available (browser), else 1
     if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) {
       return navigator.hardwareConcurrency;
     }

@@ -143,13 +143,31 @@ export class ShellInstance implements ShellLike {
 
     // ── Process kernel for pipe/spawn/waitpid/close_fd ──
     const kernel = new ProcessKernel();
+
+    // Wire /proc/<pid>/* entries.  The ProcProvider (built when the
+    // VFS was constructed) reads through this callback live, so
+    // newly-spawned processes show up in /proc as soon as
+    // kernel.allocPid records them.  Only the main-thread VFS
+    // exposes setProcessListProvider — VfsProxy in worker mode
+    // doesn't (yet), so /proc/<pid>/* won't render there until the
+    // proxy protocol grows a process-list op; the rest of /proc
+    // continues to work via the existing storage/mount callbacks.
+    const setProc = (vfs as { setProcessListProvider?: (fn: () => unknown) => void }).setProcessListProvider;
+    if (typeof setProc === 'function') {
+      setProc.call(vfs, () => kernel.listProcesses());
+    }
     // The shell isn't special — it just happens to be the first process
     // to call allocPid on this kernel, so it gets PID 1 (Unix init by
     // convention).  When a Python script or another tool spawns a fresh
     // shell as a child later, that nested shell calls allocPid on its
     // own kernel (because each ShellInstance owns one) and is similarly
     // PID 1 inside its own container.
-    const shellPid = kernel.allocPid(NO_PARENT_PID, 'shell');
+    // The shell process records itself as `/bin/bash` — codepod-shell-
+    // exec.wasm implements bash-equivalent semantics, and that's the
+    // path POSIX tools (ps, /proc/<pid>/comm, /proc/<pid>/cmdline)
+    // expect to see.  procComm() in proc-provider.ts takes the
+    // basename, so /proc/1/comm renders as "bash".
+    const shellPid = kernel.allocPid(NO_PARENT_PID, '/bin/bash');
     kernel.setFdTarget(shellPid, 0, createNullTarget());    // stdin: no terminal input
     kernel.setFdTarget(shellPid, 1, createBufferTarget());   // stdout: captured (no limit on kernel fd)
     kernel.setFdTarget(shellPid, 2, createBufferTarget());   // stderr: captured (no limit on kernel fd)

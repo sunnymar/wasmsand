@@ -29,6 +29,31 @@ export interface VirtualProvider {
 
   /** List entries in a directory at the given subpath. */
   readdir(subpath: string): Array<{ name: string; type: 'file' | 'dir' }>;
+
+  /**
+   * Optional: stream-aware read.  When present, the VFS / FdTable
+   * routes per-syscall fd_read calls through this method so the
+   * provider can produce content on demand — required for endless
+   * devices (/dev/zero, /dev/urandom) where the read-once-and-slice
+   * model would either truncate at a fixed buffer size or burn
+   * memory.  Receives the byte count the caller asked for and
+   * returns up to that many bytes (returning 0 bytes signals EOF).
+   *
+   * Providers that don't define this fall back to the static
+   * readFile path, which is correct for finite synthetic files
+   * like /proc/version or /proc/<pid>/status.
+   */
+  streamRead?(subpath: string, length: number): Uint8Array;
+
+  /**
+   * Optional: stream-aware write.  Pairs with streamRead for
+   * devices that aren't well-modelled as "load file, slice, save".
+   * /dev/null and /dev/full both define this — null silently
+   * accepts everything, full reports zero bytes written so libc
+   * surfaces ENOSPC.  Returns the byte count actually accepted
+   * (Linux semantics: <length means partial-write back-pressure).
+   */
+  streamWrite?(subpath: string, data: Uint8Array): number;
 }
 
 /**
