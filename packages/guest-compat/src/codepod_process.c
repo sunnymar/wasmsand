@@ -45,3 +45,22 @@ int kill(pid_t pid, int sig) {
     }
     return 0;
 }
+
+/* popen / pclose libc names — wasi-libc doesn't ship them; codepod
+ * provides codepod_popen / codepod_pclose against host_run_command.
+ * Expose the standard POSIX names by aliasing to those impls so any
+ * guest C program that links libcodepod_guest_compat gets the real
+ * popen/pclose, regardless of how it spells its build (BusyBox, awk
+ * variants, hand-rolled C, Rust crates pulling in libc, etc.). */
+#include <stdio.h>
+
+extern FILE *codepod_popen(const char *cmd, const char *mode);
+extern int codepod_pclose(FILE *stream);
+
+FILE *popen(const char *cmd, const char *mode) {
+    return codepod_popen(cmd, mode);
+}
+
+int pclose(FILE *stream) {
+    return codepod_pclose(stream);
+}

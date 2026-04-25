@@ -1,8 +1,16 @@
 #ifndef CODEPOD_BUSYBOX_COMPAT_UNISTD_H
 #define CODEPOD_BUSYBOX_COMPAT_UNISTD_H
 
-/* Pull in the real wasi-sdk unistd.h (and any intermediate compat shim). */
+/* Pull in the real wasi-sdk unistd.h (and any intermediate compat shim).
+ * wasi-libc marks getpid() as deprecated to nudge users toward
+ * -D_WASI_EMULATED_GETPID, but we provide a real getpid() via
+ * libcodepod_guest_compat (codepod_process.c → codepod_host_getpid),
+ * so the deprecation warning is misleading.  Suppress it across
+ * everything that includes our compat <unistd.h>. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #include_next <unistd.h>
+#pragma clang diagnostic pop
 
 /* WASI / wasm32-wasip1 omits many POSIX functions that BusyBox references but
  * doesn't actually call on this platform (e.g., fork, exec, uid/gid helpers).
@@ -107,19 +115,31 @@ static inline int ttyname_r(int fd, char *buf, size_t buflen) {
 
 /* Process tree introspection.  getpid()/getppid()/kill() are provided
  * by libcodepod_guest_compat (codepod_process.c) — they route through
- * codepod_host_getpid/getppid/kill imports to the real kernel.  We
- * declare them here so callers including only <unistd.h> see them, but
- * the bodies live in the compat archive.
+ * codepod_host_getpid/getppid/kill imports to the real kernel.
  *
- * Process groups / sessions aren't modelled in the kernel; getpgrp()
- * etc. echo getpid() so the answers stay self-consistent. */
+ * Re-declare getpid here without the deprecation attribute that
+ * wasi-libc's upstream unistd.h carries; our impl is a real PID, not
+ * the placeholder value the upstream warning is about.  Without this
+ * shadowing declaration every static-inline call to getpid() below
+ * triggers -Wdeprecated-declarations from inside our header. */
+extern pid_t getpid(void);
 extern pid_t getppid(void);
+
+/* Process groups / sessions aren't modelled in the kernel; getpgrp()
+ * etc. echo getpid() so the answers stay self-consistent. */
 static inline pid_t getpgrp(void) { return getpid(); }
 static inline pid_t getpgid(pid_t pid) { (void)pid; return getpid(); }
 static inline int setpgid(pid_t pid, pid_t pgid) {
     (void)pid; (void)pgid; return 0; }
 static inline int setpgrp(void) { return 0; }
 static inline pid_t getsid(pid_t pid) { (void)pid; return getpid(); }
+
+/* Networking: sethostname() — wasi-libc has gethostname but not the
+ * setter.  Stub to ENOSYS so callers see the failure; our hostname is
+ * effectively read-only from the guest's perspective. */
+static inline int sethostname(const char *name, size_t len) {
+    (void)name; (void)len; errno = ENOSYS; return -1;
+}
 
 /* kill() is declared in <signal.h> in POSIX; many BusyBox applets reach
  * for it via that include path.  Our compat header brings it in here so
