@@ -174,11 +174,13 @@ describe('ProcProvider (/proc)', () => {
     expect(text).toContain('MemFree');
   });
 
-  it('/proc is listable with all 5 files', () => {
+  it('/proc is listable with all expected files', () => {
     const vfs = new VFS();
     const entries = vfs.readdir('/proc');
     const names = entries.map(e => e.name).sort();
-    expect(names).toEqual(['cpuinfo', 'diskstats', 'meminfo', 'uptime', 'version']);
+    expect(names).toEqual([
+      'cpuinfo', 'diskstats', 'loadavg', 'meminfo', 'mounts', 'uptime', 'version',
+    ]);
     for (const entry of entries) {
       expect(entry.type).toBe('file');
     }
@@ -188,7 +190,16 @@ describe('ProcProvider (/proc)', () => {
     const vfs = new VFS();
     const s = vfs.stat('/proc');
     expect(s.type).toBe('dir');
-    expect(s.size).toBe(5);
+    expect(s.size).toBe(7);
+  });
+
+  it('/proc/mounts reflects the live VFS mount table', () => {
+    const vfs = new VFS();
+    const text = new TextDecoder().decode(vfs.readFile('/proc/mounts'));
+    // Root + /proc + /dev are present after construction.
+    expect(text).toContain('codepodfs / codepodfs');
+    expect(text).toContain('proc /proc proc');
+    expect(text).toContain('devtmpfs /dev devtmpfs');
   });
 
   it('/proc files are read-only (EROFS on write to uptime)', () => {
@@ -262,7 +273,8 @@ describe('Provider integration with VFS', () => {
     const devEntries = clone.readdir('/dev');
     expect(devEntries.length).toBe(4);
     const procEntries = clone.readdir('/proc');
-    expect(procEntries.length).toBe(5);
+    // uptime, version, cpuinfo, meminfo, loadavg, diskstats, mounts
+    expect(procEntries.length).toBe(7);
   });
 
   it('root readdir still works (does not include virtual mounts)', () => {

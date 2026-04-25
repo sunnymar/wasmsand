@@ -1,5 +1,11 @@
-#ifndef CODEPOD_BUSYBOX_COMPAT_NETDB_H
-#define CODEPOD_BUSYBOX_COMPAT_NETDB_H
+#ifndef CODEPOD_COMPAT_NETDB_H
+#define CODEPOD_COMPAT_NETDB_H
+
+/* wasi-libc has no <netdb.h>.  Codepod doesn't expose DNS to the
+ * guest (sandbox networking goes through host_network_fetch, which
+ * speaks HTTP/HTTPS, not DNS).  Declarations here; bodies live in
+ * libcodepod_guest_compat (codepod_netdb.c) and return "host not
+ * found" cleanly so callers can degrade gracefully. */
 
 #include <stddef.h>
 #include <sys/socket.h>

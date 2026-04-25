@@ -16,6 +16,8 @@ const DEFAULT_READ_SIZE = 4096;
 const DEVICES = new Set(['null', 'zero', 'random', 'urandom']);
 
 export class DevProvider implements VirtualProvider {
+  readonly fsType = 'devtmpfs';
+
   readFile(subpath: string): Uint8Array {
     switch (subpath) {
       case 'null':

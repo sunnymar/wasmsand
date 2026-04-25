@@ -5,7 +5,9 @@ import { ProcessKernel } from '../kernel.js';
 describe('ProcessKernel', () => {
   it('createPipe returns connected read/write ends', async () => {
     const kernel = new ProcessKernel();
-    const { readFd, writeFd } = kernel.createPipe(/*callerPid=*/ 0);
+    // Allocate a process so it has an fd table to attach pipe ends to.
+    const pid = kernel.allocPid();
+    const { readFd, writeFd } = kernel.createPipe(pid);
     expect(readFd).toBeGreaterThanOrEqual(3);
     expect(writeFd).toBeGreaterThanOrEqual(3);
     expect(writeFd).toBe(readFd + 1);
@@ -14,16 +16,18 @@ describe('ProcessKernel', () => {
 
   it('closeFd closes pipe ends', () => {
     const kernel = new ProcessKernel();
-    const { readFd, writeFd } = kernel.createPipe(0);
-    kernel.closeFd(0, writeFd);
-    kernel.closeFd(0, readFd);
+    const pid = kernel.allocPid();
+    const { readFd, writeFd } = kernel.createPipe(pid);
+    kernel.closeFd(pid, writeFd);
+    kernel.closeFd(pid, readFd);
     kernel.dispose();
   });
 
   it('getFdTarget returns the target for a given fd', () => {
     const kernel = new ProcessKernel();
-    const { readFd } = kernel.createPipe(0);
-    const target = kernel.getFdTarget(0, readFd);
+    const pid = kernel.allocPid();
+    const { readFd } = kernel.createPipe(pid);
+    const target = kernel.getFdTarget(pid, readFd);
     expect(target).not.toBeNull();
     expect(target!.type).toBe('pipe_read');
     kernel.dispose();

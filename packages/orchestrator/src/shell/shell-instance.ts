@@ -88,6 +88,13 @@ export class ShellInstance implements ShellLike {
   // Needed to extract buffer-captured output from spawned pipeline stages.
   private kernel: ProcessKernel | undefined;
 
+  // The shell's own PID in `kernel`, returned by allocPid() at create time.
+  // Used to look up the shell's stdin/stdout/stderr fd targets and to install
+  // stdinData overrides.  Was hardcoded to 0 before the dynamic-PID refactor;
+  // kept on the instance now because allocPid() returns the next free PID
+  // (1 for the topmost shell, 2+ for nested shells inside spawned tools).
+  private pid: number = 0;
+
   private constructor(instance: WebAssembly.Instance) {
     this.instance = instance;
     this.memory = instance.exports.memory as WebAssembly.Memory;
@@ -250,7 +257,7 @@ export class ShellInstance implements ShellLike {
         const mem = getMemory();
         const view = new DataView(mem.buffer);
         const bytes = new Uint8Array(mem.buffer);
-        const target = kernel.getFdTarget(0, fd);
+        const target = kernel.getFdTarget(shellPid, fd);
         if (!target) {
           // Unknown fd — return 0 bytes written (backward-compat for fds 0-2)
           view.setUint32(nwrittenPtr, 0, true);
@@ -303,7 +310,7 @@ export class ShellInstance implements ShellLike {
       fd_read: async (fd: number, iovPtr: number, iovLen: number, nreadPtr: number): Promise<number> => {
         const mem = getMemory();
         const view = new DataView(mem.buffer);
-        const target = kernel.getFdTarget(0, fd);
+        const target = kernel.getFdTarget(shellPid, fd);
         if (!target) {
           view.setUint32(nreadPtr, 0, true);
           return 0;
@@ -516,6 +523,7 @@ export class ShellInstance implements ShellLike {
     const shell = new ShellInstance(instance);
     shell.runCommandFn = wrappedRunCommand;
     shell.kernel = kernel;
+    shell.pid = shellPid;
     shellRef = shell;
 
     // Populate /bin/ in VFS with entries for registered tools so that
@@ -636,7 +644,7 @@ export class ShellInstance implements ShellLike {
     // After the run, restore the null target so the shell's stdin is clean again.
     const hadStdinData = options?.stdinData && options.stdinData.byteLength > 0;
     if (hadStdinData && this.kernel) {
-      this.kernel.setFdTarget(0, 0, createStaticTarget(options!.stdinData!));
+      this.kernel.setFdTarget(this.pid, 0, createStaticTarget(options!.stdinData!));
     }
 
     // Sync env changes to the WASM module by prepending export statements
@@ -743,8 +751,8 @@ export class ShellInstance implements ShellLike {
     let stdout = '';
     let stderr = '';
     if (this.kernel) {
-      const stdoutTarget = this.kernel.getFdTarget(0, 1);
-      const stderrTarget = this.kernel.getFdTarget(0, 2);
+      const stdoutTarget = this.kernel.getFdTarget(this.pid, 1);
+      const stderrTarget = this.kernel.getFdTarget(this.pid, 2);
       if (stdoutTarget?.type === 'buffer' && stdoutTarget.buf.length > 0) {
         stdout = bufferToString(stdoutTarget);
       }
@@ -790,7 +798,7 @@ export class ShellInstance implements ShellLike {
 
     // Restore null stdin target after run (if we temporarily installed stdinData)
     if (hadStdinData && this.kernel) {
-      this.kernel.setFdTarget(0, 0, createNullTarget());
+      this.kernel.setFdTarget(this.pid, 0, createNullTarget());
     }
 
     return {
@@ -803,11 +811,11 @@ export class ShellInstance implements ShellLike {
     };
   }
 
-  /** Set or clear streaming callbacks on pid 0 stdout/stderr buffer targets. */
+  /** Set or clear streaming callbacks on the shell's stdout/stderr buffer targets. */
   setOutputCallbacks(callbacks: StreamCallbacks | null): void {
     if (!this.kernel) return;
-    const stdoutTarget = this.kernel.getFdTarget(0, 1);
-    const stderrTarget = this.kernel.getFdTarget(0, 2);
+    const stdoutTarget = this.kernel.getFdTarget(this.pid, 1);
+    const stderrTarget = this.kernel.getFdTarget(this.pid, 2);
     if (stdoutTarget?.type === 'buffer') stdoutTarget.onChunk = callbacks?.onStdout ?? undefined;
     if (stderrTarget?.type === 'buffer') stderrTarget.onChunk = callbacks?.onStderr ?? undefined;
   }

@@ -37,6 +37,9 @@ int getgroups(int size, gid_t list[]) {
     errno = EINVAL;
     return -1;
   }
+  /* Sandbox is single-user: report exactly the primary group (1000),
+   * matching getegid() / `id` output.  POSIX: size==0 means "tell me
+   * how many entries", so we return the count without writing list. */
   if (size == 0) {
     return 1;
   }
@@ -45,6 +48,6 @@ int getgroups(int size, gid_t list[]) {
     return -1;
   }
 
-  list[0] = (gid_t) 0;
+  list[0] = (gid_t) 1000;
   return 1;
 }

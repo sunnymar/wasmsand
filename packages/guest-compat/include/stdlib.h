@@ -1,14 +1,23 @@
-#ifndef CODEPOD_BUSYBOX_COMPAT_STDLIB_H
-#define CODEPOD_BUSYBOX_COMPAT_STDLIB_H
+#ifndef CODEPOD_COMPAT_STDLIB_H
+#define CODEPOD_COMPAT_STDLIB_H
 
-/* Pull in the real wasi-sdk stdlib.h */
+/* Pull in the real wasi-sdk stdlib.h. */
 #include_next <stdlib.h>
 
-/* WASI omits mktemp/mkstemp/mkostemp/mkdtemp (guarded by
- * __wasilibc_unmodified_upstream).  Implement them here against the VFS:
- * mktemp generates a name; mkstemp/mkdtemp create the file or directory
- * with O_EXCL / mkdir, retrying on collision so the resulting path is
- * unique within the sandbox VFS. */
+/* wasi-libc gates mktemp / mkstemp / mkostemp / mkdtemp behind
+ * __wasilibc_unmodified_upstream and they are absent from the wasm32-wasip1
+ * sysroot.  Provide real implementations here against the VFS:
+ *
+ *   - mktemp(3):     replace the trailing XXXXXX of the template with
+ *                    crypto-quality random alphanumerics (via getentropy
+ *                    → WASI random_get → host crypto.getRandomValues).
+ *   - mkstemp(3):    mktemp + open(O_CREAT|O_EXCL); retry on EEXIST.
+ *   - mkostemp(3):   mkstemp variant that takes extra open flags.
+ *   - mkdtemp(3):    mktemp + mkdir; retry on EEXIST.
+ *
+ * All four are header-inlined so any C/C++ guest binary that links
+ * libcodepod_guest_compat (or just sees this header on its include path)
+ * gets working temp-file primitives without having to define them. */
 
 #ifndef __wasilibc_unmodified_upstream
 
@@ -20,9 +29,9 @@
 #include <unistd.h>
 
 /* getentropy(3) is provided by wasi-libc and routes through WASI
- * `random_get`, which the codepod host services with crypto.getRandomValues()
- * (see packages/orchestrator/src/wasi/wasi-host.ts:randomGet).  So this
- * is the canonical crypto-quality entropy source for the sandbox. */
+ * random_get, which the codepod host services with crypto.getRandomValues
+ * (see packages/orchestrator/src/wasi/wasi-host.ts:randomGet).  This is
+ * the canonical crypto-quality entropy source for the sandbox. */
 extern int getentropy(void *buffer, size_t length);
 
 static inline char *codepod_mktemp_internal(char *tmpl) {
@@ -53,14 +62,10 @@ static inline char *codepod_mktemp_internal(char *tmpl) {
     return tmpl;
 }
 
-/* mktemp(3): replace trailing XXXXXX with random alphanumerics.  POSIX
- * deprecates this for being TOCTOU-y, but BusyBox's mktemp(1) `-u` mode
- * and its in-tree libbb mkdtemp helper both call it. */
 static inline char *mktemp(char *tmpl) {
     return codepod_mktemp_internal(tmpl);
 }
 
-/* mkstemp(3): mktemp + open(O_CREAT|O_EXCL).  Retries on EEXIST. */
 static inline int mkstemp(char *tmpl) {
     for (int attempt = 0; attempt < 64; attempt++) {
         size_t n = strlen(tmpl);
@@ -94,7 +99,6 @@ static inline int mkostemp(char *tmpl, int flags) {
     return -1;
 }
 
-/* mkdtemp(3): mktemp + mkdir.  Retries on EEXIST. */
 static inline char *mkdtemp(char *tmpl) {
     for (int attempt = 0; attempt < 64; attempt++) {
         size_t n = strlen(tmpl);
@@ -112,4 +116,4 @@ static inline char *mkdtemp(char *tmpl) {
 
 #endif /* !__wasilibc_unmodified_upstream */
 
-#endif /* CODEPOD_BUSYBOX_COMPAT_STDLIB_H */
+#endif /* CODEPOD_COMPAT_STDLIB_H */

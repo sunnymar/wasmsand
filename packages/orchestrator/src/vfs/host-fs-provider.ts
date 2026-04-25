@@ -19,6 +19,8 @@ export interface HostFsProviderOptions {
 }
 
 export class HostFsProvider implements VirtualProvider {
+  readonly fsType = 'hostfs';
+
   private hostRoot: string;
   private writable: boolean;
 

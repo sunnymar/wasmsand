@@ -33,6 +33,8 @@ function makeDirNode(): DirNode {
 }
 
 export class HostMount implements VirtualProvider {
+  readonly fsType = 'hostmount';
+
   private root: DirNode = makeDirNode();
   private writable: boolean;
 

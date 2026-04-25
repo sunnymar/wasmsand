@@ -42,6 +42,18 @@ typedef void (*sighandler_t)(int);
 #define SIGUSR2 12
 #define SIGPIPE 13
 
+/* NSIG / _NSIG: highest-signal-number + 1, used for iteration and for
+ * sizing tables.  Linux uses 65 (32 classic + 32 RT + 1).  We don't
+ * implement RT signals but match the conventional value so guest code
+ * sizing arrays as `[NSIG]` lines up with what most upstream code
+ * expects on Linux. */
+#ifndef NSIG
+#define NSIG 65
+#endif
+#ifndef _NSIG
+#define _NSIG NSIG
+#endif
+
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2

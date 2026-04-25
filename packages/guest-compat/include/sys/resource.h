@@ -1,15 +1,18 @@
-#ifndef CODEPOD_BUSYBOX_COMPAT_SYS_RESOURCE_H
-#define CODEPOD_BUSYBOX_COMPAT_SYS_RESOURCE_H
+#ifndef CODEPOD_COMPAT_SYS_RESOURCE_H
+#define CODEPOD_COMPAT_SYS_RESOURCE_H
 
-/* wasi-libc has no <sys/resource.h>.  Provide just enough surface for
- * BusyBox applets that touch resource limits / priorities — they all
- * stub to "no-op success" because the sandbox doesn't expose process
- * priorities or rlimit state to the guest. */
+/* wasi-libc has no <sys/resource.h>.  Provide the priority / rlimit /
+ * rusage surface that POSIX programs reach for.  The sandbox doesn't
+ * model process priorities or rlimit state today, so the calls
+ * gracefully no-op — getrlimit reports unlimited, getpriority reports
+ * "default" niceness, setrlimit/setpriority accept silently, getrusage
+ * zeros the struct.  This is honest behaviour: the sandbox really has
+ * no per-process priority knob, so any "value" we'd invent is fiction. */
 
 #include <errno.h>
+#include <sys/time.h>
 #include <sys/types.h>
 
-/* getpriority/setpriority — `which` selectors. */
 #define PRIO_PROCESS 0
 #define PRIO_PGRP    1
 #define PRIO_USER    2
@@ -50,13 +53,11 @@ struct rusage {
 
 static inline int getpriority(int which, id_t who) {
     (void)which; (void)who;
-    /* "default" niceness — caller can't tell us apart from a real 0. */
-    return 0;
+    return 0;  /* default niceness */
 }
 
 static inline int setpriority(int which, id_t who, int prio) {
     (void)which; (void)who; (void)prio;
-    /* Sandbox priority isn't user-visible; accept silently. */
     return 0;
 }
 
@@ -80,4 +81,4 @@ static inline int getrusage(int who, struct rusage *r) {
     return 0;
 }
 
-#endif /* CODEPOD_BUSYBOX_COMPAT_SYS_RESOURCE_H */
+#endif /* CODEPOD_COMPAT_SYS_RESOURCE_H */

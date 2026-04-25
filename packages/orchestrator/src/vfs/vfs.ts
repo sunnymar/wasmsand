@@ -15,7 +15,7 @@ import {
   createSymlinkInode,
 } from './inode.js';
 import { deepCloneRoot } from './snapshot.js';
-import type { VirtualProvider } from './provider.js';
+import type { MountEntry, VirtualProvider } from './provider.js';
 import { DevProvider } from './dev-provider.js';
 import { ProcProvider } from './proc-provider.js';
 
@@ -76,7 +76,13 @@ export class VFS {
     this.initDefaultLayout();
     this.initializing = false;
     this.registerProvider('/dev', new DevProvider());
-    this.registerProvider('/proc', new ProcProvider(() => this.getStorageStats()));
+    this.registerProvider(
+      '/proc',
+      new ProcProvider(
+        () => this.getStorageStats(),
+        () => this.getMountList(),
+      ),
+    );
   }
 
   /** Create a VFS from an already-populated root (used by cowClone). */
@@ -105,7 +111,10 @@ export class VFS {
         if (mount === '/dev') {
           vfs.providers.set(mount, new DevProvider());
         } else if (mount === '/proc') {
-          vfs.providers.set(mount, new ProcProvider(() => vfs.getStorageStats()));
+          vfs.providers.set(mount, new ProcProvider(
+            () => vfs.getStorageStats(),
+            () => vfs.getMountList(),
+          ));
         } else {
           // User mounts: share the provider instance
           vfs.providers.set(mount, provider);
@@ -157,6 +166,34 @@ export class VFS {
   /** Return all provider mount paths (e.g. ['/dev', '/proc', '/mnt/tools']). */
   getProviderPaths(): string[] {
     return Array.from(this.providers.keys());
+  }
+
+  /**
+   * Build the live mount table — the structured form of /proc/mounts.
+   * The root inode tree shows up as 'codepodfs / codepodfs ...'; each
+   * registered provider contributes a row using its declared fsType
+   * (defaulting to 'virtfs' for legacy providers without one).
+   *
+   * Mount options follow the kernel conventions: 'ro' on read-only
+   * mounts, otherwise 'rw'.  We don't track per-mount options beyond
+   * read/write today; if more granularity is needed (nosuid, nodev)
+   * the providers can carry their own options string.
+   */
+  getMountList(): MountEntry[] {
+    const entries: MountEntry[] = [
+      { fsname: 'codepodfs', mountPath: '/', fsType: 'codepodfs', options: 'rw,relatime' },
+    ];
+    for (const [mountPath, provider] of this.providers) {
+      const fsType = provider.fsType ?? 'virtfs';
+      // Mount options reflect what the provider permits.  We don't
+      // expose a writable flag generically yet, so use a sane default
+      // per-fstype (proc/devtmpfs are conventionally rw).
+      const options = (fsType === 'proc' || fsType === 'devtmpfs')
+        ? 'rw,nosuid,nodev,relatime'
+        : 'rw,relatime';
+      entries.push({ fsname: fsType, mountPath, fsType, options });
+    }
+    return entries;
   }
 
   /** Set a callback to be invoked after mutating VFS operations. */

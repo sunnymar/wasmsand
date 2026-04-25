@@ -22,9 +22,11 @@ CPAR := $(REPO_ROOT)/target/release/cpar
 LIB := $(BUILD_DIR)/libcodepod_guest_compat.a
 LIB_OBJS := \
   $(BUILD_DIR)/codepod_command.o \
+  $(BUILD_DIR)/codepod_netdb.o \
   $(BUILD_DIR)/codepod_process.o \
   $(BUILD_DIR)/codepod_sched.o \
   $(BUILD_DIR)/codepod_signal.o \
+  $(BUILD_DIR)/codepod_sysinfo.o \
   $(BUILD_DIR)/codepod_unistd.o \
   $(BUILD_DIR)/codepod_version.o
 
