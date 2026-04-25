@@ -16,7 +16,15 @@ CPCC := $(REPO_ROOT)/target/release/cpcc
 CPAR := $(REPO_ROOT)/target/release/cpar
 CPRANLIB := $(REPO_ROOT)/target/release/cpranlib
 
-WASI_EMULATED_CFLAGS := -I$(COMPAT_INCLUDE) -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS -DSOCK_RAW=3 -DSOCK_RDM=4 -DSOCK_SEQPACKET=5 -mllvm -wasm-enable-sjlj
+# `-mllvm -wasm-enable-sjlj` would lower setjmp/longjmp via the wasm
+# exception-handling proposal (calls __wasm_setjmp / __wasm_longjmp).
+# Codepod implements POSIX setjmp/longjmp on top of binaryen Asyncify
+# instead — the toolchain (cpcc) always applies --asyncify, and
+# guest-compat ships setjmp/longjmp wrappers that call host_setjmp /
+# host_longjmp, which the runtime drives through the Asyncify state
+# machine.  So we want the *plain* setjmp/longjmp prototypes here,
+# not the wasm-EH-lowered ones.
+WASI_EMULATED_CFLAGS := -I$(COMPAT_INCLUDE) -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS -DSOCK_RAW=3 -DSOCK_RDM=4 -DSOCK_SEQPACKET=5
 WASI_EMULATED_LDFLAGS := -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-process-clocks -Wl,-u,__main_argc_argv
 
 .PHONY: all fetch configure copy-fixtures clean ensure-toolchain ensure-compat

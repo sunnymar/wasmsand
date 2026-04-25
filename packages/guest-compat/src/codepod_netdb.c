@@ -16,13 +16,16 @@
 
 int h_errno = 1;  /* HOST_NOT_FOUND */
 
-const char *hstrerror(int err) {
+char *hstrerror(int err) {
+    /* Returned strings are static literals; the non-const return type
+     * matches glibc's historical signature (POSIX is stricter, but
+     * BusyBox and friends compile against the glibc one). */
     switch (err) {
-        case 1: return "Host not found";
-        case 2: return "Try again";
-        case 3: return "Non-recoverable error";
-        case 4: return "No address";
-        default: return "Unknown host error";
+        case 1: return (char *)"Host not found";
+        case 2: return (char *)"Try again";
+        case 3: return (char *)"Non-recoverable error";
+        case 4: return (char *)"No address";
+        default: return (char *)"Unknown host error";
     }
 }
 

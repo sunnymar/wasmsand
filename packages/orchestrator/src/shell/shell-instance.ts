@@ -829,6 +829,76 @@ export class ShellInstance implements ShellLike {
 // ── Async process spawning ──
 
 /**
+ * Set up the child wasm's _start invocation.
+ *
+ * If the binary is asyncified (linked against libcodepod_guest_compat,
+ * which exports the asyncify_* state-machine hooks and the
+ * `codepod_asyncify_buf_addr` getter), initialize the asyncify save-
+ * state buffer header in the child's memory and wrap _start with the
+ * pre-existing AsyncifyAsyncBridge: that drives the unwind/rewind
+ * loop for setjmp/longjmp.  Async imports continue to use JSPI's
+ * WebAssembly.promising on top of that — the two mechanisms are
+ * orthogonal (asyncify_get_state stays NORMAL during JSPI suspends),
+ * so combining them is safe.
+ *
+ * If the binary isn't asyncified (older Rust coreutils, third-party
+ * wasm), the bridge passed in stays dormant and we fall back to the
+ * plain JSPI wrap — this is the same path as before this commit.
+ *
+ * Returns a no-arg function the caller invokes to actually start the
+ * process; the kernel-side promise wiring is identical for both
+ * branches.
+ */
+function wireChildStart(
+  instance: WebAssembly.Instance,
+  bridge: AsyncifyAsyncBridge,
+): () => Promise<unknown> {
+  const exp = instance.exports;
+  const hasAsyncifyState =
+    typeof exp.asyncify_start_unwind === 'function' &&
+    typeof exp.asyncify_stop_unwind === 'function' &&
+    typeof exp.asyncify_start_rewind === 'function' &&
+    typeof exp.asyncify_stop_rewind === 'function' &&
+    typeof exp.asyncify_get_state === 'function';
+  const hasAsyncifyBuf =
+    typeof exp.codepod_asyncify_buf_addr === 'function';
+
+  if (hasAsyncifyState && hasAsyncifyBuf) {
+    // Init the static save-state buffer header (bytes 0..3 = current
+    // write/read offset starting past the 8-byte header, bytes 4..7
+    // = end-of-buffer pointer).  Then hand the bridge the exports.
+    const memory = exp.memory as WebAssembly.Memory;
+    const bufAddr = (exp.codepod_asyncify_buf_addr as () => number)();
+    const bufSize = typeof exp.codepod_asyncify_buf_size === 'function'
+      ? (exp.codepod_asyncify_buf_size as () => number)()
+      : 16384;
+    const view = new DataView(memory.buffer);
+    view.setUint32(bufAddr,     bufAddr + 8,        true);
+    view.setUint32(bufAddr + 4, bufAddr + bufSize,  true);
+
+    bridge.initFromInstance(instance, bufAddr);
+
+    // The bridge already has its hostSetjmp / hostLongjmp methods
+    // wired into imports.codepod (done pre-instantiation by the
+    // caller), so once the instance starts running and hits a
+    // setjmp call, the bridge's state machine takes over.
+    const wrappedStart = bridge.wrapExport(
+      exp._start as (...args: number[]) => number,
+    );
+    return () => wrappedStart();
+  }
+
+  // Non-asyncify path: existing JSPI wrap.  The bridge passed in is
+  // unused (its hostSetjmp/hostLongjmp methods stay in their
+  // "uninitialized" branch and tolerate calls without crashing).
+  let startFn = exp._start as Function;
+  if (typeof (WebAssembly as any).promising === 'function') {
+    startFn = (WebAssembly as any).promising(startFn);
+  }
+  return () => Promise.resolve(startFn());
+}
+
+/**
  * Spawn a child WASM process asynchronously.
  *
  * Called by the kernel when the shell's Rust code calls `host_spawn_async`.
@@ -960,8 +1030,26 @@ function spawnAsyncProcess(
     }
   }
 
-  // JSPI-wrap fd_read/fd_write for pipe suspension in the child process.
-  if (typeof WebAssembly.Suspending === 'function') {
+  // The JSPI Suspending wraps below only work inside a
+  // WebAssembly.promising-wrapped export.  An asyncified binary is
+  // driven through bridge.wrapExport instead — Suspending imports
+  // would throw the moment the wasm calls them.  Detect asyncify by
+  // inspecting the module's exports BEFORE instantiation (post-link
+  // wasm-opt --asyncify always emits asyncify_start_unwind), and
+  // skip the JSPI wraps for those binaries.  bridge.hostSetjmp /
+  // hostLongjmp were already wired above and the bridge sees
+  // Promise returns through ordinary import calls just fine
+  // (wrapImport could be added later if we want async-import
+  // suspension via asyncify too — for now async imports on
+  // asyncified children just synchronously return their non-Promise
+  // value, matching the behavior on hosts without JSPI at all).
+  const childIsAsyncified = WebAssembly.Module
+    .exports(module)
+    .some(e => e.name === 'asyncify_start_unwind');
+
+  // JSPI-wrap fd_read/fd_write for pipe suspension in the child
+  // process — applies only on the JSPI path.
+  if (!childIsAsyncified && typeof WebAssembly.Suspending === 'function') {
     imports.wasi_snapshot_preview1.fd_read = new WebAssembly.Suspending(
       imports.wasi_snapshot_preview1.fd_read as (...args: number[]) => number,
     ) as unknown as WebAssembly.ImportValue;
@@ -1036,8 +1124,21 @@ function spawnAsyncProcess(
     // Alias host_spawn_async for WASM compatibility
     imports.codepod.host_spawn_async = childKernelImports.host_spawn as WebAssembly.ImportValue;
 
-    // JSPI-wrap async syscalls in the child's codepod imports
-    if (typeof WebAssembly.Suspending === 'function') {
+    // Per-child Asyncify bridge.  Created BEFORE instantiation so the
+    // host_setjmp / host_longjmp imports the wasm gets bound to point
+    // at the bridge's state machine — bindings are baked in at
+    // instantiate() time and can't be swapped afterward.  The bridge
+    // is dormant until initFromInstance is called (post-instantiate)
+    // and tolerates pre-init calls (hostSetjmp returns 0, hostLongjmp
+    // throws), so a binary that imports the symbols but never invokes
+    // them still works on the JSPI / non-asyncify path.
+    const childAsyncifyBridge = new AsyncifyAsyncBridge();
+    imports.codepod.host_setjmp = childAsyncifyBridge.hostSetjmp as unknown as WebAssembly.ImportValue;
+    imports.codepod.host_longjmp = childAsyncifyBridge.hostLongjmp as unknown as WebAssembly.ImportValue;
+
+    // JSPI-wrap async syscalls in the child's codepod imports.
+    // Same gate as fd_read/fd_write: skipped for asyncified children.
+    if (!childIsAsyncified && typeof WebAssembly.Suspending === 'function') {
       imports.codepod.host_waitpid = new WebAssembly.Suspending(
         childKernelImports.host_waitpid as (...args: number[]) => Promise<number>,
       ) as unknown as WebAssembly.ImportValue;
@@ -1063,16 +1164,17 @@ function spawnAsyncProcess(
       childMemRef = instance.exports.memory as WebAssembly.Memory;
       host.setMemory(childMemRef);
 
-      let startFn = instance.exports._start as Function;
-      if (typeof (WebAssembly as any).promising === 'function') {
-        startFn = (WebAssembly as any).promising(startFn);
-      }
-
-      const promise = Promise.resolve().then(() => startFn()).catch(() => {});
+      const startFn = wireChildStart(instance, childAsyncifyBridge);
+      const promise: Promise<void> = Promise.resolve().then(() => startFn()).then(() => undefined).catch(() => {});
       kernel.attachProcess(pid, promise, host);
     }).catch(handleInstantiationError);
   } else {
-    // Module doesn't need codepod imports — simpler path
+    // Module doesn't need codepod imports — simpler path.  No bridge
+    // wiring is possible without the codepod_asyncify_buf_addr export
+    // (which lives in libcodepod_guest_compat), so setjmp/longjmp
+    // aren't supported on this branch — but binaries that don't
+    // import the codepod namespace also can't use setjmp via our
+    // sjlj runtime, so the gap is consistent.
     adapter.instantiate(module, imports).then((instance) => {
       if (checkMemLimit(instance)) return;
       host.setMemory(instance.exports.memory as WebAssembly.Memory);

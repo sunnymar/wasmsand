@@ -206,6 +206,35 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       } catch { return -1; }
     },
 
+    // host_setjmp(env_ptr) -> i32
+    // POSIX setjmp via Asyncify.  Phase 1 (this commit): a stub that
+    // returns 0 on every call — sufficient for any guest binary that
+    // links setjmp's prototype but never actually invokes it (most
+    // applets), and for callers that ignore setjmp's return value.
+    // Phase 2 will drive the Asyncify state machine to capture the
+    // current save-state into env and return the matching longjmp val
+    // on rewind.  Keeping a stub here unblocks the build so toolchain
+    // changes (--asyncify pass, dropped -wasm-enable-sjlj) ship
+    // alongside the host-side stub; the full impl is contained.
+    host_setjmp(envPtr: number): number {
+      void envPtr;
+      return 0;
+    },
+
+    // host_longjmp(env_ptr, val) -> void
+    // Phase 1 stub: a longjmp call without a matching setjmp save is
+    // undefined behavior in POSIX — we surface it as a guest abort
+    // (WasiExit 134, the SIGABRT exit code) rather than silently
+    // returning, so a misuse during the stub period is loud rather
+    // than a mysterious continuation.  Phase 2 replaces this with the
+    // real Asyncify-driven unwind+rewind back to the matching
+    // host_setjmp call site.
+    host_longjmp(envPtr: number, val: number): void {
+      void envPtr; void val;
+      if (opts.wasiHost) opts.wasiHost.cancelExecution();
+      throw new Error('longjmp without matching setjmp (Asyncify-based sjlj is Phase 2)');
+    },
+
     // host_yield() -> void
     // Async — yields to the JS microtask queue, allowing other WASM stacks to run.
     // This is the cooperative scheduling primitive: sleep(0).

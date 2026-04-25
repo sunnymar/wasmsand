@@ -25,12 +25,13 @@ LIB_OBJS := \
   $(BUILD_DIR)/codepod_netdb.o \
   $(BUILD_DIR)/codepod_process.o \
   $(BUILD_DIR)/codepod_sched.o \
+  $(BUILD_DIR)/codepod_setjmp.o \
   $(BUILD_DIR)/codepod_signal.o \
   $(BUILD_DIR)/codepod_sysinfo.o \
   $(BUILD_DIR)/codepod_unistd.o \
   $(BUILD_DIR)/codepod_version.o
 
-CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal
+CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp
 CANARIES := $(addprefix $(BUILD_DIR)/,$(addsuffix -canary.wasm,$(CANARY_NAMES)))
 
 .PHONY: all lib canaries copy-fixtures clean ensure-toolchain
@@ -62,7 +63,6 @@ $(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(LIB) | $(BUILD_DIR) ensur
 	CPCC_ARCHIVE=$(abspath $(LIB)) \
 	CPCC_INCLUDE=$(INCLUDE) \
 	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/$*-canary.pre-opt.wasm \
-	CPCC_NO_WASM_OPT=1 \
 	$(CPCC) $< -o $@
 
 canaries: $(CANARIES)

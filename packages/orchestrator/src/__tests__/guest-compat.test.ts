@@ -112,6 +112,58 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('affinity:get=1,set0=0,set1=einval');
   });
 
+  // ──────────────────────────────────────────────────────────────────────
+  // setjmp/longjmp — POSIX exception-style control flow over Asyncify.
+  //
+  // codepod implements setjmp/longjmp on top of binaryen's Asyncify pass:
+  // setjmp captures the current Asyncify save-state into env, longjmp
+  // triggers an unwind that the runtime rewinds back to setjmp's call
+  // site so the import returns the longjmp value.  These cases exercise
+  // the full surface — first-call zero return, value preservation across
+  // longjmp, the POSIX zero→one promotion, longjmp from a few frames
+  // deep, and negative values — to make sure every dimension of the
+  // contract is hit.
+  // ──────────────────────────────────────────────────────────────────────
+  describe('setjmp-canary', () => {
+    it('setjmp returns 0 on the first call', async () => {
+      sandbox = await Sandbox.create({ wasmDir: FIXTURES, adapter: new NodeAdapter() });
+      const r = await sandbox.run('setjmp-canary --case setjmp_returns_zero');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('{"case":"setjmp_returns_zero","exit":0,"observed":0}');
+    });
+
+    it('longjmp(env, 42) makes setjmp return 42', async () => {
+      sandbox = await Sandbox.create({ wasmDir: FIXTURES, adapter: new NodeAdapter() });
+      const r = await sandbox.run('setjmp-canary --case smoke');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('{"case":"smoke","exit":0,"observed":42}');
+    });
+
+    it('longjmp(env, 0) is promoted to 1 (POSIX)', async () => {
+      sandbox = await Sandbox.create({ wasmDir: FIXTURES, adapter: new NodeAdapter() });
+      const r = await sandbox.run('setjmp-canary --case longjmp_zero');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('{"case":"longjmp_zero","exit":0,"observed":1}');
+    });
+
+    it('longjmp from N frames deep unwinds intermediate frames', async () => {
+      sandbox = await Sandbox.create({ wasmDir: FIXTURES, adapter: new NodeAdapter() });
+      const r = await sandbox.run('setjmp-canary --case longjmp_through_calls');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('{"case":"longjmp_through_calls","exit":0,"observed":7}');
+      // The "middle" frame's post-longjmp diagnostic must NOT appear:
+      // longjmp must skip the intermediate frame, not return to it.
+      expect(r.stderr).not.toContain('returned from longjmp');
+    });
+
+    it('preserves negative longjmp values byte-for-byte', async () => {
+      sandbox = await Sandbox.create({ wasmDir: FIXTURES, adapter: new NodeAdapter() });
+      const r = await sandbox.run('setjmp-canary --case longjmp_negative');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('{"case":"longjmp_negative","exit":0,"observed":-7}');
+    });
+  });
+
   it('routes stderr through stdout after dup2(1, 2)', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,

@@ -117,12 +117,18 @@ fn main() -> Result<ExitCode> {
             .unwrap_or(ExitCode::FAILURE));
     }
 
-    // Post-link: if an output `.wasm` was produced and the user asked for
-    // pre-opt preservation, copy the just-linked binary to the stable path
-    // BEFORE any optional wasm-opt pass.
-    if let Some(out_wasm) = preserve::output_wasm(&cli.args) {
-        preserve::copy_to_preserve(&out_wasm, env.preserve_pre_opt.as_deref())?;
-        wasm_opt::maybe_run(&out_wasm, &env.wasm_opt)?;
+    // Post-link: pre-opt preservation is gated on the user naming a
+    // `.wasm` output (canary/test builds), but wasm-opt runs against
+    // any link output — BusyBox links to `busybox_unstripped` with no
+    // extension, and that binary is still wasm by virtue of
+    // --target=wasm32-wasip1 and still wants the --asyncify pass.
+    if is_link_invocation(&cli.args) {
+        if let Some(out_wasm) = preserve::output_wasm(&cli.args) {
+            preserve::copy_to_preserve(&out_wasm, env.preserve_pre_opt.as_deref())?;
+        }
+        if let Some(out_path) = preserve::output_path(&cli.args) {
+            wasm_opt::maybe_run(&out_path, &env.wasm_opt)?;
+        }
     }
 
     Ok(ExitCode::SUCCESS)

@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Resolve the target `-o` from a user argv. Returns `None` for
-/// compile-only invocations (no `-o foo.wasm`) — preservation has
-/// nothing to do there. When multiple `-o` appear, follows clang's
-/// "last one wins" convention.
+/// Resolve the target `-o` from a user argv with a `.wasm` extension.
+/// Returns `None` for compile-only invocations (no `-o foo.wasm`) —
+/// preservation only triggers when the user explicitly named a `.wasm`
+/// output, which by convention is the final link artifact.  When
+/// multiple `-o` appear, follows clang's "last one wins" convention.
 pub fn output_wasm(user_args: &[String]) -> Option<PathBuf> {
     let mut iter = user_args.iter();
     let mut last = None;
@@ -15,6 +16,24 @@ pub fn output_wasm(user_args: &[String]) -> Option<PathBuf> {
                 if p.extension().and_then(|e| e.to_str()) == Some("wasm") {
                     last = Some(p);
                 }
+            }
+        }
+    }
+    last
+}
+
+/// Resolve the target `-o` from a user argv, regardless of extension.
+/// Used by the post-link wasm-opt pass: link output is wasm by virtue
+/// of `--target=wasm32-wasip1`, not by file extension (BusyBox links
+/// to `busybox_unstripped` with no extension; cargo-style builds use
+/// `<crate>.wasm`; both are wasm and both want the asyncify pass).
+pub fn output_path(user_args: &[String]) -> Option<PathBuf> {
+    let mut iter = user_args.iter();
+    let mut last = None;
+    while let Some(arg) = iter.next() {
+        if arg == "-o" {
+            if let Some(v) = iter.next() {
+                last = Some(PathBuf::from(v));
             }
         }
     }
