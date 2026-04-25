@@ -232,8 +232,34 @@ export class WasiHost {
     return this.ioFds;
   }
 
-  /** Public fd renumbering entrypoint for guest-side libc compatibility. */
+  /** Public fd renumbering entrypoint for guest-side libc compatibility.
+   *
+   * POSIX `dup2(oldfd, newfd)` aliases `newfd` to the same open file
+   * description as `oldfd` and leaves `oldfd` open — unlike WASI
+   * `fd_renumber`, which closes the source.  The guest-compat shim calls
+   * here via `host_dup2`, so we must preserve the source side.  Copying
+   * the ioFds entry (instead of routing through `fdRenumber`) keeps
+   * `write(fromFd, ...)` working after `dup2`.
+   */
   renumberFd(fromFd: number, toFd: number): number {
+    if (fromFd === toFd) {
+      if (this.ioFds.has(fromFd) || this.dirFds.has(fromFd) || this.fdTable.isOpen(fromFd)) {
+        return WASI_ESUCCESS;
+      }
+      return WASI_EBADF;
+    }
+    if (this.ioFds.has(fromFd)) {
+      const source = this.ioFds.get(fromFd)!;
+      if (this.ioFds.has(toFd)) {
+        this.ioFds.delete(toFd);
+      } else if (this.dirFds.has(toFd)) {
+        this.dirFds.delete(toFd);
+      } else if (this.fdTable.isOpen(toFd)) {
+        try { this.fdTable.close(toFd); } catch { /* ignore */ }
+      }
+      this.ioFds.set(toFd, source);
+      return WASI_ESUCCESS;
+    }
     return this.fdRenumber(fromFd, toFd);
   }
 

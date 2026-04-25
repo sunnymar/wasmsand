@@ -8,8 +8,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // Constants from codepod's signal.h (same numeric values as WASI/Linux)
 const SIGINT: i32 = 2;
 const SIGTERM: i32 = 15;
-const SIGUSR1: i32 = 10;
 const SIGUSR2: i32 = 12;
+// sigaddset / sigismember are bounded by sigset_t's 8-bit width (see
+// include/signal.h), so sigset-manipulation cases pick a second signal
+// within that range. SIGQUIT (3) is distinct from SIGINT (2) and fits.
+const SIGQUIT: i32 = 3;
 const SIG_SETMASK: i32 = 2;
 // SIG_ERR = (sighandler_t)(intptr_t)-1 = usize::MAX on wasm32 (wrapping cast)
 const SIG_ERR: usize = usize::MAX;
@@ -188,7 +191,7 @@ fn case_sigfillset_fills() -> i32 {
         emit("sigfillset_fills", 1, None, None);
         return 1;
     }
-    if unsafe { sigismember(&s, SIGTERM) } != 1 {
+    if unsafe { sigismember(&s, SIGQUIT) } != 1 {
         emit("sigfillset_fills", 1, None, None);
         return 1;
     }
@@ -212,7 +215,7 @@ fn case_sigaddset_adds() -> i32 {
         emit("sigaddset_adds", 1, None, None);
         return 1;
     }
-    if unsafe { sigismember(&s, SIGTERM) } != 0 {
+    if unsafe { sigismember(&s, SIGQUIT) } != 0 {
         emit("sigaddset_adds", 1, None, None);
         return 1;
     }
@@ -236,7 +239,7 @@ fn case_sigdelset_removes() -> i32 {
         emit("sigdelset_removes", 1, None, None);
         return 1;
     }
-    if unsafe { sigismember(&s, SIGTERM) } != 1 {
+    if unsafe { sigismember(&s, SIGQUIT) } != 1 {
         emit("sigdelset_removes", 1, None, None);
         return 1;
     }
@@ -257,7 +260,7 @@ fn case_sigismember_reports() -> i32 {
         return 1;
     }
     let yes = unsafe { sigismember(&s, SIGINT) };
-    let no = unsafe { sigismember(&s, SIGTERM) };
+    let no = unsafe { sigismember(&s, SIGQUIT) };
     if yes != 1 || no != 0 {
         emit("sigismember_reports", 1, None, None);
         return 1;
@@ -274,7 +277,7 @@ fn case_sigprocmask_roundtrip() -> i32 {
         emit("sigprocmask_roundtrip", 1, None, Some(errno));
         return 1;
     }
-    if unsafe { sigaddset(&mut set, SIGUSR1) } != 0 {
+    if unsafe { sigaddset(&mut set, SIGQUIT) } != 0 {
         let errno = unsafe { *__errno_location() };
         emit("sigprocmask_roundtrip", 1, None, Some(errno));
         return 1;
@@ -289,7 +292,7 @@ fn case_sigprocmask_roundtrip() -> i32 {
         emit("sigprocmask_roundtrip", 1, None, Some(errno));
         return 1;
     }
-    if unsafe { sigismember(&oldset, SIGUSR1) } != 1 {
+    if unsafe { sigismember(&oldset, SIGQUIT) } != 1 {
         emit("sigprocmask_roundtrip", 1, None, None);
         return 1;
     }

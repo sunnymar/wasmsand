@@ -71,11 +71,14 @@ static int case_sigemptyset_clears(void) {
   return 0;
 }
 
+/* sigset_t is `unsigned char` (see include/signal.h), so sigaddset /
+ * sigismember only handle signals 0..7.  Cases pick a "present" signal
+ * (SIGINT=2) and a "not present" signal (SIGQUIT=3) within that range. */
 static int case_sigfillset_fills(void) {
   sigset_t s;
   if (sigfillset(&s) != 0) { emit("sigfillset_fills", 1, NULL, 1, errno); return 1; }
   if (sigismember(&s, SIGINT) != 1) { emit("sigfillset_fills", 1, NULL, 0, 0); return 1; }
-  if (sigismember(&s, SIGTERM) != 1) { emit("sigfillset_fills", 1, NULL, 0, 0); return 1; }
+  if (sigismember(&s, SIGQUIT) != 1) { emit("sigfillset_fills", 1, NULL, 0, 0); return 1; }
   emit("sigfillset_fills", 0, "sigset:full", 0, 0);
   return 0;
 }
@@ -85,7 +88,7 @@ static int case_sigaddset_adds(void) {
   if (sigemptyset(&s) != 0) { emit("sigaddset_adds", 1, NULL, 1, errno); return 1; }
   if (sigaddset(&s, SIGINT) != 0) { emit("sigaddset_adds", 1, NULL, 1, errno); return 1; }
   if (sigismember(&s, SIGINT) != 1) { emit("sigaddset_adds", 1, NULL, 0, 0); return 1; }
-  if (sigismember(&s, SIGTERM) != 0) { emit("sigaddset_adds", 1, NULL, 0, 0); return 1; }
+  if (sigismember(&s, SIGQUIT) != 0) { emit("sigaddset_adds", 1, NULL, 0, 0); return 1; }
   emit("sigaddset_adds", 0, "sigset:add", 0, 0);
   return 0;
 }
@@ -95,7 +98,7 @@ static int case_sigdelset_removes(void) {
   if (sigfillset(&s) != 0) { emit("sigdelset_removes", 1, NULL, 1, errno); return 1; }
   if (sigdelset(&s, SIGINT) != 0) { emit("sigdelset_removes", 1, NULL, 1, errno); return 1; }
   if (sigismember(&s, SIGINT) != 0) { emit("sigdelset_removes", 1, NULL, 0, 0); return 1; }
-  if (sigismember(&s, SIGTERM) != 1) { emit("sigdelset_removes", 1, NULL, 0, 0); return 1; }
+  if (sigismember(&s, SIGQUIT) != 1) { emit("sigdelset_removes", 1, NULL, 0, 0); return 1; }
   emit("sigdelset_removes", 0, "sigset:del", 0, 0);
   return 0;
 }
@@ -105,7 +108,7 @@ static int case_sigismember_reports(void) {
   if (sigemptyset(&s) != 0) { emit("sigismember_reports", 1, NULL, 1, errno); return 1; }
   if (sigaddset(&s, SIGINT) != 0) { emit("sigismember_reports", 1, NULL, 1, errno); return 1; }
   int yes = sigismember(&s, SIGINT);
-  int no = sigismember(&s, SIGTERM);
+  int no = sigismember(&s, SIGQUIT);
   if (yes != 1 || no != 0) { emit("sigismember_reports", 1, NULL, 0, 0); return 1; }
   emit("sigismember_reports", 0, "sigset:ismember", 0, 0);
   return 0;
@@ -114,10 +117,10 @@ static int case_sigismember_reports(void) {
 static int case_sigprocmask_roundtrip(void) {
   sigset_t set, oldset;
   if (sigemptyset(&set) != 0) { emit("sigprocmask_roundtrip", 1, NULL, 1, errno); return 1; }
-  if (sigaddset(&set, SIGUSR1) != 0) { emit("sigprocmask_roundtrip", 1, NULL, 1, errno); return 1; }
+  if (sigaddset(&set, SIGQUIT) != 0) { emit("sigprocmask_roundtrip", 1, NULL, 1, errno); return 1; }
   if (sigprocmask(SIG_SETMASK, &set, NULL) != 0) { emit("sigprocmask_roundtrip", 1, NULL, 1, errno); return 1; }
   if (sigprocmask(SIG_SETMASK, NULL, &oldset) != 0) { emit("sigprocmask_roundtrip", 1, NULL, 1, errno); return 1; }
-  if (sigismember(&oldset, SIGUSR1) != 1) { emit("sigprocmask_roundtrip", 1, NULL, 0, 0); return 1; }
+  if (sigismember(&oldset, SIGQUIT) != 1) { emit("sigprocmask_roundtrip", 1, NULL, 0, 0); return 1; }
   emit("sigprocmask_roundtrip", 0, "sigprocmask:roundtrip", 0, 0);
   return 0;
 }

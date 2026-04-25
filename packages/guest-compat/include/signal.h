@@ -6,6 +6,14 @@
 #include <sys/types.h>
 
 #if !defined(__wasilibc___typedef_sigset_t_h) && !defined(__DEFINED_sigset_t)
+/* Matches wasi-libc's current placeholder typedef (share/wasi-sysroot/
+ * include/__typedef_sigset_t.h: `typedef unsigned char sigset_t;`).
+ * Widening here would corrupt the stack of any caller compiled against
+ * the canonical wasi-libc typedef (every Rust program hits that path via
+ * libc-crate's `pub type sigset_t = c_uchar`, and their `zeroed::<sigset_t>`
+ * allocates only one byte).  Keeping the 1-byte encoding limits
+ * sigaddset/sigdelset to signals 0..7; conformance cases only use
+ * signals within that range for that reason. */
 typedef unsigned char sigset_t;
 #define __DEFINED_sigset_t
 #endif
