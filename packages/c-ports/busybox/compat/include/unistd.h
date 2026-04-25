@@ -105,6 +105,36 @@ static inline int setsid(void) { errno = ENOSYS; return -1; }
 static inline int ttyname_r(int fd, char *buf, size_t buflen) {
     (void)fd; (void)buf; (void)buflen; errno = ENOSYS; return ENOSYS; }
 
+/* Process tree introspection.  wasi-libc has getpid(); the rest aren't
+ * exposed.  Sandbox is single-process from the guest's perspective:
+ * the parent is the codepod kernel ("init"), and process groups /
+ * sessions don't apply.  Stub accordingly. */
+static inline pid_t getppid(void) { return 1; }
+static inline pid_t getpgrp(void) { return getpid(); }
+static inline pid_t getpgid(pid_t pid) { (void)pid; return 1; }
+static inline int setpgid(pid_t pid, pid_t pgid) {
+    (void)pid; (void)pgid; return 0; }
+static inline int setpgrp(void) { return 0; }
+static inline pid_t getsid(pid_t pid) { (void)pid; return 1; }
+
+/* Signal delivery.  kill() is declared by <signal.h> on Linux — many
+ * BusyBox applets reach for it via that include path, but our shipped
+ * <signal.h> compat doesn't surface it.  Declare it here too so callers
+ * that include only <unistd.h> still see it.  Real semantics: the
+ * codepod kernel owns process management; cross-process signals aren't
+ * supported, so stub to ESRCH (no such process) for any non-self pid
+ * and 0 for `kill(getpid(), 0)` (existence probe of self). */
+#include <signal.h>
+static inline int kill(pid_t pid, int sig) {
+    (void)sig;
+    if (pid == getpid() || pid == 0 || pid == -1) return 0;
+    errno = ESRCH;
+    return -1;
+}
+static inline int killpg(pid_t pgrp, int sig) {
+    (void)pgrp; (void)sig; errno = ESRCH; return -1;
+}
+
 /* uid/gid accessors – return root (0) as a safe default */
 static inline uid_t getuid(void) { return 0; }
 static inline uid_t geteuid(void) { return 0; }

@@ -19,8 +19,13 @@
 #include <time.h>
 #include <unistd.h>
 
+/* getentropy(3) is provided by wasi-libc and routes through WASI
+ * `random_get`, which the codepod host services with crypto.getRandomValues()
+ * (see packages/orchestrator/src/wasi/wasi-host.ts:randomGet).  So this
+ * is the canonical crypto-quality entropy source for the sandbox. */
+extern int getentropy(void *buffer, size_t length);
+
 static inline char *codepod_mktemp_internal(char *tmpl) {
-    static unsigned long codepod_mktemp_counter = 0;
     static const char chars[] =
         "abcdefghijklmnopqrstuvwxyz"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -35,16 +40,15 @@ static inline char *codepod_mktemp_internal(char *tmpl) {
         if (n) tmpl[0] = '\0';
         return tmpl;
     }
-    /* Mix in time + a per-process counter so successive calls differ
-     * even when the host clock has coarse granularity. */
-    unsigned long seed = (unsigned long)time(NULL) ^ ++codepod_mktemp_counter;
-    seed ^= (seed << 13);
-    seed ^= (seed >> 7);
-    seed ^= (seed << 17);
+    unsigned char raw[6];
+    if (getentropy(raw, sizeof raw) != 0) {
+        /* getentropy can only fail if the host is broken; surface that
+         * rather than fall back to a weak PRNG. */
+        if (n) tmpl[0] = '\0';
+        return tmpl;
+    }
     for (int i = 0; i < 6; i++) {
-        tmpl[n - 6 + i] = chars[seed % 62];
-        seed /= 62;
-        seed = seed * 1103515245UL + 12345UL;
+        tmpl[n - 6 + i] = chars[raw[i] % 62];
     }
     return tmpl;
 }
