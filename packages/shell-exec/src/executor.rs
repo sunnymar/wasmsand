@@ -1656,6 +1656,19 @@ pub fn exec_command(
             let mut pids: Vec<(i32, usize)> = Vec::new(); // (pid, stage_index)
             let mut last_result = RunResult::empty();
             let mut last_stage_was_spawned = false;
+            // When the final stage carries a `>file` / `>>file` / `&>file`
+            // redirect, route its stdout to a pipe sink instead of the
+            // original fd 1; after waitpid we drain the sink and feed the
+            // bytes to apply_output_redirects, which already knows how to
+            // turn (data, redirects) into VFS writes.  Without this, the
+            // child writes straight to fd 1 and the redirect silently
+            // disappears — which is exactly how `… | tsort >actual`
+            // ended up with an empty `actual` file in the BusyBox tests.
+            let mut last_stage_stdout_sink: Option<(
+                i32,
+                i32,
+                Vec<codepod_shell::ast::Redirect>,
+            )> = None;
 
             for (i, cmd) in commands.iter().enumerate() {
                 // Set up fds for this pipeline stage:
@@ -1693,6 +1706,60 @@ pub fn exec_command(
                         redirects,
                         assignments,
                     } => {
+                        // Stage-level `<file` / `<<heredoc` redirect: allocate
+                        // a pipe, push the file/heredoc bytes into the write
+                        // end, close it (so the reader hits EOF), and use the
+                        // read end as the stage's stdin fd.  Without this,
+                        // pipelines like `grep <actual | cut -d: -f1` would
+                        // pass the pipeline's plumbed stdin fd straight to
+                        // grep, ignoring `<actual` entirely (the BusyBox
+                        // tsort.tests `aline=$(grep -nxF a <actual | cut)`
+                        // pattern was the canary).
+                        let mut stage_stdin_override: Option<i32> = None;
+                        for redir in redirects.iter() {
+                            let mut data: Option<Vec<u8>> = None;
+                            match &redir.redirect_type {
+                                RedirectType::StdinFrom(path) => {
+                                    let resolved = state.resolve_path(path);
+                                    if let Ok(bytes) = host.read_file(&resolved) {
+                                        data = Some(bytes);
+                                    }
+                                }
+                                RedirectType::Heredoc(content) => {
+                                    data = Some(
+                                        expand_raw_string(state, content, Some(&exec_fn))
+                                            .into_bytes(),
+                                    );
+                                }
+                                RedirectType::HeredocQuoted(content) => {
+                                    data = Some(content.clone().into_bytes());
+                                }
+                                RedirectType::HeredocStrip(content) => {
+                                    let expanded =
+                                        expand_raw_string(state, content, Some(&exec_fn));
+                                    let stripped = expanded
+                                        .lines()
+                                        .map(|l| l.trim_start_matches('\t'))
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    data = Some(stripped.into_bytes());
+                                }
+                                _ => {}
+                            }
+                            if let Some(bytes) = data {
+                                if let Ok((r, w)) = host.pipe() {
+                                    let _ = host.write_fd(w, &bytes);
+                                    let _ = host.close_fd(w);
+                                    stage_stdin_override = Some(r);
+                                }
+                            }
+                        }
+                        let stage_stdin_fd = stage_stdin_override.unwrap_or(stage_stdin_fd);
+                        if stage_stdin_override.is_some() {
+                            state.stdin_fd = stage_stdin_fd;
+                            let _ = host.dup2(stage_stdin_fd, 0);
+                        }
+
                         // If 2>&1 redirect, connect stderr to stdout pipe.
                         let has_stderr_to_stdout = redirects
                             .iter()
@@ -1869,6 +1936,35 @@ pub fn exec_command(
                                             let spawn_args_refs: Vec<&str> =
                                                 resolved_args.iter().map(|s| s.as_str()).collect();
 
+                                            // Last-stage `>file` / `>>file` / `&>file`
+                                            // intercept: swap stage_stdout_fd for a pipe sink
+                                            // (drained after waitpid).
+                                            let mut effective_stdout_fd = stage_stdout_fd;
+                                            if i == stage_count - 1
+                                                && last_stage_stdout_sink.is_none()
+                                                && redirects.iter().any(|r| matches!(
+                                                    &r.redirect_type,
+                                                    RedirectType::StdoutOverwrite(p) if p != "&2" && p != "&1"
+                                                ) || matches!(
+                                                    &r.redirect_type,
+                                                    RedirectType::StdoutAppend(_)
+                                                        | RedirectType::BothOverwrite(_)
+                                                ))
+                                            {
+                                                if let Ok((sr, sw)) = host.pipe() {
+                                                    effective_stdout_fd = sw;
+                                                    last_stage_stdout_sink =
+                                                        Some((sr, sw, redirects.clone()));
+                                                }
+                                            }
+                                            // If stderr_to_stdout was set up by stage scaffolding,
+                                            // make sure the stderr fd tracks the new stdout fd too.
+                                            let effective_stderr_fd = if has_stderr_to_stdout {
+                                                effective_stdout_fd
+                                            } else {
+                                                2
+                                            };
+
                                             match host.spawn(
                                                 &prog,
                                                 argv0.as_deref(),
@@ -1877,8 +1973,8 @@ pub fn exec_command(
                                                 &state.cwd,
                                                 "", // stdin comes from pipe fd, not string
                                                 stage_stdin_fd,
-                                                stage_stdout_fd,
-                                                2, // stderr_fd — dup2'd to stdout by stage setup if 2>&1
+                                                effective_stdout_fd,
+                                                effective_stderr_fd,
                                                 0,
                                             ) {
                                                 Ok(pid) => {
@@ -2005,6 +2101,21 @@ pub fn exec_command(
                             pipefail_code = 1;
                         }
                     }
+                }
+            }
+
+            // Drain the last-stage stdout sink and apply file redirects
+            // (>, >>, &>).  Pipe must be closed before we read so the read
+            // sees EOF — host.read_fd blocks until the writer side closes.
+            if let Some((r, w, sink_redirects)) = last_stage_stdout_sink.take() {
+                let _ = host.close_fd(w);
+                let data = host.read_fd(r).unwrap_or_default();
+                let _ = host.close_fd(r);
+                let mut sink_stdout = String::from_utf8_lossy(&data).to_string();
+                let mut sink_stderr = String::new();
+                apply_output_redirects(state, host, &sink_redirects, &mut sink_stdout, &mut sink_stderr)?;
+                if !sink_stderr.is_empty() {
+                    let _ = host.write_fd(2, sink_stderr.as_bytes());
                 }
             }
 

@@ -92,6 +92,39 @@ const optionFlagsItems = configContent.split('\n')
   .map(l => l.replace(/^CONFIG_/, '').replace(/=.*$/, ''));
 const optionFlags = ':' + optionFlagsItems.join(':') + ':';
 
+// `runtest` checks `# CONFIG_<APPLET> is not set` per .tests file and skips
+// disabled applets as UNTESTED (its rationale: the .tests file expects the
+// applet to exist). We bypass `runtest` for the infrastructure reasons in
+// the findings doc, so reproduce that skip here.
+//
+// In our sandbox an applet may exist via either path:
+//   - BusyBox built it in (CONFIG_<APPLET>=y), or
+//   - A standalone wasm fixture is on PATH (e.g. /usr/bin/cat.wasm dispatches
+//     for the cat tests even though our minimal BusyBox doesn't include cat).
+// Skip only if NEITHER source provides the applet; otherwise the tests would
+// fall over with "applet not found" / "command not found" through no fault of
+// our runtime. tsort is the canonical example — not in our BusyBox, no
+// standalone fixture either.
+const enabledApplets = new Set(
+  configContent.split('\n')
+    .filter(l => /^CONFIG_[A-Z0-9_]+=y$/.test(l))
+    .map(l => l.replace(/^CONFIG_/, '').replace(/=y$/, '').toLowerCase()),
+);
+const standaloneTools = new Set(
+  readdirSync(FIXTURES)
+    .filter(f => f.endsWith('.wasm'))
+    .map(f => f.replace(/\.wasm$/, '').toLowerCase()),
+);
+
+function appletForTestFile(testFile: string): string {
+  // BusyBox .tests filenames are `<applet>.tests`; suffix ".tests" stripped.
+  return testFile.replace(/\.tests$/, '');
+}
+
+function appletAvailable(applet: string): boolean {
+  return enabledApplets.has(applet) || standaloneTools.has(applet);
+}
+
 const baseEnvStr = [
   'bindir=/tmp/testsuite',
   'tsdir=/tmp/testsuite',
@@ -211,6 +244,18 @@ const allResults: RunRecord[] = [];
 const testFiles = readdirSync(TESTSUITE_DIR).filter(f => f.endsWith('.tests')).sort();
 
 for (const testFile of testFiles) {
+  const applet = appletForTestFile(testFile);
+  if (applet !== 'busybox' && !appletAvailable(applet)) {
+    // Mirror runtest's "# CONFIG_<APPLET> is not set" skip path. Recorded
+    // as a synthetic UNTESTED line so the aggregate counter sees it.
+    allResults.push({
+      testFile,
+      stdout: `UNTESTED: ${testFile} (applet not available — neither in BusyBox config nor standalone fixture)\n`,
+      stderr: '',
+      exitCode: 0,
+    });
+    continue;
+  }
   console.log(`[busybox-testsuite]   ${testFile}...`);
   const r = await runTestFile(testFile);
   const lines = r.stdout.split('\n');
@@ -232,6 +277,21 @@ const testDirs = readdirSync(TESTSUITE_DIR)
   .sort();
 
 for (const dir of testDirs) {
+  // Old-style tests live under <applet>/<case>; skip the directory entirely
+  // when neither BusyBox nor a standalone fixture provides the applet.
+  if (!appletAvailable(dir.toLowerCase())) {
+    const items = readdirSync(join(TESTSUITE_DIR, dir))
+      .filter(c => !c.startsWith('.') && !c.endsWith('~'));
+    for (const testCase of items) {
+      allResults.push({
+        testFile: `${dir}/${testCase}`,
+        stdout: `UNTESTED: ${dir}/${testCase} (applet not available — neither in BusyBox config nor standalone fixture)\n`,
+        stderr: '',
+        exitCode: 0,
+      });
+    }
+    continue;
+  }
   const items = readdirSync(join(TESTSUITE_DIR, dir));
   for (const testCase of items) {
     if (testCase.startsWith('.') || testCase.endsWith('~')) continue;

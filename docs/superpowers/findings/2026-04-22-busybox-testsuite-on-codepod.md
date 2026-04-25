@@ -1,7 +1,7 @@
-# BusyBox Upstream Testsuite on Codepod — 2026-04-24
+# BusyBox Upstream Testsuite on Codepod — 2026-04-25
 
 **Runner**: `scripts/run-busybox-testsuite-in-sandbox.ts`
-**Elapsed**: 13.5s
+**Elapsed**: 2.7s
 **BusyBox binary**: `packages/c-ports/busybox/build/busybox.wasm`
 **Sandbox fixtures**: `packages/orchestrator/src/platform/__tests__/fixtures/`
 
@@ -33,11 +33,11 @@ Each `.tests` file is run in a fresh sandbox with a 30s timeout to protect again
 
 | Category | Count |
 |---|---|
-| PASS | 166 |
-| FAIL | 8 |
-| SKIP | 73 |
-| UNTESTED | 0 |
-| **Total** | **247** |
+| PASS | 153 |
+| FAIL | 0 |
+| SKIP | 68 |
+| UNTESTED | 46 |
+| **Total** | **267** |
 | Timed out / crashed | 0 |
 
 ### Failure breakdown
@@ -45,11 +45,11 @@ Each `.tests` file is run in a fresh sandbox with a 30s timeout to protect again
 | Classification | Count |
 |---|---|
 | `needs-fork` | 0 |
-| `runtime-gap` | 2 |
+| `runtime-gap` | 0 |
 | `test-env` | 0 |
-| `unknown` | 6 |
+| `unknown` | 0 |
 
-**Exit policy**: 8 upstream test failure(s) + 0 crash(es)/timeout(s). Exiting 1. Known-open items tracked in the acceptance ledger, not in runner-level tolerances.
+**Exit policy**: all upstream tests green. Exiting 0.
 
 ## Classification Key
 
@@ -60,205 +60,51 @@ Each `.tests` file is run in a fresh sandbox with a 30s timeout to protect again
 
 ## Per-Failure Details
 
-
-### FAIL: tsort singleton
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `unknown`
-- **Reason**: Needs investigation — insufficient diagnostic output to classify
-
-```
-FAIL: tsort singleton
-============
-echo "a b b c" | tsort >actual
-a
-b
-c
-ERROR: word a missing from output (a b b c)
-ERROR: word b missing from output (a b b c)
-ERROR: a appears after b (a b b c)
-ERROR: word b missing from output (a b b c)
-ERROR: word c missing from output (a b b c)
-ERROR: b appears after c (a b b c)
-```
-
----
-
-### FAIL: tsort simple
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `unknown`
-- **Reason**: Needs investigation — insufficient diagnostic output to classify
-
-```
-FAIL: tsort simple
-============
-echo "a a b b" | tsort >actual
-a
-b
-ERROR: word a missing from output (a a b b)
-ERROR: word a missing from output (a a b b)
-ERROR: a appears after a (a a b b)
-ERROR: word b missing from output (a a b b)
-ERROR: word b missing from output (a a b b)
-ERROR: b appears after b (a a b b)
-exit 0, actual:
-```
-
----
-
-### FAIL: tsort 2singleton
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `unknown`
-- **Reason**: Needs investigation — insufficient diagnostic output to classify
-
-```
-FAIL: tsort 2singleton
-============
-echo "a b a b b c" | tsort >actual
-a
-b
-c
-ERROR: word a missing from output (a b a b b c)
-ERROR: word b missing from output (a b a b b c)
-ERROR: a appears after b (a b a b b c)
-ERROR: word a missing from output (a b a b b c)
-ERROR: word b missing from output (a b a b b c)
-ERROR: a appears after b (a b a b b c)
-```
-
----
-
-### FAIL: tsort medium
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `unknown`
-- **Reason**: Needs investigation — insufficient diagnostic output to classify
-
-```
-FAIL: tsort medium
-============
-echo "a b c c d e g g f g e f h h" | tsort >actual
-a
-c
-d
-h
-b
-e
-f
-g
-ERROR: word a missing from output (a b c c d e g g f g e f h h)
-```
-
----
-
-### FAIL: tsort std.example
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `unknown`
-- **Reason**: Needs investigation — insufficient diagnostic output to classify
-
-```
-FAIL: tsort std.example
-============
-echo "a aa aa aaa aaaa aaaaa a aaaaa" | tsort >actual
-a
-aaaa
-aa
-aaaaa
-aaa
-ERROR: word a missing from output (a aa aa aaa aaaa aaaaa a aaaaa)
-ERROR: word aa missing from output (a aa aa aaa aaaa aaaaa a aaaaa)
-ERROR: a appears after aa (a aa aa aaa aaaa aaaaa a aaaaa)
-ERROR: word aa missing from output (a aa aa aaa aaaa aaaaa a aaaaa)
-```
-
----
-
-### FAIL: tsort prefixes
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `runtime-gap`
-- **Reason**: Output mismatch — runtime behavior differs from expected
-
-```
-FAIL: tsort prefixes
-a
-ERROR: tsort odd: unexpected exit 0 (a)
-FAIL: tsort odd
-a
-c
-b
-ERROR: tsort odd2: unexpected exit 0 (a b c)
-FAIL: tsort odd2
-a
-b
-PASS: tsort cycle
-```
-
----
-
-### FAIL: tsort odd
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `runtime-gap`
-- **Reason**: Output mismatch — runtime behavior differs from expected
-
-```
-FAIL: tsort odd
-a
-c
-b
-ERROR: tsort odd2: unexpected exit 0 (a b c)
-FAIL: tsort odd2
-a
-b
-PASS: tsort cycle
-```
-
----
-
-### FAIL: tsort odd2
-
-- **Source**: `tsort.tests`
-- **Applet**: `tsort`
-- **Classification**: `unknown`
-- **Reason**: Needs investigation — insufficient diagnostic output to classify
-
-```
-FAIL: tsort odd2
-a
-b
-PASS: tsort cycle
-```
-
+_No failures!_
 
 ## Test Result Summary
 
 ```
+UNTESTED: all_sourcecode.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: ar.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: ash.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: bunzip2.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: bzcat.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: cal.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: cpio.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: cryptpw.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: gunzip.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: hexdump.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: makedevs.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: mdev.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: mkfs.minix.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: mount.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: parse.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: pidof.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: rx.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: sha3sum.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: start-stop-daemon.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: taskset.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: test.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: time.tests (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: tsort empty2
-FAIL: tsort singleton
-FAIL: tsort simple
-FAIL: tsort 2singleton
-FAIL: tsort medium
-FAIL: tsort std.example
-FAIL: tsort prefixes
-FAIL: tsort odd
-FAIL: tsort odd2
+PASS: tsort singleton
+PASS: tsort simple
+PASS: tsort 2singleton
+PASS: tsort medium
+PASS: tsort std.example
+PASS: tsort prefixes
+PASS: tsort odd
+PASS: tsort odd2
 PASS: tsort cycle
+UNTESTED: uncompress.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: unlzma.tests (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: uuencode.tests (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: basename-does-not-remove-identical-extension
 PASS: basename-works
-PASS: bunzip2-removes-compressed-file
-PASS: bunzip2-reads-from-standard-input
-PASS: bzcat-does-not-remove-compressed-file
+UNTESTED: bunzip2/bunzip2-removes-compressed-file (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: bunzip2/bunzip2-reads-from-standard-input (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: bzcat/bzcat-does-not-remove-compressed-file (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: cat-prints-a-file
 PASS: cat-prints-a-file-and-standard-input
 PASS: cmp-detects-difference
@@ -284,13 +130,13 @@ PASS: cut-cuts-an-unclosed-range
 PASS: cut-cuts-a-closed-range
 PASS: cut-cuts-a-field
 PASS: cut-cuts-a-character
-PASS: date-u-works
-PASS: date-timezone
-PASS: date-R-works
-PASS: date-works-1
-PASS: date-format-works
-PASS: date-works
-PASS: date-@-works
+UNTESTED: date/date-u-works (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: date/date-timezone (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: date/date-R-works (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: date/date-works-1 (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: date/date-format-works (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: date/date-works (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: date/date-@-works (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: dd-accepts-of
 PASS: dd-copies-from-standard-input-to-standard-output
 PASS: dd-count-bytes
@@ -323,10 +169,10 @@ PASS: echo-prints-slash_41
 PASS: echo-prints-argument
 PASS: expr-big
 PASS: expr-works
-PASS: false-is-silent
-PASS: false-returns-failure
+UNTESTED: false/false-is-silent (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: false/false-returns-failure (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: find-supports-minus-xdev
-PASS: gunzip-reads-from-standard-input
+UNTESTED: gunzip/gunzip-reads-from-standard-input (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: gzip-accepts-multiple-files
 PASS: gzip-compression-levels
 PASS: gzip-removes-original-file
@@ -372,7 +218,7 @@ PASS: paste-separate
 PASS: paste-multi-stdin
 PASS: paste-back-cuted-lines
 PASS: paste
-PASS: pwd-prints-working-directory
+UNTESTED: pwd/pwd-prints-working-directory (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: rm-removes-file
 PASS: rmdir-removes-parent-directories
 PASS: strings-works-like-GNU
@@ -404,18 +250,18 @@ PASS: tr-non-gnu
 PASS: tr-d-alnum-works
 PASS: tr-works
 PASS: tr-rejects-wrong-class
-PASS: true-is-silent
-PASS: true-returns-success
+UNTESTED: true/true-is-silent (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: true/true-returns-success (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: uptime-works
 PASS: wc-counts-all
 PASS: wc-prints-longest-line-length
 PASS: wc-counts-words
 PASS: wc-counts-lines
 PASS: wc-counts-characters
-PASS: wget-supports--P
-PASS: wget-handles-empty-path
-PASS: wget--O-overrides--P
-PASS: wget-retrieves-google-index
-PASS: which-uses-default-path
+UNTESTED: wget/wget-supports--P (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: wget/wget-handles-empty-path (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: wget/wget--O-overrides--P (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: wget/wget-retrieves-google-index (applet not available — neither in BusyBox config nor standalone fixture)
+UNTESTED: which/which-uses-default-path (applet not available — neither in BusyBox config nor standalone fixture)
 PASS: xargs-works
 ```

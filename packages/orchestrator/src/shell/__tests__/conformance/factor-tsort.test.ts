@@ -176,10 +176,14 @@ describe('factor tsort', () => {
       expect(r.stdout).toBe('a\n');
     });
 
-    it('odd token at end: lone node', async () => {
+    it('odd token count: input error (POSIX/GNU/BusyBox)', async () => {
+      // tsort takes pairs; an odd token count means the last token has no
+      // partner. POSIX leaves it implementation-defined; GNU and BusyBox
+      // both report the input as malformed and exit non-zero. The BusyBox
+      // tsort.tests "odd"/"odd2" cases pin this expectation.
       const r = await runner.run("printf 'alone\\n' | tsort");
-      expect(r.exitCode).toBe(0);
-      expect(r.stdout).toBe('alone\n');
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toMatch(/odd number of tokens/);
     });
 
     it('file input: reads from named file', async () => {
