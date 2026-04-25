@@ -34,13 +34,71 @@ static inline int fchdir(int fd) { (void)fd; errno = ENOSYS; return -1; }
 /* chroot */
 static inline int chroot(const char *path) { (void)path; errno = ENOSYS; return -1; }
 
-/* fork / exec / vfork */
+/* fork / exec / vfork.  POSIX exec replaces the current process image,
+ * which wasm doesn't expose (the wasi `process-replace` proposal isn't
+ * stable yet), so the v-form base implementations stub to ENOSYS — that
+ * lets callers detect "exec unsupported" cleanly instead of silently
+ * spawning a child and pretending it was a replace.  The variadic l-form
+ * helpers below delegate to the v-forms, so they fail the same way. */
 static inline int fork(void) { errno = ENOSYS; return -1; }
 static inline int vfork(void) { errno = ENOSYS; return -1; }
 static inline int execv(const char *path, char *const argv[]) {
     (void)path; (void)argv; errno = ENOSYS; return -1; }
 static inline int execvp(const char *file, char *const argv[]) {
     (void)file; (void)argv; errno = ENOSYS; return -1; }
+static inline int execve(const char *path, char *const argv[], char *const envp[]) {
+    (void)path; (void)argv; (void)envp; errno = ENOSYS; return -1; }
+
+#include <stdarg.h>
+#define CODEPOD_EXEC_MAX_ARGS 64
+
+static inline int execl(const char *path, const char *arg0, ...) {
+    const char *argv_local[CODEPOD_EXEC_MAX_ARGS + 1];
+    int n = 0;
+    argv_local[n++] = arg0;
+    va_list ap;
+    va_start(ap, arg0);
+    const char *a;
+    while (n <= CODEPOD_EXEC_MAX_ARGS && (a = va_arg(ap, const char *)) != NULL) {
+        argv_local[n++] = a;
+    }
+    va_end(ap);
+    argv_local[n] = NULL;
+    return execv(path, (char *const *)argv_local);
+}
+
+static inline int execlp(const char *file, const char *arg0, ...) {
+    const char *argv_local[CODEPOD_EXEC_MAX_ARGS + 1];
+    int n = 0;
+    argv_local[n++] = arg0;
+    va_list ap;
+    va_start(ap, arg0);
+    const char *a;
+    while (n <= CODEPOD_EXEC_MAX_ARGS && (a = va_arg(ap, const char *)) != NULL) {
+        argv_local[n++] = a;
+    }
+    va_end(ap);
+    argv_local[n] = NULL;
+    return execvp(file, (char *const *)argv_local);
+}
+
+static inline int execle(const char *path, const char *arg0, ...) {
+    /* execle: arg0, ..., NULL, envp.  Walk the va_list, build argv up to
+     * the NULL, then take the next va_arg as envp. */
+    const char *argv_local[CODEPOD_EXEC_MAX_ARGS + 1];
+    int n = 0;
+    argv_local[n++] = arg0;
+    va_list ap;
+    va_start(ap, arg0);
+    const char *a;
+    while (n <= CODEPOD_EXEC_MAX_ARGS && (a = va_arg(ap, const char *)) != NULL) {
+        argv_local[n++] = a;
+    }
+    argv_local[n] = NULL;
+    char *const *envp = va_arg(ap, char *const *);
+    va_end(ap);
+    return execve(path, (char *const *)argv_local, envp);
+}
 
 /* setsid / ttyname_r */
 static inline int setsid(void) { errno = ENOSYS; return -1; }
