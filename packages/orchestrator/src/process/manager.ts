@@ -247,6 +247,7 @@ export class ProcessManager {
 
       imports.codepod = createKernelImports({
         memory: memoryProxy,
+        wasiHost: host,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,
@@ -424,6 +425,7 @@ export class ProcessManager {
 
       imports.codepod = createKernelImports({
         memory: memoryProxy,
+        wasiHost: host,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,

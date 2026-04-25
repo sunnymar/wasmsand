@@ -1,0 +1,15 @@
+[package]
+name = "codepod-guest-compat-sys"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native bindings to libcodepod_guest_compat.a; emits link directives unless cargo-codepod has already injected them."
+links = "codepod_guest_compat"
+
+[lib]
+path = "src/lib.rs"
+
+[build-dependencies]
+
+[dev-dependencies]
+tempfile = "3"

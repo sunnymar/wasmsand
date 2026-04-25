@@ -17,9 +17,31 @@ members = [
   "packages/mcp-server-rust",
   # Process-spawning helpers for coreutils (host_spawn_async/host_waitpid ABI)
   "packages/codepod-process",
+  # cpcc clang-wrapper for the guest compatibility runtime (§Toolchain Integration)
+  "packages/guest-compat/toolchain/cpcc",
+  # Alternate-path Rust sys crate: plain `cargo build --target=wasm32-wasip1` without cargo-codepod
+  "packages/guest-compat/rust/codepod-guest-compat-sys",
+  # Safe Rust wrappers over the Tier 1 ABI
+  "packages/guest-compat/rust/codepod-guest-compat",
+  "packages/guest-compat/conformance/rust/dup2-canary",
+  "packages/guest-compat/conformance/rust/getgroups-canary",
+  "packages/guest-compat/conformance/rust/affinity-canary",
+  "packages/guest-compat/conformance/rust/signal-canary",
+  # Runtime library exporting wasi-aware replacements for Rust stdlib fns
+  # that panic on wasip1. Paired with codepod-wasi-postlink, which rewrites
+  # the stdlib bodies to call these.
+  "packages/guest-compat/rust/codepod-wasi-shims",
+  # Host CLI that post-link rewrites panicky stdlib fns in a wasm to call
+  # into codepod-wasi-shims replacements. Invoked as a cargo runner wrapper.
+  "packages/guest-compat/toolchain/codepod-wasi-postlink",
+  # Re-runs upstream grex's lib+property tests under wasm32-wasip1 with the
+  # upstream cfg gate stripped. The upstream crate at packages/rust-ports/grex
+  # stays excluded; only this codepod-owned shim is a workspace member.
+  "packages/rust-ports/grex-wasi-tests",
 ]
 exclude = [
   "packages/sips",
+  "packages/rust-ports/grex",
 ]
 resolver = "2"
 
@@ -32,3 +54,20 @@ rustpython-derive = { git = "https://github.com/RustPython/RustPython", rev = "f
 lto = true
 opt-level = "z"
 strip = true
+
+# grex-wasi-tests and codepod-wasi-shims need the wasm `name` section intact
+# so the codepod-wasi-postlink tool can find stdlib functions by their
+# mangled names.
+#
+# LTO must ALSO be disabled for these builds to preserve stdlib's real
+# sret ABI on panicking fns — LTO rewrites `fn() -> T` where the body
+# always panics into a noreturn `fn()` stub, and once the signature is
+# gone we can't tail-call our shim into it. LTO is set at the whole
+# profile level in the test runner script via CARGO_PROFILE_RELEASE_LTO=off,
+# since per-package `lto` overrides aren't allowed.
+[profile.release.package.grex-wasi-tests]
+strip = false
+debug = "line-tables-only"
+
+[profile.release.package.codepod-wasi-shims]
+strip = false

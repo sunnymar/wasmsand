@@ -264,6 +264,68 @@ fn exec_path(
 ) -> Result<ControlFlow, ShellError> {
     let resolved = normalize_path(&state.resolve_path(cmd_path));
 
+    // S_TOOL flag (0o100000 = 0x8000): marks VFS tool stubs whose content is a
+    // WASM path, not executable text.  When the resolved file has this flag set
+    // (possibly via a symlink chain), dispatch to host.spawn() using the
+    // registered tool name instead of treating the content as a script.
+    //
+    // Tool name resolution follows VFS symlinks one level at a time:
+    // - If `resolved` itself is directly in /usr/bin or /bin, its basename IS
+    //   the registered tool name (e.g. /usr/bin/seq → "seq").
+    // - If `resolved` is a symlink elsewhere (e.g. /tmp/mygrep → /usr/bin/grep),
+    //   the immediate readlink target's basename is used so multicall applets
+    //   (grep → /usr/bin/grep → /usr/bin/busybox) preserve their applet name.
+    // - As a last resort, fall back to the basename of `resolved`.
+    //
+    // `argv[0]` is always the basename of the path the user typed, so multicall
+    // dispatch (BusyBox) sees the applet name even though the tool registry
+    // lookup targets the multicall binary.
+    const S_TOOL: u32 = 0o100000;
+    if let Ok(stat) = host.stat(&resolved) {
+        if stat.mode & S_TOOL != 0 {
+            // Derive the registered tool name from the path.  Tool stubs live in
+            // /usr/bin or /bin, so those basenames are always registered.  When
+            // `resolved` is somewhere else (e.g. /tmp/mygrep), follow one level
+            // of VFS symlink so multicall applets keep their applet name:
+            //   /tmp/mygrep  → readlink → /usr/bin/grep  → basename "grep" ✓
+            //   /usr/bin/seq → already in tool dir        → basename "seq"  ✓
+            let tool_name_owned: String = if resolved.starts_with("/usr/bin/") || resolved.starts_with("/bin/") {
+                resolved.rsplit('/').next().unwrap_or(resolved.as_str()).to_string()
+            } else if let Ok(target) = host.readlink(&resolved) {
+                target.rsplit('/').next().unwrap_or(resolved.as_str()).to_string()
+            } else {
+                resolved.rsplit('/').next().unwrap_or(resolved.as_str()).to_string()
+            };
+            // argv[0] is the basename of the path the user invoked (not of the
+            // symlink target), so multicall dispatch can see the applet name.
+            let argv0 = cmd_path.rsplit('/').next().unwrap_or(cmd_path);
+            let env_pairs: Vec<(&str, &str)> = state
+                .env
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let pid = host
+                .spawn(
+                    &tool_name_owned,
+                    Some(argv0),
+                    args,
+                    &env_pairs,
+                    &state.cwd,
+                    stdin_data,
+                    state.stdin_fd,
+                    state.stdout_fd,
+                    2,
+                    0,
+                )
+                .map_err(|e| ShellError::HostError(e.to_string()))?;
+            let spawn_result = host
+                .waitpid(pid)
+                .map_err(|e| ShellError::HostError(e.to_string()))?;
+            state.last_exit_code = spawn_result.exit_code;
+            return Ok(ControlFlow::Normal(RunResult::exit(spawn_result.exit_code)));
+        }
+    }
+
     // Read the file
     let text = host
         .read_file_str(&resolved)
@@ -286,6 +348,7 @@ fn exec_path(
             let pid = host
                 .spawn(
                     "python3",
+                    None,
                     &python_args,
                     &env_pairs,
                     &state.cwd,
@@ -365,7 +428,13 @@ fn exec_shell_command(
 }
 
 /// Apply path resolution and command dispatch for external commands.
-/// Returns the resolved program name and arguments for spawning.
+/// Returns `(program, argv0_override, args)` for spawning:
+///   * `program` is the tool-lookup key
+///   * `argv0_override` is `Some(name)` when the caller's intended `argv[0]`
+///     differs from `program` (e.g. a BusyBox applet symlink resolved via
+///     PATH must run with `argv[0] = "grep"` but dispatch the `busybox`
+///     multicall binary).  `None` means "use program as argv[0]".
+///   * `args` are the resolved trailing arguments.
 /// If the command was fully handled (shebang, sh/bash dispatch),
 /// returns Err(ControlFlow) instead.
 fn dispatch_external_command(
@@ -374,7 +443,7 @@ fn dispatch_external_command(
     cmd_name: &str,
     args: &[&str],
     stdin_data: &str,
-) -> Result<(String, Vec<String>), ControlFlow> {
+) -> Result<(String, Option<String>, Vec<String>), ControlFlow> {
     // 1. Shebang check — if cmd_name contains '/'
     if cmd_name.contains('/') {
         match exec_path(state, host, cmd_name, args, stdin_data) {
@@ -402,6 +471,7 @@ fn dispatch_external_command(
     if is_python_interpreter(cmd_name) && !stdin_data.is_empty() && args.is_empty() {
         return Ok((
             cmd_name.to_string(),
+            None,
             vec!["-c".to_string(), stdin_data.to_string()],
         ));
     }
@@ -416,7 +486,92 @@ fn dispatch_external_command(
     let args_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
     let resolved_args = resolve_command_args(state, host, cmd_name, &args_refs);
 
-    Ok((cmd_name.to_string(), resolved_args))
+    // 6. POSIX PATH lookup for bare commands.  Walk `$PATH` and stat each
+    //    `<dir>/<cmd_name>`; the first match that is a regular file with the
+    //    executable bit set (S_TOOL for wasm tool stubs, or 0o111 for shell
+    //    scripts / host-mounted binaries) is the resolved command.
+    //
+    //    For S_TOOL hits, resolve the tool-registry key + argv[0] inline and
+    //    return via Ok so the caller's existing redirect-aware / pipeline-
+    //    aware spawn path runs host.spawn.  argv[0] is the basename the user
+    //    typed — for a BusyBox applet symlink (`grep -> /usr/bin/busybox`)
+    //    the tool key becomes "busybox" so multicall dispatch sees "grep".
+    //
+    //    For non-S_TOOL executables (shell scripts with the x-bit), fall
+    //    back to exec_path which reads the file and handles shebang / shell
+    //    dispatch.
+    //
+    //    Falling through (no match on PATH) preserves pre-PATH behaviour:
+    //    the command name is dispatched verbatim to host.spawn, where the
+    //    tool registry produces the familiar "command not found" for unknown
+    //    names.
+    if let Some(path_env) = state.env.get("PATH").cloned() {
+        const S_TOOL: u32 = 0o100000;
+        const X_BITS: u32 = 0o111;
+        for dir in path_env.split(':') {
+            if dir.is_empty() {
+                continue;
+            }
+            let candidate = if dir.ends_with('/') {
+                format!("{dir}{cmd_name}")
+            } else {
+                format!("{dir}/{cmd_name}")
+            };
+            let st = match host.stat(&candidate) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if !st.exists || !st.is_file {
+                continue;
+            }
+            let is_tool = st.mode & S_TOOL != 0;
+            let is_exec = st.mode & X_BITS != 0;
+            if !is_tool && !is_exec {
+                continue;
+            }
+
+            if is_tool {
+                // Resolve the tool-registry key.  Stubs directly in /usr/bin
+                // or /bin are registered under their basename.  Symlinks
+                // elsewhere follow one level so multicall applets (e.g.
+                // /tmp/bb-bin/grep -> /usr/bin/busybox) keep the applet
+                // name as argv[0] while dispatching the multicall binary.
+                let tool_name: String = if candidate.starts_with("/usr/bin/")
+                    || candidate.starts_with("/bin/")
+                {
+                    cmd_name.to_string()
+                } else if let Ok(target) = host.readlink(&candidate) {
+                    target
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(target.as_str())
+                        .to_string()
+                } else {
+                    cmd_name.to_string()
+                };
+                let argv0 = if tool_name == cmd_name {
+                    None
+                } else {
+                    Some(cmd_name.to_string())
+                };
+                return Ok((tool_name, argv0, resolved_args));
+            }
+
+            // Non-S_TOOL executable: a host-mounted binary or a shell
+            // script.  Delegate to exec_path so shebang / shell-script
+            // semantics apply.
+            let resolved_refs: Vec<&str> = resolved_args.iter().map(|s| s.as_str()).collect();
+            return match exec_path(state, host, &candidate, &resolved_refs, stdin_data) {
+                Ok(flow) => Err(flow),
+                Err(e) => {
+                    crate::shell_eprintln!("{}", e);
+                    Err(ControlFlow::Normal(RunResult::exit(127)))
+                }
+            };
+        }
+    }
+
+    Ok((cmd_name.to_string(), None, resolved_args))
 }
 
 /// Apply output redirects (stdout/stderr overwrite, append, merge, etc.)
@@ -994,9 +1149,9 @@ pub fn exec_command(
             // ── Path resolution and command dispatch ─────────────────────
             // Host commands (extensions) are now routed through host_spawn
             // by the host ProcessManager — no separate extension_invoke needed.
-            let (spawn_program, spawn_args) =
+            let (spawn_program, spawn_argv0, spawn_args) =
                 match dispatch_external_command(state, host, cmd_name, &args, &stdin_data) {
-                    Ok((prog, resolved)) => (prog, resolved),
+                    Ok((prog, argv0, resolved)) => (prog, argv0, resolved),
                     Err(flow) => {
                         // Command was handled by dispatch (shebang, sh/bash)
                         let run = match flow {
@@ -1093,6 +1248,7 @@ pub fn exec_command(
             let pid = host
                 .spawn(
                     &spawn_program,
+                    spawn_argv0.as_deref(),
                     &spawn_args_refs,
                     &env_pairs,
                     &state.cwd,
@@ -1388,7 +1544,7 @@ pub fn exec_command(
                                     stdin_data = String::new();
                                     continue;
                                 }
-                                Ok((prog, resolved_args)) => {
+                                Ok((prog, argv0, resolved_args)) => {
                                     let env_pairs: Vec<(&str, &str)> = state
                                         .env
                                         .iter()
@@ -1401,6 +1557,7 @@ pub fn exec_command(
                                     match host
                                         .spawn(
                                             &prog,
+                                            argv0.as_deref(),
                                             &spawn_args_refs,
                                             &env_pairs,
                                             &state.cwd,
@@ -1499,6 +1656,19 @@ pub fn exec_command(
             let mut pids: Vec<(i32, usize)> = Vec::new(); // (pid, stage_index)
             let mut last_result = RunResult::empty();
             let mut last_stage_was_spawned = false;
+            // When the final stage carries a `>file` / `>>file` / `&>file`
+            // redirect, route its stdout to a pipe sink instead of the
+            // original fd 1; after waitpid we drain the sink and feed the
+            // bytes to apply_output_redirects, which already knows how to
+            // turn (data, redirects) into VFS writes.  Without this, the
+            // child writes straight to fd 1 and the redirect silently
+            // disappears — which is exactly how `… | tsort >actual`
+            // ended up with an empty `actual` file in the BusyBox tests.
+            let mut last_stage_stdout_sink: Option<(
+                i32,
+                i32,
+                Vec<codepod_shell::ast::Redirect>,
+            )> = None;
 
             for (i, cmd) in commands.iter().enumerate() {
                 // Set up fds for this pipeline stage:
@@ -1536,6 +1706,60 @@ pub fn exec_command(
                         redirects,
                         assignments,
                     } => {
+                        // Stage-level `<file` / `<<heredoc` redirect: allocate
+                        // a pipe, push the file/heredoc bytes into the write
+                        // end, close it (so the reader hits EOF), and use the
+                        // read end as the stage's stdin fd.  Without this,
+                        // pipelines like `grep <actual | cut -d: -f1` would
+                        // pass the pipeline's plumbed stdin fd straight to
+                        // grep, ignoring `<actual` entirely (the BusyBox
+                        // tsort.tests `aline=$(grep -nxF a <actual | cut)`
+                        // pattern was the canary).
+                        let mut stage_stdin_override: Option<i32> = None;
+                        for redir in redirects.iter() {
+                            let mut data: Option<Vec<u8>> = None;
+                            match &redir.redirect_type {
+                                RedirectType::StdinFrom(path) => {
+                                    let resolved = state.resolve_path(path);
+                                    if let Ok(bytes) = host.read_file(&resolved) {
+                                        data = Some(bytes);
+                                    }
+                                }
+                                RedirectType::Heredoc(content) => {
+                                    data = Some(
+                                        expand_raw_string(state, content, Some(&exec_fn))
+                                            .into_bytes(),
+                                    );
+                                }
+                                RedirectType::HeredocQuoted(content) => {
+                                    data = Some(content.clone().into_bytes());
+                                }
+                                RedirectType::HeredocStrip(content) => {
+                                    let expanded =
+                                        expand_raw_string(state, content, Some(&exec_fn));
+                                    let stripped = expanded
+                                        .lines()
+                                        .map(|l| l.trim_start_matches('\t'))
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    data = Some(stripped.into_bytes());
+                                }
+                                _ => {}
+                            }
+                            if let Some(bytes) = data {
+                                if let Ok((r, w)) = host.pipe() {
+                                    let _ = host.write_fd(w, &bytes);
+                                    let _ = host.close_fd(w);
+                                    stage_stdin_override = Some(r);
+                                }
+                            }
+                        }
+                        let stage_stdin_fd = stage_stdin_override.unwrap_or(stage_stdin_fd);
+                        if stage_stdin_override.is_some() {
+                            state.stdin_fd = stage_stdin_fd;
+                            let _ = host.dup2(stage_stdin_fd, 0);
+                        }
+
                         // If 2>&1 redirect, connect stderr to stdout pipe.
                         let has_stderr_to_stdout = redirects
                             .iter()
@@ -1703,7 +1927,7 @@ pub fn exec_command(
                                             }
                                             last_stage_was_spawned = false;
                                         }
-                                        Ok((prog, resolved_args)) => {
+                                        Ok((prog, argv0, resolved_args)) => {
                                             let env_pairs: Vec<(&str, &str)> = state
                                                 .env
                                                 .iter()
@@ -1712,15 +1936,45 @@ pub fn exec_command(
                                             let spawn_args_refs: Vec<&str> =
                                                 resolved_args.iter().map(|s| s.as_str()).collect();
 
+                                            // Last-stage `>file` / `>>file` / `&>file`
+                                            // intercept: swap stage_stdout_fd for a pipe sink
+                                            // (drained after waitpid).
+                                            let mut effective_stdout_fd = stage_stdout_fd;
+                                            if i == stage_count - 1
+                                                && last_stage_stdout_sink.is_none()
+                                                && redirects.iter().any(|r| matches!(
+                                                    &r.redirect_type,
+                                                    RedirectType::StdoutOverwrite(p) if p != "&2" && p != "&1"
+                                                ) || matches!(
+                                                    &r.redirect_type,
+                                                    RedirectType::StdoutAppend(_)
+                                                        | RedirectType::BothOverwrite(_)
+                                                ))
+                                            {
+                                                if let Ok((sr, sw)) = host.pipe() {
+                                                    effective_stdout_fd = sw;
+                                                    last_stage_stdout_sink =
+                                                        Some((sr, sw, redirects.clone()));
+                                                }
+                                            }
+                                            // If stderr_to_stdout was set up by stage scaffolding,
+                                            // make sure the stderr fd tracks the new stdout fd too.
+                                            let effective_stderr_fd = if has_stderr_to_stdout {
+                                                effective_stdout_fd
+                                            } else {
+                                                2
+                                            };
+
                                             match host.spawn(
                                                 &prog,
+                                                argv0.as_deref(),
                                                 &spawn_args_refs,
                                                 &env_pairs,
                                                 &state.cwd,
                                                 "", // stdin comes from pipe fd, not string
                                                 stage_stdin_fd,
-                                                stage_stdout_fd,
-                                                2, // stderr_fd — dup2'd to stdout by stage setup if 2>&1
+                                                effective_stdout_fd,
+                                                effective_stderr_fd,
                                                 0,
                                             ) {
                                                 Ok(pid) => {
@@ -1847,6 +2101,21 @@ pub fn exec_command(
                             pipefail_code = 1;
                         }
                     }
+                }
+            }
+
+            // Drain the last-stage stdout sink and apply file redirects
+            // (>, >>, &>).  Pipe must be closed before we read so the read
+            // sees EOF — host.read_fd blocks until the writer side closes.
+            if let Some((r, w, sink_redirects)) = last_stage_stdout_sink.take() {
+                let _ = host.close_fd(w);
+                let data = host.read_fd(r).unwrap_or_default();
+                let _ = host.close_fd(r);
+                let mut sink_stdout = String::from_utf8_lossy(&data).to_string();
+                let mut sink_stderr = String::new();
+                apply_output_redirects(state, host, &sink_redirects, &mut sink_stdout, &mut sink_stderr)?;
+                if !sink_stderr.is_empty() {
+                    let _ = host.write_fd(2, sink_stderr.as_bytes());
                 }
             }
 
@@ -6362,8 +6631,9 @@ mod tests {
         let mut state = ShellState::new_default();
         let result = dispatch_external_command(&mut state, &host, "cat", &["file.txt"], "");
         // Should return Ok(...) with resolved args
-        let (prog, args) = result.unwrap();
+        let (prog, argv0, args) = result.unwrap();
         assert_eq!(prog, "cat");
+        assert_eq!(argv0, None);
         assert_eq!(args[0], "/home/user/file.txt");
     }
 

@@ -13,7 +13,7 @@ All WASM processes in the sandbox import host functions from the `codepod` names
 | `host_read_fd` | `(fd, out_ptr, out_cap) → i32` | Reads from a pipe fd. Returns bytes written, or needed size if buffer too small. |
 | `host_write_fd` | `(fd, data_ptr, data_len) → i32` | Writes to a pipe fd. Returns bytes written or negative error. |
 | `host_dup` | `(fd, out_ptr, out_cap) → i32` | Duplicates fd. Writes `{ fd: new_fd }` JSON. |
-| `host_dup2` | `(src_fd, dst_fd) → i32` | Makes dst_fd point to same target as src_fd. Returns 0 on success. |
+| `host_dup2` | `(src_fd, dst_fd) → i32` | Makes `dst_fd` point to the same target as `src_fd`. For guest libc compatibility this now applies to the active WASI host's stdio targets as well as kernel-managed pipe fds. Returns 0 on success. |
 | `host_yield` | `() → void` | Yields to JS microtask queue. **Async (JSPI)**. |
 
 ## Network
@@ -41,6 +41,16 @@ Socket data is base64-encoded in JSON since the bridge protocol is JSON-based.
 |---------|-----------|-------------|
 | `host_extension_invoke` | `(req_ptr, req_len, out_ptr, out_cap) → i32` | Invokes a host extension. Request: `{ name, args, stdin, env, cwd }`. Response: `{ exit_code, stdout, stderr }`. **Async (JSPI)**. |
 | `host_is_extension` | `(name_ptr, name_len) → i32` | Returns 1 if the named extension is available, 0 otherwise. |
+| `host_run_command` | `(req_ptr, req_len, out_ptr, out_cap) → i32` | Runs a shell command and captures output. Request: `{ cmd, stdin? }`. Response: `{ exit_code, stdout, stderr }`. The return value is the byte count written, or the required byte count if `out_cap` is too small. **Async (JSPI)**. |
+
+`host_run_command` is the low-level guest extension used by the Python subprocess shim today. It is also the intended primitive for optional guest-compat helpers such as `codepod_system()` and `codepod_popen()`. In the Phase A C frontend, `codepod_pclose()` reports the captured command exit code, and JSON string decoding supports the standard short escapes plus ASCII-range `\u00XX` escapes only. This is an extension API for command execution, not a POSIX process syscall surface.
+
+The codepod guest compatibility runtime (see [`docs/superpowers/specs/2026-04-19-guest-compat-runtime-design.md`](../superpowers/specs/2026-04-19-guest-compat-runtime-design.md)) also ships narrow libc header overrides in
+`packages/guest-compat/include/`, currently including:
+
+- `sched.h` for single-CPU affinity behavior
+- `unistd.h` for `dup2()`
+- `codepod_compat.h` for codepod-specific command helpers
 
 ## JSON protocol
 

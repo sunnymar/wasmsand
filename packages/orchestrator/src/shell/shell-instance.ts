@@ -920,9 +920,13 @@ function spawnAsyncProcess(
     kernel.setFdTarget(pid, fd, target);
   }
 
+  // argv[0] defaults to the tool name, but callers (e.g. the shell executor
+  // dispatching a BusyBox applet symlink) may override it so multicall
+  // binaries see the user-facing command name.
+  const argv0 = req.argv0 ?? req.prog;
   const host = new WasiHost({
     vfs: mgr.getVfs(),
-    args: [req.prog, ...req.args],
+    args: [argv0, ...req.args],
     env: Object.fromEntries(req.env),
     preopens: { '/': '/' },
     ioFds: fdTable,
@@ -1005,6 +1009,7 @@ function spawnAsyncProcess(
       memory: childMemoryProxy,
       callerPid: pid,
       kernel,
+      wasiHost: host,
       networkBridge,
       extensionRegistry,
       nativeModules: mgr.nativeModules,

@@ -10,3 +10,7 @@
 [submodule "packages/pandas-rust"]
 	path = packages/pandas-rust
 	url = git@github.com:codepod-sandbox/pandas-rust.git
+[submodule "packages/rust-ports/grex"]
+	path = packages/rust-ports/grex
+	url = https://github.com/pemistahl/grex.git
+	branch = main
