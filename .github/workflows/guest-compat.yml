@@ -86,10 +86,12 @@ jobs:
       - name: Build grex via cargo-codepod
         run: ./packages/rust-ports/grex.build.sh
 
-      - name: Smoke-run grex via wasmtime
-        run: |
-          wasmtime target/rust-ports/grex/wasm32-wasip1/release/grex.wasm -- --version
-
+      # Smoke-running the cargo-codepod-built grex via plain wasmtime is
+      # impossible — libcodepod_guest_compat.a is whole-archive'd into the
+      # binary, so it imports codepod::host_dup2.  The grex-wasi-tests
+      # step below builds a separate test binary (without the compat
+      # archive) that postlink-rewrites stdlib panics and runs under
+      # wasmtime; that is the real coverage gate for grex behaviour.
       - name: Build codepod-wasi-postlink
         run: cargo build --release -p codepod-wasi-postlink
 
