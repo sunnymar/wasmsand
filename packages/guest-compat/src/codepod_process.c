@@ -278,3 +278,24 @@ int tcsetpgrp(int fd, pid_t pgrp) {
     /* No controlling terminal — accept silently. */
     return 0;
 }
+
+/* fork(2) / vfork(2) — POSIX process duplication primitives.
+ * wasm32-wasip1 has no fork(); the closest we offer is host_spawn
+ * via posix_spawn family.  Programs that explicitly call fork
+ * should use posix_spawn instead.  Both return -1/ENOSYS. */
+CODEPOD_DECLARE_MARKER(fork);
+CODEPOD_DECLARE_MARKER(vfork);
+CODEPOD_DEFINE_MARKER(fork,  0x666f726bu) /* "fork" */
+CODEPOD_DEFINE_MARKER(vfork, 0x76666f72u) /* "vfor" */
+
+pid_t fork(void) {
+    CODEPOD_MARKER_CALL(fork);
+    errno = ENOSYS;
+    return (pid_t)-1;
+}
+
+pid_t vfork(void) {
+    CODEPOD_MARKER_CALL(vfork);
+    errno = ENOSYS;
+    return (pid_t)-1;
+}

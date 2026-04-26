@@ -63,20 +63,20 @@ int fchown(int fd, uid_t owner, gid_t group);
 int fchdir(int fd);
 int chroot(const char *path);
 
-/* fork / exec / vfork.  POSIX exec replaces the current process image,
- * which wasm doesn't expose (the wasi `process-replace` proposal isn't
- * stable yet), so the v-form base implementations stub to ENOSYS — that
- * lets callers detect "exec unsupported" cleanly instead of silently
- * spawning a child and pretending it was a replace.  The variadic l-form
- * helpers below delegate to the v-forms, so they fail the same way.
+/* fork / vfork — wasm has no fork(); both return -1/ENOSYS.  Real
+ * symbols in libcodepod_guest_compat.a (codepod_process.c) so
+ * BusyBox + autoconf-built ports' link probes find them.  Autoconf
+ * ports that detect neither fork nor vfork emit `#define vfork fork`
+ * in config.h; that's harmless because both forward to the same
+ * impl.  When autoconf DOES detect them (because configure links
+ * the compat archive), the macro doesn't fire.
  *
- * vfork is intentionally NOT defined here: autoconf-built ports that
- * detect neither fork nor vfork ship a `#define vfork fork` fallback in
- * their config.h (which works fine — both stub to ENOSYS).  Defining
- * vfork as a separate static inline collides with that macro after
- * preprocessing.  Callers that explicitly want vfork on platforms with
- * real vfork should use HAVE_VFORK from autoconf. */
-static inline int fork(void) { errno = ENOSYS; return -1; }
+ * exec family: POSIX exec replaces the current process image, which
+ * wasm doesn't expose (the wasi `process-replace` proposal isn't
+ * stable yet).  All variants stub to ENOSYS so callers can detect
+ * "exec unsupported" cleanly instead of silently spawning. */
+pid_t fork(void);
+pid_t vfork(void);
 static inline int execv(const char *path, char *const argv[]) {
     (void)path; (void)argv; errno = ENOSYS; return -1; }
 static inline int execvp(const char *file, char *const argv[]) {

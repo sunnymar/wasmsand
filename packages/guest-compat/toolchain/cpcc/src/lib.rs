@@ -26,6 +26,8 @@ pub const TIER1: &[&str] = &[
     "dup3",
     "fchdir",
     "fchown",
+    "fork",
+    "vfork",
     "getgroups",
     "getpriority",
     "getrlimit",
