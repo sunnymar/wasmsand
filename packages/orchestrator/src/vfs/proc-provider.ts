@@ -23,6 +23,7 @@
 
 import { VfsError } from './inode.js';
 import type { MountEntry, VirtualProvider } from './provider.js';
+import { CODEPOD_VERSION } from '../version.js';
 
 /** Top-level (non-pid) entries served by /proc. */
 const PROC_TOP_FILES = new Set([
@@ -32,7 +33,11 @@ const PROC_TOP_FILES = new Set([
 /** Per-pid file names served under /proc/<pid>/. */
 const PROC_PID_FILES = new Set(['stat', 'status', 'cmdline', 'comm']);
 
-const VERSION_STRING = 'codepod 1.0.0 (WASI sandbox)\n';
+/** /proc/version banner.  Sourced from version.ts so a single bump
+ *  flows through to both the host-visible /proc and the guest-side
+ *  uname (which reads CODEPOD_VERSION_STR from codepod_compat.h —
+ *  scripts/sync-version.sh keeps the two in lockstep). */
+const VERSION_STRING = `codepod ${CODEPOD_VERSION} (WASI sandbox)\n`;
 
 export interface StorageStats {
   totalBytes: number;

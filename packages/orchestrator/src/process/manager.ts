@@ -65,6 +65,54 @@ export class ProcessManager {
     }
   }
 
+  /**
+   * Register a multicall binary — one wasm that ships many applets,
+   * dispatched by argv[0] (BusyBox is the canonical example).
+   *
+   * Does three things:
+   *   1. Registers the multicall name itself (`registerTool('busybox',
+   *      busyboxPath)`) so `busybox <applet>` works.
+   *   2. Points each applet name at the same wasm in the registry —
+   *      crucially, this OVERRIDES any prior single-binary registration
+   *      (e.g. our Rust `grep.wasm`) so the shell resolves `grep` to
+   *      busybox.wasm from now on.  The Rust standalones still exist
+   *      on disk but become inert — they can be stripped in a follow-
+   *      up commit once we're confident in busybox parity.
+   *   3. Replaces /usr/bin/<applet> tool-stub files with symlinks to
+   *      /usr/bin/<name> so commands like `/usr/bin/grep foo` (absolute
+   *      path) follow the symlink and the kernel-side spawn populates
+   *      argv[0] with "grep" — the multicall dispatcher in busybox
+   *      reads argv[0] to pick the right applet.
+   *
+   * Behaves identically to `busybox --install -s` from the guest's
+   * perspective, but happens at sandbox creation so users don't have
+   * to run the install step themselves.
+   */
+  registerMulticallTool(name: string, wasmPath: string, applets: string[]): void {
+    this.registerTool(name, wasmPath);
+
+    for (const applet of applets) {
+      this.registry.set(applet, wasmPath);
+    }
+
+    try {
+      this.vfs.withWriteAccess(() => {
+        for (const applet of applets) {
+          const appletPath = `/usr/bin/${applet}`;
+          // Replace any prior tool stub (registerTool may have written
+          // one earlier in registerTools' scan).  Failing to unlink is
+          // fine — the path may not exist yet.
+          try { this.vfs.unlink(appletPath); } catch { /* ok */ }
+          this.vfs.symlink(`/usr/bin/${name}`, appletPath);
+        }
+      });
+    } catch {
+      // VfsProxy in worker mode doesn't expose withWriteAccess /
+      // symlink yet; the registry overrides above are still in place,
+      // so the shell resolves correctly via the resolveTool path.
+    }
+  }
+
   /** Register and preload a tool from VFS — for runtime-installed packages. */
   async registerAndLoadTool(name: string, wasmPath: string): Promise<void> {
     this.registerTool(name, wasmPath);

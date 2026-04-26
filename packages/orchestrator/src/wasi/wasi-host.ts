@@ -1,3 +1,4 @@
+/// <reference path="../jspi.d.ts" />
 /**
  * WASI Preview 1 host implementation backed by VFS.
  *
@@ -470,14 +471,31 @@ export class WasiHost {
     iovsPtr: number,
     iovsLen: number,
     nwrittenPtr: number,
-  ): number {
+  ): number | Promise<number> {
     this.checkDeadline();
     const view = this.getView();
     const bytes = this.getBytes();
     const iovecs = readIovecs(view, iovsPtr, iovsLen);
 
-    let totalWritten = 0;
     const target = this.ioFds.get(fd);
+
+    // Pipe writes get the async path so back-pressure works: when
+    // the pipe is full, writeAsync blocks until the reader drains
+    // (or returns -1 immediately if the read end has closed).  Sync
+    // pipe.write() returned 0 in the full-pipe case, which made
+    // wasi-libc spin in a busy loop with no progress and no chance
+    // for the reader to run on the JS event loop — `yes | head -3`
+    // would deadlock the moment the pipe filled up.
+    //
+    // Returning Promise<number> here is fine on every scheduler
+    // path: under JSPI the Suspending-wrapped fd_write suspends the
+    // wasm stack until the Promise resolves; under Asyncify the
+    // bridge.wrapImport detects the Promise and triggers an unwind.
+    if (target && target.type === 'pipe_write') {
+      return this.fdWritePipe(target, iovecs, bytes, nwrittenPtr);
+    }
+
+    let totalWritten = 0;
 
     for (const iov of iovecs) {
       const data = bytes.slice(iov.buf, iov.buf + iov.len);
@@ -496,19 +514,6 @@ export class WasiHost {
             }
             target.total += data.byteLength;
             totalWritten += data.byteLength;
-            break;
-          }
-          case 'pipe_write': {
-            const n = target.pipe.write(data);
-            if (n === -1) {
-              // EPIPE — read end closed
-              const viewAfter = this.getView();
-              viewAfter.setUint32(nwrittenPtr, totalWritten, true);
-              return WASI_EPIPE;
-            }
-            // Note: partial writes (n < data.byteLength) lose trailing bytes.
-            // Task 8 replaces this with JSPI async writes that block until fully written.
-            totalWritten += n;
             break;
           }
           case 'null': {
@@ -533,6 +538,64 @@ export class WasiHost {
     }
 
     // Re-fetch view in case writes caused memory growth
+    const viewAfter = this.getView();
+    viewAfter.setUint32(nwrittenPtr, totalWritten, true);
+    return WASI_ESUCCESS;
+  }
+
+  /**
+   * Async pipe write — blocks until every iovec's bytes are
+   * actually accepted by the pipe (or until the read end closes,
+   * which surfaces as EPIPE).  Pairs with the fdReadPipe helper
+   * so producers and consumers can handshake naturally instead of
+   * busy-waiting on a full or empty pipe.
+   *
+   * writeAsync's contract is "returns how many bytes the pipe
+   * accepted in this round" (which can be a partial write when the
+   * reader drained some but not enough), so we loop internally
+   * until the iovec is fully consumed or EPIPE.  Without this loop
+   * a busybox-style large-buffer write (`yes hello` builds a 4 KiB
+   * buffer of repeated "hello\n" and writes it in one go) would
+   * silently drop the trailing bytes that a single drain didn't
+   * fit, then move on to the next iovec — the producer thinks it
+   * succeeded and never blocks again, but the consumer never sees
+   * a full record.
+   */
+  private async fdWritePipe(
+    target: Extract<import('./fd-target.js').FdTarget, { type: 'pipe_write' }>,
+    iovecs: Array<{ buf: number; len: number }>,
+    initialBytes: Uint8Array,
+    nwrittenPtr: number,
+  ): Promise<number> {
+    let totalWritten = 0;
+    // Snapshot each iovec into a host-owned buffer up front: wasm
+    // memory may be re-grown on reentry from the bridge / suspend
+    // path, invalidating any view we'd hold across awaits.
+    const chunks: Uint8Array[] = iovecs.map(iov =>
+      initialBytes.slice(iov.buf, iov.buf + iov.len),
+    );
+    for (let chunk of chunks) {
+      while (chunk.byteLength > 0) {
+        const n = await target.pipe.writeAsync(chunk);
+        if (n === -1) {
+          // EPIPE — read end closed mid-write.
+          const viewAfter = this.getView();
+          viewAfter.setUint32(nwrittenPtr, totalWritten, true);
+          return WASI_EPIPE;
+        }
+        if (n === 0) {
+          // Defensive: writeAsync should always make progress (it
+          // either fills space, blocks, or returns -1).  A 0 return
+          // would loop forever, so treat as EPIPE rather than
+          // hanging the wasm.
+          const viewAfter = this.getView();
+          viewAfter.setUint32(nwrittenPtr, totalWritten, true);
+          return WASI_EPIPE;
+        }
+        totalWritten += n;
+        chunk = chunk.subarray(n);
+      }
+    }
     const viewAfter = this.getView();
     viewAfter.setUint32(nwrittenPtr, totalWritten, true);
     return WASI_ESUCCESS;

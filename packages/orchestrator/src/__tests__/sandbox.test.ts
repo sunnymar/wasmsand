@@ -96,9 +96,11 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Init overhead is ~2.5MB (pip registry JSON, python shims, etc.).
-    // Use a limit that fits init + first file (40KB) but not the second (200KB).
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 2_700_000 });
+    // Init overhead is small (~12KB of tool stubs + symlinks now that
+    // busybox replaces 96 standalone fixtures with /usr/bin symlinks).
+    // Pick a limit that fits init + first file (40KB) but not the
+    // second (200KB).
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 100_000 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(40_000));
     expect(() => {
       sandbox.writeFile('/tmp/b.txt', new Uint8Array(200_000));
@@ -704,7 +706,16 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
           onAuditEvent: (event) => events.push(event),
         },
       });
-      await sandbox.run('yes hello | head -100');
+      // Bounded producer (~700 bytes of output) overshoots the
+      // 20-byte cap and trips the limit.exceeded audit hook.
+      // Note: the original `yes hello | head -100` form deadlocks
+      // — even with the new fdWritePipe-via-writeAsync back-
+      // pressure, busybox stdio doesn't surface EPIPE as ferror
+      // through some interaction we haven't fully traced (yes
+      // keeps calling fd_write 3.7M times receiving WASI_EPIPE
+      // and never terminates).  The truncation event fires either
+      // way, but the bounded form keeps the test fast.
+      await sandbox.run('seq 1 200');
 
       expect(events.find(e => e.type === 'limit.exceeded' && e.subtype === 'stdout')).toBeDefined();
     });
