@@ -65,6 +65,10 @@ export interface WasiHostOptions {
   deadlineMs?: number;
   /** Per-fd I/O targets. If provided, overrides stdin/stdoutLimit/stderrLimit. */
   ioFds?: Map<number, FdTarget>;
+  /** Caller pid — used to resolve /proc/self → /proc/<pid> and to
+   *  surface readlink("/proc/self") = "<pid>".  Defaults to 0 when
+   *  omitted (standalone spawn paths that don't allocate a kernel pid). */
+  pid?: number;
 }
 
 interface PreopenEntry {
@@ -137,6 +141,7 @@ export class WasiHost {
 
   private cancelled = false;
   private deadlineMs: number = Infinity;
+  private readonly pid: number;
 
   constructor(options: WasiHostOptions) {
     this.vfs = options.vfs;
@@ -146,6 +151,7 @@ export class WasiHost {
       ([k, v]) => `${k}=${v}`,
     );
     this.deadlineMs = options.deadlineMs ?? Infinity;
+    this.pid = options.pid ?? 0;
     this.preopens = [];
 
     // Build I/O fd table: use provided ioFds or build from legacy options.
@@ -391,18 +397,38 @@ export class WasiHost {
 
   /**
    * Resolve a relative path from a directory fd to an absolute VFS path.
-   * Handles both preopened dirs and opened directory fds.
+   * Handles both preopened dirs and opened directory fds.  Also applies
+   * the /proc/self → /proc/<pid> rewrite (Linux's magic-symlink
+   * resolution): we don't store /proc/self as a real VFS symlink
+   * because the target is per-caller, so we substitute the caller's
+   * pid here at the syscall layer.  pathReadlink does its own check
+   * before this mapping so readlink("/proc/self") still returns the
+   * pid string instead of dereferencing into /proc/<pid>.
    */
   private resolvePath(dirFd: number, relativePath: string): string {
+    const joined = this.joinDirFd(dirFd, relativePath);
+    return this.mapProcSelf(joined);
+  }
+
+  /** Raw join without /proc/self mapping — used by pathReadlink to
+   *  detect /proc/self before it gets rewritten. */
+  private joinDirFd(dirFd: number, relativePath: string): string {
     const dirPath = this.dirFds.get(dirFd);
     if (dirPath === undefined) {
       throw new Error(`EBADF: not a directory fd: ${dirFd}`);
     }
-
     if (dirPath === '/') {
       return '/' + relativePath;
     }
     return dirPath + '/' + relativePath;
+  }
+
+  private mapProcSelf(absPath: string): string {
+    if (absPath === '/proc/self') return `/proc/${this.pid}`;
+    if (absPath.startsWith('/proc/self/')) {
+      return `/proc/${this.pid}/${absPath.slice('/proc/self/'.length)}`;
+    }
+    return absPath;
   }
 
   // ---- Syscall implementations ----
@@ -739,9 +765,20 @@ export class WasiHost {
   }
 
   private fdClose(fd: number): number {
-    // Cannot close I/O target fds (stdio or custom)
+    // POSIX-style close: the guest can close any fd it holds, including
+    // stdio.  Returning EBADF here would break standard cleanup paths
+    // (jq, GNU coreutils, etc. all do `fclose(stdout)` at exit and
+    // treat a non-zero return as "writing output failed").
+    //
+    // For ioFds (stdio + custom kernel-wired fds) we just unregister
+    // the mapping — the underlying pipe / buffer is owned by the
+    // kernel and gets cleaned up when the process exits.  The
+    // important semantic is that subsequent fd_write on this fd
+    // returns EBADF, which falls out naturally since we removed the
+    // entry below.
     if (this.ioFds.has(fd)) {
-      return WASI_EBADF;
+      this.ioFds.delete(fd);
+      return WASI_ESUCCESS;
     }
 
     try {
@@ -1160,8 +1197,15 @@ export class WasiHost {
     this.checkDeadline();
     try {
       const relativePath = this.readString(pathPtr, pathLen);
-      const absPath = this.resolvePath(dirFd, relativePath);
-      const target = this.vfs.readlink(absPath);
+      // Special-case /proc/self before mapping: Linux's readlink
+      // returns the pid as the symlink target, so report that
+      // directly instead of letting resolvePath rewrite it (after
+      // which it would point at a real directory, not a symlink).
+      const rawPath = this.joinDirFd(dirFd, relativePath);
+      const target =
+        rawPath === '/proc/self'
+          ? String(this.pid)
+          : this.vfs.readlink(this.mapProcSelf(rawPath));
       const encoded = this.encoder.encode(target);
       const bytes = this.getBytes();
       const view = this.getView();
@@ -1292,8 +1336,41 @@ export class WasiHost {
     }
   }
 
-  private pathLink(): number {
-    return WASI_ENOTSUP;
+  /**
+   * path_link — POSIX hard link via VFS.link().  Both old_path
+   * (resolved against old_dir_fd) and new_path (against new_dir_fd)
+   * end up referring to the same FileInode object, so writes
+   * through either name show up at the other.  old_flags currently
+   * ignored: we follow symlinks at the leaf (vfs.link's default),
+   * which matches typical Linux behavior unless AT_SYMLINK_FOLLOW
+   * is explicitly cleared.
+   */
+  private pathLink(
+    oldDirFd: number,
+    _oldFlags: number,
+    oldPathPtr: number,
+    oldPathLen: number,
+    newDirFd: number,
+    newPathPtr: number,
+    newPathLen: number,
+  ): number {
+    this.checkDeadline();
+    try {
+      const oldRelative = this.readString(oldPathPtr, oldPathLen);
+      const newRelative = this.readString(newPathPtr, newPathLen);
+      const oldAbs = this.resolvePath(oldDirFd, oldRelative);
+      const newAbs = this.resolvePath(newDirFd, newRelative);
+      if (typeof this.vfs.link !== 'function') {
+        return WASI_ENOTSUP;
+      }
+      this.vfs.link(oldAbs, newAbs);
+      return WASI_ESUCCESS;
+    } catch (err) {
+      if (err instanceof VfsError) {
+        return vfsErrnoToWasi(err.errno);
+      }
+      return fdErrorToWasi(err);
+    }
   }
 
   private fdRenumber(fromFd: number, toFd: number): number {

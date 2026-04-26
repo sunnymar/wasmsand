@@ -1,13 +1,5 @@
 column
-csplit
-file
-fmt
 iconv
-join
-jq
-numfmt
 rg
-sha224sum
-sha384sum
 sudo
 zip

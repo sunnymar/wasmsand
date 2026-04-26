@@ -115,6 +115,17 @@ fn resolve_arg_if_path(
     if arg.starts_with('-') || arg.starts_with('/') {
         return arg.to_string();
     }
+    // The directory dots (`.`, `..`) are valid arguments to many
+    // commands as program text or operators — `jq '.'` (identity
+    // filter), `awk '.'`, `python -c '...; print(".")'`, etc.  They
+    // also happen to be valid paths that always exist (cwd / parent),
+    // so the "resolve if it exists" heuristic below would incorrectly
+    // expand them to `/cwd/.` and corrupt the argument.  Always pass
+    // them through verbatim — programs that genuinely want the cwd
+    // path can call `getcwd()` themselves.
+    if arg == "." || arg == ".." {
+        return arg.to_string();
+    }
     // Creation commands always resolve relative args
     if CREATION_COMMANDS.contains(&cmd_name) {
         return state.resolve_path(arg);

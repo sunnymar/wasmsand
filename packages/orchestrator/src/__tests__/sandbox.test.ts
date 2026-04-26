@@ -96,14 +96,15 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Init overhead is small (~12KB of tool stubs + symlinks now that
-    // busybox replaces 96 standalone fixtures with /usr/bin symlinks).
-    // Pick a limit that fits init + first file (40KB) but not the
-    // second (200KB).
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 100_000 });
+    // Init overhead is dominated by file/libmagic's magic.mgc data
+    // file (~10MB), which the sandbox auto-loads at /usr/share/misc
+    // when file.wasm is present.  The tool-stub layer itself is only
+    // ~12KB.  Pick a limit that fits init + first file (40KB) but
+    // not the second (10MB).
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 12_000_000 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(40_000));
     expect(() => {
-      sandbox.writeFile('/tmp/b.txt', new Uint8Array(200_000));
+      sandbox.writeFile('/tmp/b.txt', new Uint8Array(10_000_000));
     }).toThrow(/ENOSPC/);
   });
 
@@ -411,12 +412,14 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
         adapter: new NodeAdapter(),
-        security: { limits: { fileCount: 300 } },
+        security: { limits: { fileCount: 500 } },
       });
-      // Default layout creates ~256 inodes (dirs + python shims + config files);
-      // try to fill up the remaining allocation
+      // Default layout creates ~280 inodes (BusyBox installs 96
+      // applet symlinks at /usr/bin/, plus dirs, python shims,
+      // canary fixtures, the magic.mgc data file, etc.).
+      // Try to fill up the remaining allocation.
       let threw = false;
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 300; i++) {
         try {
           sandbox.writeFile(`/tmp/f${i}.txt`, new TextEncoder().encode('x'));
         } catch {

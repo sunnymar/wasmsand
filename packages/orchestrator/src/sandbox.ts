@@ -544,6 +544,24 @@ export class Sandbox {
     vfs.withWriteAccess(() => {
       try { vfs.symlink('/usr/bin/python3', '/usr/bin/python'); } catch { /* already exists */ }
     });
+
+    // file/libmagic ships a sidecar magic database (magic.mgc) that
+    // libmagic searches for at the configure-time `--prefix=/usr` path.
+    // Pre-load it into the VFS so `file foo.bin` works out of the box
+    // without the user setting MAGIC=... by hand.  Optional — if the
+    // .mgc isn't in wasmDir (e.g. older fixtures, slim distributions),
+    // file still runs for `--version` / `--help` and falls back to a
+    // helpful error for actual classification.
+    if (tools.has('file') && adapter.readDataFile) {
+      const mgc = await adapter.readDataFile(wasmDir, 'magic.mgc');
+      if (mgc) {
+        vfs.withWriteAccess(() => {
+          vfs.mkdirp('/usr/share/misc');
+          vfs.writeFile('/usr/share/misc/magic.mgc', mgc);
+        });
+      }
+    }
+
     return tools;
   }
 
