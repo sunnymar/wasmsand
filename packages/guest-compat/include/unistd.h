@@ -15,6 +15,25 @@
 int dup2(int oldfd, int newfd);
 int getgroups(int size, gid_t list[]);
 
+/* pipe(2) — real impl in libcodepod_guest_compat.a (codepod_pipe.c)
+ * routes through host_pipe to the codepod kernel.  The prototype is
+ * exposed unconditionally so callers don't need to negotiate
+ * _GNU_SOURCE / _BSD_SOURCE / etc. */
+int pipe(int fd[2]);
+/* pipe2(2) is a Linux extension — wasi-libc doesn't even declare it.
+ * Codepod accepts the call; flags are ignored (O_CLOEXEC is implicit
+ * since codepod has no exec(); O_NONBLOCK isn't yet honored on
+ * pipes).  Declared here so HAVE_PIPE2 detection in autoconf-built
+ * ports finds the linker symbol. */
+int pipe2(int fd[2], int flags);
+
+/* dup(2) and dup3(2) — real impls in libcodepod_guest_compat.a
+ * (codepod_dup.c) call through to host_dup / host_dup2.  dup3 is a
+ * Linux extension that bundles dup2 with O_CLOEXEC; codepod has no
+ * exec, so the flag is ignored. */
+int dup(int oldfd);
+int dup3(int oldfd, int newfd, int flags);
+
 /* wasi-libc gates many POSIX entries behind __wasilibc_unmodified_upstream
  * so they are absent on wasm32-wasip1.  The block below restores enough
  * surface for typical guest C/C++ programs to compile and link.  Real
@@ -27,29 +46,37 @@ int getgroups(int size, gid_t list[]);
 #include <errno.h>
 #include <sys/types.h>
 
-/* pipe / dup */
-static inline int pipe(int fd[2]) { (void)fd; errno = ENOSYS; return -1; }
-static inline int dup(int oldfd) { (void)oldfd; errno = ENOSYS; return -1; }
+/* dup/dup3 are also declared above the wasilibc gate (next to pipe/
+ * pipe2) since they have real impls in libcodepod_guest_compat.a. */
 
-/* chown family — sandbox doesn't model file ownership; accept silently. */
-static inline int chown(const char *path, uid_t owner, gid_t group) {
-    (void)path; (void)owner; (void)group; return 0; }
-static inline int lchown(const char *path, uid_t owner, gid_t group) {
-    (void)path; (void)owner; (void)group; return 0; }
-static inline int fchown(int fd, uid_t owner, gid_t group) {
-    (void)fd; (void)owner; (void)group; return 0; }
-
-static inline int fchdir(int fd) { (void)fd; errno = ENOSYS; return -1; }
-static inline int chroot(const char *path) { (void)path; errno = ENOSYS; return -1; }
+/* chown family / fchdir — wasi-libc has none of these, but gnulib
+ * REPLACE_* probes link-test for them and will compile its own
+ * replacement if the symbol is missing.  Static inline definitions
+ * collide with gnulib's replacement at compile time, so we ship real
+ * symbols in libcodepod_guest_compat.a (codepod_fs.c) — gnulib then
+ * accepts ours and skips its own.  Sandbox semantics: chown family
+ * accepts silently (we don't model file ownership), fchdir/chroot
+ * return ENOSYS. */
+int chown(const char *path, uid_t owner, gid_t group);
+int lchown(const char *path, uid_t owner, gid_t group);
+int fchown(int fd, uid_t owner, gid_t group);
+int fchdir(int fd);
+int chroot(const char *path);
 
 /* fork / exec / vfork.  POSIX exec replaces the current process image,
  * which wasm doesn't expose (the wasi `process-replace` proposal isn't
  * stable yet), so the v-form base implementations stub to ENOSYS — that
  * lets callers detect "exec unsupported" cleanly instead of silently
  * spawning a child and pretending it was a replace.  The variadic l-form
- * helpers below delegate to the v-forms, so they fail the same way. */
+ * helpers below delegate to the v-forms, so they fail the same way.
+ *
+ * vfork is intentionally NOT defined here: autoconf-built ports that
+ * detect neither fork nor vfork ship a `#define vfork fork` fallback in
+ * their config.h (which works fine — both stub to ENOSYS).  Defining
+ * vfork as a separate static inline collides with that macro after
+ * preprocessing.  Callers that explicitly want vfork on platforms with
+ * real vfork should use HAVE_VFORK from autoconf. */
 static inline int fork(void) { errno = ENOSYS; return -1; }
-static inline int vfork(void) { errno = ENOSYS; return -1; }
 static inline int execv(const char *path, char *const argv[]) {
     (void)path; (void)argv; errno = ENOSYS; return -1; }
 static inline int execvp(const char *file, char *const argv[]) {
@@ -115,12 +142,24 @@ static inline int execle(const char *path, const char *arg0, ...) {
 extern pid_t getpid(void);
 extern pid_t getppid(void);
 
-/* setsid: POSIX returns the new session id (== caller pid) on success.
- * The sandbox doesn't model sessions distinctly from processes, so we
- * report "you are now session leader" by returning getpid().  This is
- * consistent with getsid()/getpgrp() below — all answer with the
- * caller's pid, so session/group plumbing stays self-consistent. */
-static inline int setsid(void) { return (int)getpid(); }
+/* Process group / session APIs — real symbols in libcodepod_guest_compat.a
+ * (codepod_process.c).  Codepod is a single-pgroup, single-session
+ * sandbox: everything reports pgroup=session=1.  Real exports rather
+ * than static inline so autoconf link probes detect them and gnulib
+ * doesn't compile redundant replacements. */
+pid_t setsid(void);
+pid_t getsid(pid_t pid);
+pid_t getpgrp(void);
+pid_t getpgid(pid_t pid);
+int   setpgid(pid_t pid, pid_t pgid);
+pid_t setpgrp(void);
+pid_t tcgetpgrp(int fd);
+int   tcsetpgrp(int fd, pid_t pgrp);
+
+/* setresuid / setresgid — Linux extensions, gated in wasi-libc.
+ * Sandbox is single-user; impls in codepod_fs.c are no-ops. */
+int setresuid(uid_t r, uid_t e, uid_t s);
+int setresgid(gid_t r, gid_t e, gid_t s);
 
 /* ttyname_r: POSIX requires ENOTTY when fd isn't a terminal.  We
  * defer to isatty() (which wasi-libc implements via fdstat) and
@@ -136,14 +175,7 @@ static inline int ttyname_r(int fd, char *buf, size_t buflen) {
     return 0;
 }
 
-/* Process groups / sessions aren't modelled in the kernel; getpgrp()
- * etc. echo getpid() so the answers stay self-consistent. */
-static inline pid_t getpgrp(void) { return getpid(); }
-static inline pid_t getpgid(pid_t pid) { (void)pid; return getpid(); }
-static inline int setpgid(pid_t pid, pid_t pgid) {
-    (void)pid; (void)pgid; return 0; }
-static inline int setpgrp(void) { return 0; }
-static inline pid_t getsid(pid_t pid) { (void)pid; return getpid(); }
+/* Process groups / sessions are real symbols above; nothing to declare here. */
 
 /* sethostname() — wasi-libc has gethostname but not the setter.  Stub
  * to ENOSYS so callers see the failure; the sandbox hostname is

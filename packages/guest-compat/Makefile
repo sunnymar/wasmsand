@@ -22,16 +22,23 @@ CPAR := $(REPO_ROOT)/target/release/cpar
 LIB := $(BUILD_DIR)/libcodepod_guest_compat.a
 LIB_OBJS := \
   $(BUILD_DIR)/codepod_command.o \
+  $(BUILD_DIR)/codepod_dup.o \
+  $(BUILD_DIR)/codepod_fs.o \
+  $(BUILD_DIR)/codepod_mktemp.o \
   $(BUILD_DIR)/codepod_netdb.o \
+  $(BUILD_DIR)/codepod_pipe.o \
   $(BUILD_DIR)/codepod_process.o \
+  $(BUILD_DIR)/codepod_resource.o \
   $(BUILD_DIR)/codepod_sched.o \
   $(BUILD_DIR)/codepod_setjmp.o \
   $(BUILD_DIR)/codepod_signal.o \
+  $(BUILD_DIR)/codepod_spawn.o \
   $(BUILD_DIR)/codepod_sysinfo.o \
+  $(BUILD_DIR)/codepod_time.o \
   $(BUILD_DIR)/codepod_unistd.o \
   $(BUILD_DIR)/codepod_version.o
 
-CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp
+CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp pipe spawn spawn-wait resource
 CANARIES := $(addprefix $(BUILD_DIR)/,$(addsuffix -canary.wasm,$(CANARY_NAMES)))
 
 .PHONY: all lib canaries copy-fixtures clean ensure-toolchain

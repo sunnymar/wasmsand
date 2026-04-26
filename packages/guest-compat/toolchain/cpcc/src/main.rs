@@ -38,7 +38,16 @@ fn build_clang_invocation(
     argv.push(format!("--sysroot={}", sdk.sysroot().display()).into());
     argv.push("--target=wasm32-wasip1".into());
     argv.push("-O2".into());
-    argv.push("-std=c11".into());
+    // Default to C23 (gnu23): gives us nullptr keyword and the
+    // unreachable()/byteswap/etc. additions to <stddef.h>, both of
+    // which gnulib code paths in coreutils require.  Backward-compat:
+    // C23 is a near-pure superset of C11 that mostly adds new
+    // keywords; the exception is `bool` becoming a real keyword.
+    // Pre-C23 code that used a `typedef ... bool` would break, but
+    // none of our current ports do so (BusyBox uses smallint, jq /
+    // file use int).  Ports that need an older standard can pass
+    // `-std=...` after; clang takes the last -std= flag.
+    argv.push("-std=gnu23".into());
     argv.push("-Wall".into());
     argv.push("-Wextra".into());
     if let Some(inc) = env.include.as_ref() {

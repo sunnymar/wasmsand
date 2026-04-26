@@ -4,6 +4,17 @@
 /* Pull in the real wasi-sdk stdio.h. */
 #include_next <stdio.h>
 
+/* flockfile / funlockfile / ftrylockfile — POSIX thread-safe stdio
+ * locking.  wasi-libc gates these behind `_REENTRANT` (single-thread
+ * sandbox builds don't define it), but autoconf-generated code
+ * routinely calls them and expects the declarations.  Codepod is
+ * single-threaded; real impls are no-ops in libcodepod_guest_compat
+ * (codepod_fs.c).  Expose unconditionally so configure probes find
+ * the declarations. */
+void flockfile(FILE *f);
+void funlockfile(FILE *f);
+int  ftrylockfile(FILE *f);
+
 /* popen(3) / pclose(3) — POSIX, not in wasi-libc.
  *
  * Provided by libcodepod_guest_compat (codepod_process.c → wraps

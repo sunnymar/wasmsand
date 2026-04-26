@@ -20,12 +20,27 @@ typedef unsigned char sigset_t;
 
 typedef void (*sighandler_t)(int);
 
+/* POSIX-standard signal numbers, matching the values in
+ * wasi-sysroot/include/wasm32-wasip1/bits/signal.h.  The full set is
+ * exposed unconditionally — wasi-sdk gates these behind
+ * _WASI_EMULATED_SIGNAL, but on codepod the runtime always provides
+ * minimal signal semantics (SIGTERM via host_kill, etc.), so guest
+ * code that just references the constants doesn't need to negotiate
+ * an opt-in flag. */
 #define SIGHUP 1
 #define SIGINT 2
 #define SIGQUIT 3
 #define SIGILL 4
+#define SIGTRAP 5
 #define SIGABRT 6
+#define SIGIOT SIGABRT
+#define SIGBUS 7
+#define SIGFPE 8
 #define SIGKILL 9
+#define SIGUSR1 10
+#define SIGSEGV 11
+#define SIGUSR2 12
+#define SIGPIPE 13
 #define SIGALRM 14
 #define SIGTERM 15
 #define SIGCHLD 17
@@ -38,17 +53,15 @@ typedef void (*sighandler_t)(int);
 #define SIGXCPU 24
 #define SIGXFSZ 25
 #define SIGVTALRM 26
-#define SIGUSR1 10
-#define SIGUSR2 12
-#define SIGPIPE 13
 
 /* NSIG / _NSIG: highest-signal-number + 1, used for iteration and for
- * sizing tables.  Linux uses 65 (32 classic + 32 RT + 1).  We don't
- * implement RT signals but match the conventional value so guest code
- * sizing arrays as `[NSIG]` lines up with what most upstream code
- * expects on Linux. */
+ * sizing tables.  Linux's 65 (32 classic + 32 RT + 1) reflects RT-
+ * signal support.  Codepod has no RT signals (no signal queueing,
+ * no dynamic SIGRTMIN/MAX), and gnulib's signal.h `verify_NSIG_constraint`
+ * statically requires NSIG ≤ 32.  We pick 32 — the largest value gnulib
+ * accepts and the natural ceiling for our classic-only signal set. */
 #ifndef NSIG
-#define NSIG 65
+#define NSIG 32
 #endif
 #ifndef _NSIG
 #define _NSIG NSIG
@@ -63,6 +76,14 @@ typedef void (*sighandler_t)(int);
 #define SIG_DFL ((sighandler_t)(intptr_t)0)
 #define SIG_IGN ((sighandler_t)(intptr_t)-2)
 #define SIG_ERR ((sighandler_t)(intptr_t)-1)
+
+/* gnulib's signal.h replacement re-defines `struct sigaction` if
+ * `GNULIB_defined_struct_sigaction` isn't set.  Setting it here means
+ * gnulib accepts our layout — codepod's signal model is simpler than
+ * gnulib's anyway (no real-time signals, no SA_SIGINFO siginfo), so
+ * the struct shape we ship is sufficient for what gnulib actually
+ * uses at compile time. */
+#define GNULIB_defined_struct_sigaction 1
 
 struct sigaction {
   union {

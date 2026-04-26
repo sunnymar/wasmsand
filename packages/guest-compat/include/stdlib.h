@@ -34,85 +34,19 @@
  * the canonical crypto-quality entropy source for the sandbox. */
 extern int getentropy(void *buffer, size_t length);
 
-static inline char *codepod_mktemp_internal(char *tmpl) {
-    static const char chars[] =
-        "abcdefghijklmnopqrstuvwxyz"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "0123456789";
-    if (!tmpl) {
-        errno = EINVAL;
-        return NULL;
-    }
-    size_t n = strlen(tmpl);
-    if (n < 6 || strcmp(tmpl + n - 6, "XXXXXX") != 0) {
-        errno = EINVAL;
-        if (n) tmpl[0] = '\0';
-        return tmpl;
-    }
-    unsigned char raw[6];
-    if (getentropy(raw, sizeof raw) != 0) {
-        /* getentropy can only fail if the host is broken; surface that
-         * rather than fall back to a weak PRNG. */
-        if (n) tmpl[0] = '\0';
-        return tmpl;
-    }
-    for (int i = 0; i < 6; i++) {
-        tmpl[n - 6 + i] = chars[raw[i] % 62];
-    }
-    return tmpl;
-}
+/* Real impls in libcodepod_guest_compat.a (codepod_mktemp.c) — symbols
+ * appear in libc.a's link probe so gnulib's autoconf accepts them as
+ * available and skips compiling its own redundant replacements. */
+char *mktemp(char *tmpl);
+int   mkstemp(char *tmpl);
+int   mkostemp(char *tmpl, int flags);
+char *mkdtemp(char *tmpl);
 
-static inline char *mktemp(char *tmpl) {
-    return codepod_mktemp_internal(tmpl);
-}
-
-static inline int mkstemp(char *tmpl) {
-    for (int attempt = 0; attempt < 64; attempt++) {
-        size_t n = strlen(tmpl);
-        if (n < 6) { errno = EINVAL; return -1; }
-        char saved[7];
-        memcpy(saved, tmpl + n - 6, 7);
-        if (codepod_mktemp_internal(tmpl) == NULL || tmpl[0] == '\0') return -1;
-        int fd = open(tmpl, O_RDWR | O_CREAT | O_EXCL, 0600);
-        if (fd >= 0) return fd;
-        if (errno != EEXIST) return -1;
-        memcpy(tmpl + n - 6, saved, 7);
-    }
-    errno = EEXIST;
-    return -1;
-}
-
-static inline int mkostemp(char *tmpl, int flags) {
-    /* O_CREAT|O_EXCL are mandatory; user `flags` add to them. */
-    for (int attempt = 0; attempt < 64; attempt++) {
-        size_t n = strlen(tmpl);
-        if (n < 6) { errno = EINVAL; return -1; }
-        char saved[7];
-        memcpy(saved, tmpl + n - 6, 7);
-        if (codepod_mktemp_internal(tmpl) == NULL || tmpl[0] == '\0') return -1;
-        int fd = open(tmpl, O_RDWR | O_CREAT | O_EXCL | flags, 0600);
-        if (fd >= 0) return fd;
-        if (errno != EEXIST) return -1;
-        memcpy(tmpl + n - 6, saved, 7);
-    }
-    errno = EEXIST;
-    return -1;
-}
-
-static inline char *mkdtemp(char *tmpl) {
-    for (int attempt = 0; attempt < 64; attempt++) {
-        size_t n = strlen(tmpl);
-        if (n < 6) { errno = EINVAL; return NULL; }
-        char saved[7];
-        memcpy(saved, tmpl + n - 6, 7);
-        if (codepod_mktemp_internal(tmpl) == NULL || tmpl[0] == '\0') return NULL;
-        if (mkdir(tmpl, 0700) == 0) return tmpl;
-        if (errno != EEXIST) return NULL;
-        memcpy(tmpl + n - 6, saved, 7);
-    }
-    errno = EEXIST;
-    return NULL;
-}
+/* qsort_r — GNU 5-arg signature.  Real impl in codepod_fs.c uses a
+ * single-thread arg stash on top of qsort. */
+void qsort_r(void *base, size_t nmemb, size_t size,
+             int (*compar)(const void *, const void *, void *),
+             void *arg);
 
 #endif /* !__wasilibc_unmodified_upstream */
 

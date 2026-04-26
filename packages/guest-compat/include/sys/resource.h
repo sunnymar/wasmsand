@@ -2,12 +2,12 @@
 #define CODEPOD_COMPAT_SYS_RESOURCE_H
 
 /* wasi-libc has no <sys/resource.h>.  Provide the priority / rlimit /
- * rusage surface that POSIX programs reach for.  The sandbox doesn't
- * model process priorities or rlimit state today, so the calls
- * gracefully no-op — getrlimit reports unlimited, getpriority reports
- * "default" niceness, setrlimit/setpriority accept silently, getrusage
- * zeros the struct.  This is honest behaviour: the sandbox really has
- * no per-process priority knob, so any "value" we'd invent is fiction. */
+ * rusage surface that POSIX programs reach for.  rlimit and rusage
+ * are real symbols in libcodepod_guest_compat.a (codepod_resource.c) so
+ * they appear in the link's symbol table — autoconf probes that
+ * test-link a function reference will find them.  getpriority /
+ * setpriority / getrusage stay as static inline since they're truly
+ * stateless no-ops. */
 
 #include <errno.h>
 #include <sys/time.h>
@@ -51,34 +51,20 @@ struct rusage {
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN (-1)
 
-static inline int getpriority(int which, id_t who) {
-    (void)which; (void)who;
-    return 0;  /* default niceness */
-}
+/* getpriority / setpriority / getrusage — real symbols (not static
+ * inline) so gnulib's REPLACE_* probes accept them and skip
+ * compiling its own replacements.  All are sandbox no-ops:
+ * priorities default to 0, rusage zeroes the struct. */
+int getpriority(int which, id_t who);
+int setpriority(int which, id_t who, int prio);
+int getrusage(int who, struct rusage *r);
 
-static inline int setpriority(int which, id_t who, int prio) {
-    (void)which; (void)who; (void)prio;
-    return 0;
-}
+/* Real impls in codepod_resource.c — provide per-resource defaults
+ * (RLIMIT_NOFILE = 1024, RLIMIT_STACK = 1MB, etc.) instead of
+ * blanket RLIM_INFINITY, so guest code that probes "is this absurdly
+ * low / high" sees believable values. */
+int getrlimit(int resource, struct rlimit *rlim);
+int setrlimit(int resource, const struct rlimit *rlim);
 
-static inline int getrlimit(int resource, struct rlimit *rlim) {
-    (void)resource;
-    if (rlim) { rlim->rlim_cur = RLIM_INFINITY; rlim->rlim_max = RLIM_INFINITY; }
-    return 0;
-}
-
-static inline int setrlimit(int resource, const struct rlimit *rlim) {
-    (void)resource; (void)rlim;
-    return 0;
-}
-
-static inline int getrusage(int who, struct rusage *r) {
-    (void)who;
-    if (r) {
-        struct rusage zero = {0};
-        *r = zero;
-    }
-    return 0;
-}
 
 #endif /* CODEPOD_COMPAT_SYS_RESOURCE_H */
