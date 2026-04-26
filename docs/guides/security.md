@@ -33,7 +33,7 @@ codepod is designed to run untrusted LLM-generated code safely. This document de
               └─────────────────────┘
 ```
 
-Everything inside the sandbox (shell, coreutils, Python) runs as WebAssembly. Everything outside (orchestrator, extensions) runs on the host. The WASI P1 import boundary is the primary trust boundary.
+Everything inside the sandbox (shell, BusyBox userland, Python, custom WASM tools) runs as WebAssembly. Everything outside (orchestrator, extensions) runs on the host. The WASI P1 import boundary is the primary trust boundary.
 
 ## WASM isolation
 
@@ -181,7 +181,7 @@ The package manager (`pkg install`) is **disabled by default**. When enabled:
 - **Size limit** — per-package size cap (configurable, e.g., 5 MB)
 - **Count limit** — maximum number of installed packages
 - **Name validation** — package names are validated to prevent path traversal (empty, `.`, `..`, and `/` are rejected)
-- **WASM execution** — installed packages run inside the same WASM sandbox as built-in coreutils, with the same isolation guarantees
+- **WASM execution** — installed packages run inside the same WASM sandbox as the built-in BusyBox userland, with the same isolation guarantees
 
 ```typescript
 security: {
@@ -250,9 +250,10 @@ The codebase includes dedicated security tests:
 | Component | Where it runs | Trust level |
 |-----------|--------------|-------------|
 | Shell parser | WASM sandbox | Untrusted — parses arbitrary input |
-| Coreutils (cat, grep, sed, ...) | WASM sandbox | Untrusted — processes arbitrary data |
+| BusyBox userland (cat, grep, sed, ...) | WASM sandbox | Untrusted — processes arbitrary data |
+| Rust standalones (rg, jq, fmt, ...) | WASM sandbox | Untrusted — processes arbitrary data |
 | Python (RustPython) | WASM sandbox | Untrusted — executes arbitrary scripts |
-| Installed packages (pkg) | WASM sandbox | Untrusted — same boundary as coreutils |
+| Installed packages (pkg) | WASM sandbox | Untrusted — same boundary as BusyBox |
 | VFS | Host (in-memory) | Trusted — mediates all file access |
 | Process manager | Host | Trusted — spawns/kills WASM instances |
 | Network gateway | Host | Trusted — enforces network policy |

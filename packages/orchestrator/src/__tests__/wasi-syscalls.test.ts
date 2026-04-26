@@ -100,4 +100,29 @@ describe('WASI syscalls', { sanitizeResources: false, sanitizeOps: false }, () =
       expect(result.stdout.trim()).toBe('hello');
     });
   });
+
+  describe('/proc/self', () => {
+    it('cat /proc/self/comm returns the applet name', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+      const result = await sandbox.run('cat /proc/self/comm');
+      expect(result.exitCode).toBe(0);
+      // BusyBox `cat` runs as the multicall binary — comm is the
+      // executable basename, truncated at 15 chars (Linux convention).
+      expect(result.stdout.trim()).toBe('cat');
+    });
+
+    it('readlink /proc/self returns a numeric pid', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+      const result = await sandbox.run('readlink /proc/self');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toMatch(/^\d+$/);
+    });
+
+    it('/proc/self/status reports a Pid line', async () => {
+      sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+      const result = await sandbox.run('cat /proc/self/status');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/^Pid:\s+\d+$/m);
+    });
+  });
 });

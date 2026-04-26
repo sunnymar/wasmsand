@@ -7,7 +7,7 @@ codepod has two package managers, each covering a different type of extension:
 | `pkg install <name>` | WASI binary tools (new shell commands) | [codepod-packages registry](#codepod-packages-registry) |
 | `pip install <name>` | Python packages | [codepod pip registry](#codepod-pip-registry) |
 
-Both managers install into the sandbox VFS. Installed packages are sandboxed with the same security boundary as built-in coreutils and the Python standard library.
+Both managers install into the sandbox VFS. Installed packages are sandboxed with the same security boundary as the built-in BusyBox userland and the Python standard library.
 
 ---
 
@@ -103,7 +103,7 @@ Note: `pdf-tools`, `sqlite3`, `sips`, and `xlsx-tools` are also built-in — the
 
 - Packages are fetched from allowed hosts only — enforced before download
 - Package names are validated to prevent path traversal
-- Installed WASI binaries run inside the same sandbox as built-in coreutils — no additional host access
+- Installed WASI binaries run inside the same sandbox as the built-in BusyBox userland — no additional host access
 - Packages are stored in the VFS at `/usr/share/pkg/bin/<name>.wasm`
 
 See [Security Architecture](security.md#package-manager-security) for details.

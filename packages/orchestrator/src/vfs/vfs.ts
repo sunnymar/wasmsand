@@ -660,6 +660,44 @@ export class VFS {
     this.notifyChange();
   }
 
+  /**
+   * POSIX hard link — make `newPath` an alias for `oldPath`'s
+   * underlying inode.  Both names index the same FileInode, so a
+   * write through either appears in both.  Linux semantics:
+   *   - oldPath must exist
+   *   - newPath must not exist (EEXIST otherwise)
+   *   - oldPath must be a regular file (EPERM on directories;
+   *     symlink target follows the conventional behavior of
+   *     linking the symlink's referent, not the symlink itself)
+   * Wired to the WASI path_link syscall in wasi-host so guest
+   * binaries that call link(2) (BusyBox `ln` without -s, etc.)
+   * see the new path immediately.
+   */
+  link(oldPath: string, newPath: string): void {
+    const { parent: newParent, name: newName } = this.resolveParent(newPath);
+    this.assertWritePermission(newParent);
+    if (newParent.children.has(newName)) {
+      throw new VfsError('EEXIST', `file exists: ${newPath}`);
+    }
+
+    // Resolve oldPath following symlinks to the underlying file.
+    let inode = this.resolve(oldPath);
+    if (inode.type === 'symlink') {
+      // Conventional: hard-link the symlink's target, not the
+      // symlink itself.  resolve() doesn't auto-follow at the
+      // leaf, so do it here.
+      inode = this.resolve(inode.target);
+    }
+    if (inode.type === 'dir') {
+      throw new VfsError('EACCES', `hard link not allowed for directory: ${oldPath}`);
+    }
+
+    this.assertFileCountLimit();
+    newParent.children.set(newName, inode);
+    this.currentFileCount++;
+    this.notifyChange();
+  }
+
   symlink(target: string, path: string): void {
     const { parent, name } = this.resolveParent(path);
     this.assertWritePermission(parent);

@@ -4,7 +4,7 @@
 
 The sandbox runs three kinds of commands:
 
-**Executables** are standalone WASM binaries spawned as isolated processes by the kernel. They use standard Rust I/O (`stdin()`, `stdout()`, `stderr()`, `std::fs`). The WASI layer maps these to the sandbox's pipes, capture buffers, and virtual filesystem. All coreutils and most tools are executables. See [Creating Executables](./creating-commands.md) for how to add new ones.
+**Executables** are standalone WASM binaries spawned as isolated processes by the kernel. The default userland is **BusyBox 1.37.0** compiled to WASI — a single multicall binary that provides ~96 standard POSIX utilities (`cat`, `ls`, `awk`, `sed`, `find`, `tar`, …). A handful of utilities (`column`, `csplit`, `file`, `fmt`, `iconv`, `join`, `jq`, `numfmt`, `rg`, `sha224sum`, `sha384sum`, `zip`) keep their Rust standalones because BusyBox doesn't ship them or we want different behavior. Custom executables (Python, sqlite3, pdf-tools, etc.) and your own additions sit alongside BusyBox. See [Creating Executables](./creating-commands.md).
 
 **Shell builtins** run inside the shell process itself. They must be in-process because they modify shell state (variables, working directory, control flow). Builtins write output to fd 1 and read input from fd 0, just like executables.
 
@@ -16,26 +16,32 @@ All three share the same I/O model: stdin is fd 0, stdout is fd 1, stderr is fd 
 
 | Category | Commands |
 |----------|----------|
-| File operations | cat, cp, mv, rm, mkdir, rmdir, ls, touch, ln, chmod, truncate, split, cmp, patch |
+| File operations | cat, cp, mv, rm, mkdir, rmdir, ls, touch, ln, link, unlink, chmod, chown, chgrp, truncate, split, cmp, patch |
 | Text processing | grep, sort, uniq, wc, head, tail, cut, tr, tac, tee, rev |
-| Text formatting | fmt, fold, nl, expand, unexpand, paste, column, numfmt |
-| Advanced text | sed, awk, diff, comm, join, csplit |
-| Search & inspection | find, rg, xargs, strings, file, tree, stat |
-| Data formats | jq |
-| Archiving | tar, gzip, gunzip, zip, unzip |
+| Text formatting | fmt‡, fold, nl, expand, unexpand, paste, column†, numfmt‡ |
+| Advanced text | sed, awk, diff, comm, join‡, csplit‡ |
+| Search & inspection | find, rg†, xargs, strings, file‡, tree, stat |
+| Data formats | jq‡ |
+| Archiving | tar, gzip, gunzip, zcat, zip†, unzip |
 | Disk usage | du, df |
 | Path utilities | basename, dirname, readlink, realpath |
-| Environment | env, printenv, uname, whoami, id, hostname, nproc |
-| Math & data | bc, dc, sqlite3 (in-memory) |
-| Encoding & hashing | base64, md5sum, sha256sum, cksum, xxd, od |
-| Scripting | echo, printf, test, expr, seq, sleep, yes, true, false, mktemp, timeout |
+| Environment | env, printenv, uname, whoami, id, hostname, nproc, arch, uptime, who, users, logname, groups, hostid |
+| Math & data | bc, dc, factor, expr, sqlite3 (in-memory) |
+| Encoding & hashing | base32, base64, md5sum, sha1sum, sha256sum, sha512sum, sha224sum‡, sha384sum‡, cksum, sum, xxd, hexdump, od |
+| Scripting | echo, printf, test, seq, sleep, yes, true, false, mktemp, timeout, nice, nohup, tsort, shuf |
 | Python | python3, python (RustPython, standard library) |
 
-Executables are compiled to `wasm32-wasip1` and live in `packages/coreutils/src/bin/`. The sandbox auto-discovers `.wasm` files from the configured `wasmDir`.
+`†` = Rust standalone (not provided by BusyBox). `‡` = upstream C port via cpcc (`packages/c-ports/`). Everything else resolves to `/usr/bin/busybox` via VFS symlinks created at sandbox init.
 
 `python` is a symlink to `python3` — both work interchangeably.
 
-Note: `echo`, `printf`, `test`, and `sleep` exist as both executables and shell builtins. The shell builtin takes precedence; the executable is used when invoked via `command echo` or `/usr/bin/echo`.
+Note: `echo`, `printf`, `test`, and `sleep` exist as both executables and shell builtins. The shell builtin takes precedence; the executable is used when invoked via `command echo` or `/usr/bin/echo`. When the BusyBox executable is invoked, semantics follow BusyBox (e.g., `awk` numeric literal `01234` is decimal, not octal — see `awk-busybox.test.ts` for the full conformance matrix).
+
+### BusyBox as the default userland
+
+BusyBox is built with `cpcc` (the codepod clang wrapper from the guest-compat toolchain) and linked against `libcodepod_guest_compat.a` for libc shims (`uname`, `getpid`, `setjmp`/`longjmp`, hardlink-aware `link`, …). The build artifact is a single `busybox.wasm` binary; at sandbox creation, the orchestrator's `ProcessManager.registerMulticallTool('busybox', …, BUSYBOX_APPLETS)` creates one VFS symlink per applet under `/usr/bin/`, all pointing to `/usr/bin/busybox`. BusyBox dispatches on `argv[0]`, so `cat foo.txt` runs the same wasm as `busybox cat foo.txt`.
+
+This is identical to how BusyBox works on Alpine, OpenWrt, embedded Linux — the only sandbox-specific bit is that the symlinks live in the in-memory VFS rather than a real disk.
 
 ### Tool files and command aliasing
 
@@ -226,17 +232,37 @@ echo hello | grep h | wc -l
 
 ## Virtual filesystems
 
-The sandbox provides virtual `/dev` and `/proc` filesystems:
+The sandbox provides virtual `/dev` and `/proc` filesystems backed by host providers. Each provider declares an `fsType` (`devtmpfs`, `proc`) that the VFS surfaces through `statfs`-style queries.
+
+### /dev — streaming devices
 
 | Path | Behavior |
 |------|----------|
 | `/dev/null` | Discards writes, returns empty on read |
 | `/dev/zero` | Returns zero-filled bytes |
-| `/dev/random`, `/dev/urandom` | Cryptographically random bytes |
+| `/dev/random`, `/dev/urandom` | Cryptographically random bytes (via `crypto.getRandomValues`) |
+| `/dev/full` | Reads zeros; writes always fail with `ENOSPC` |
+
+`/dev` providers are **streaming** — `read()` and `write()` go directly through the provider on every syscall, so producers like `head -c 16 /dev/urandom | xxd` get fresh entropy each call instead of a frozen materialized buffer.
+
+### /proc — per-PID process info
+
+The `ProcProvider` synthesizes `/proc` entries lazily, mirroring Linux:
+
+| Path | Behavior |
+|------|----------|
 | `/proc/uptime` | Seconds since sandbox creation |
-| `/proc/version` | Sandbox version string |
+| `/proc/version` | `codepod-<version>` build string |
 | `/proc/cpuinfo` | Processor information |
 | `/proc/meminfo` | Memory information |
 | `/proc/diskstats` | VFS storage statistics (JSON) |
+| `/proc/mounts` | Active mount table (sourced from the VFS) |
+| `/proc/self` | Magic symlink resolved per-caller (Linux convention) — `readlink /proc/self` returns the calling process's pid; `cat /proc/self/comm` reports the caller's applet name |
+| `/proc/<pid>/stat` | Linux-format stat line (state, ppid, utime, …) |
+| `/proc/<pid>/status` | Human-readable status (Name, State, Pid, PPid, Uid, Gid) |
+| `/proc/<pid>/cmdline` | NUL-separated argv |
+| `/proc/<pid>/comm` | Process name (e.g. `bash` for PID 1) |
 
-These work transparently with coreutils: `cat /dev/null`, `head -c 16 /dev/random | xxd`, `cat /proc/uptime`.
+PID 1 is the **initial** shell that the sandbox starts at boot, presented as `/bin/bash` — Unix init. Nested processes (`bash` invoked from inside the sandbox, or Python re-spawning a shell, or `bash → python → bash`) get sequential pids and have a real `ppid` chain back through their parent shells. So `cat /proc/1/comm` always reports the boot shell, while `cat /proc/self/comm` always reports the applet running the `cat`.
+
+These work transparently with all utilities: `cat /dev/null`, `head -c 16 /dev/random | xxd`, `cat /proc/uptime`, `ls /proc/self/fd/`.

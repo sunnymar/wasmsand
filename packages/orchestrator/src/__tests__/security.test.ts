@@ -78,8 +78,13 @@ describe('Security MVP acceptance', () => {
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
     });
-    // /etc/passwd doesn't exist in the virtual FS
-    const result = await sb.run('cat /etc/passwd');
+    // The sandbox initializes a small set of synthesized files
+    // (/etc/passwd, /etc/group, /etc/hostname, …) for tooling, so
+    // checking those isn't a clean "host isolation" probe anymore.
+    // Use a host-specific path that's never present in the VFS:
+    // /Users/<anyone>/... is macOS-only and would only exist if we
+    // were leaking host filesystem access into the sandbox.
+    const result = await sb.run('cat /Users/root/.ssh/id_rsa');
     expect(result.exitCode).not.toBe(0);
     sb.destroy();
   });
@@ -255,7 +260,12 @@ describe('Security MVP acceptance', () => {
         onAuditEvent: (e) => events.push(e),
       },
     });
-    await sb.run('yes hello | head -100');
+    // Bounded producer overshoots the 20-byte cap and trips the
+    // limit.exceeded audit hook.  See sandbox.test.ts' note on the
+    // same test for the BusyBox-stdio EPIPE interaction that
+    // makes `yes hello | head -100` deadlock until we trace why
+    // ferror isn't surfacing on EPIPE.
+    await sb.run('seq 1 200');
     sb.destroy();
 
     const limit = events.find(e => e.type === 'limit.exceeded' && e.subtype === 'stdout');

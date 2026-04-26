@@ -18,6 +18,15 @@ export interface VfsLike {
   rmdir(path: string): void;
   rename(oldPath: string, newPath: string): void;
   symlink(target: string, path: string): void;
+  /**
+   * POSIX hard link — make `newPath` an alias for `oldPath`'s
+   * inode, so a write through either path appears at both.  Must
+   * fail with EEXIST if newPath already exists, EACCES on
+   * directories.  Optional on the proxy side: VfsProxy doesn't
+   * implement it yet (worker-thread crossing requires the path-
+   * link op to be added to proxy-protocol.ts).
+   */
+  link?(oldPath: string, newPath: string): void;
   readlink(path: string): string;
   chmod(path: string, mode: number): void;
   withWriteAccess(fn: () => void): void;

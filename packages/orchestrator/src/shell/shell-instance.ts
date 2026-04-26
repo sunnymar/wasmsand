@@ -1045,6 +1045,7 @@ function spawnAsyncProcess(
     preopens: { '/': '/' },
     ioFds: fdTable,
     deadlineMs,
+    pid,
   });
 
   const imports = host.getImports() as WebAssembly.Imports & Record<string, Record<string, unknown>>;
