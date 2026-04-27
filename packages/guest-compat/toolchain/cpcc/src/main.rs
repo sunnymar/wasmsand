@@ -76,6 +76,13 @@ fn build_clang_invocation(
     if let Some(archive) = env.archive.as_ref() {
         if is_link_invocation(user_args) {
             argv.push("--no-wasm-opt".into());
+            // Export the indirect function table so codepod's threads
+            // backend can dispatch start_routine pointers back into the
+            // guest (re-entrant wasm-from-JS via JSPI promising).  Used
+            // by the cooperative-serial backend; the wasi-threads /
+            // Worker+SAB backends will use the same export when they
+            // land.  See docs/superpowers/specs/2026-04-27-wasi-threads-design.md.
+            argv.push("-Wl,--export-table".into());
             argv.push("-Wl,--whole-archive".into());
             argv.push(archive.clone().into_os_string());
             argv.push("-Wl,--no-whole-archive".into());

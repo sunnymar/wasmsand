@@ -201,6 +201,23 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('signal-ok');
   });
 
+  it('runs the pthread-canary 4-thread mutex stress test', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    // Spawns 4 threads, each increments a shared counter 10000 times
+    // under mutex, joins all four, asserts counter == 40000.  On the
+    // cooperative-serial backend (no real parallelism on Node) this
+    // exercises pthread_create / join / mutex_lock / unlock thunks
+    // through the codepod::host_thread_* / host_mutex_* host imports.
+    const result = await sandbox.run('pthread-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('pthread:ok');
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,

@@ -21,6 +21,7 @@ import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { NativeModuleRegistry } from '../process/native-modules.js';
 import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
+import type { ThreadsBackend } from '../process/threads/backend.js';
 import type { WasiHost } from '../wasi/wasi-host.js';
 import type { FdTarget } from '../wasi/fd-target.js';
 import { createStaticTarget } from '../wasi/fd-target.js';
@@ -66,13 +67,23 @@ export interface KernelImportsOptions {
 
   /** Active WASI host for guest-side fd operations such as dup2 on stdio. */
   wasiHost?: WasiHost;
+
+  /**
+   * Threads backend implementing host_thread_* / host_mutex_* /
+   * host_cond_* — see
+   * docs/superpowers/specs/2026-04-27-wasi-threads-design.md.
+   * Optional: when omitted, the threading host imports are not
+   * registered (linker will fail for binaries that use them — opt-in
+   * for now to avoid surprising existing tools).
+   */
+  threadsBackend?: ThreadsBackend;
 }
 
 export function createKernelImports(opts: KernelImportsOptions): Record<string, WebAssembly.ImportValue> {
   const { memory } = opts;
   const callerPid = opts.callerPid ?? 0;
 
-  return {
+  const imports: Record<string, WebAssembly.ImportValue> = {
     // ── Process management (new) ──
 
     // host_pipe(out_ptr, out_cap) -> i32
@@ -520,4 +531,40 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     },
 
   };
+
+  // ── Threading host imports (opt-in via opts.threadsBackend) ──
+  //
+  // host_thread_spawn / host_thread_join / host_cond_wait / etc.
+  // are exposed here as plain async functions; callers (shell-
+  // instance and the future per-process bridge in process/manager.ts)
+  // wrap them with `WebAssembly.Suspending` for JSPI or with the
+  // Asyncify import-wrap for the fallback path — same pattern as
+  // host_waitpid and host_yield.  Synchronous threading imports
+  // (mutex_unlock / mutex_trylock / cond_signal / cond_broadcast /
+  // thread_self) are bound directly.
+  if (opts.threadsBackend) {
+    const tb = opts.threadsBackend;
+    imports.host_thread_spawn = (async (fnPtr: number, arg: number) =>
+      tb.spawn(fnPtr, arg)) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_join = (async (tid: number) =>
+      tb.join(tid)) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_detach = (async (tid: number) =>
+      tb.detach(tid)) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_self = (() => tb.self()) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_yield = (async () => tb.yield_()) as unknown as WebAssembly.ImportValue;
+    imports.host_mutex_lock = (async (mutexPtr: number) =>
+      tb.mutexLock(mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_mutex_unlock = ((mutexPtr: number) =>
+      tb.mutexUnlock(mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_mutex_trylock = ((mutexPtr: number) =>
+      tb.mutexTryLock(mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_cond_wait = (async (condPtr: number, mutexPtr: number) =>
+      tb.condWait(condPtr, mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_cond_signal = ((condPtr: number) =>
+      tb.condSignal(condPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_cond_broadcast = ((condPtr: number) =>
+      tb.condBroadcast(condPtr)) as unknown as WebAssembly.ImportValue;
+  }
+
+  return imports;
 }

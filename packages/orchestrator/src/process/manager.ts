@@ -12,6 +12,8 @@ import { S_TOOL } from '../vfs/inode.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
+import { CooperativeSerialBackend } from './threads/cooperative-serial.js';
+import { makeIndirectCallTable } from './threads/indirect-call-table.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
 import type { ExtensionHandler } from '../extension/types.js';
@@ -283,6 +285,8 @@ export class ProcessManager {
     const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
 
     let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
+    let setThreadsTable: ((table: WebAssembly.Table) => void) | null = null;
+    let threadsBackend: import('./threads/cooperative-serial.js').CooperativeSerialBackend | undefined;
 
     if (needsCodepod) {
       let memRef: WebAssembly.Memory | null = null;
@@ -296,12 +300,43 @@ export class ProcessManager {
         },
       });
 
+      // Threads backend — guests that import host_thread_* /
+      // host_mutex_* / host_cond_* get the cooperative-serial
+      // backend by default.  See
+      // docs/superpowers/specs/2026-04-27-wasi-threads-design.md.
+      // The indirect-call-table is filled in post-instantiation
+      // because it lives on instance.exports.
+      const codepodImportNames = moduleImportDescs
+        .filter(imp => imp.module === 'codepod')
+        .map(imp => imp.name);
+      const needsThreads = codepodImportNames.some(n => n.startsWith('host_thread_') ||
+                                                        n.startsWith('host_mutex_') ||
+                                                        n.startsWith('host_cond_'));
+      if (needsThreads) {
+        threadsBackend = new CooperativeSerialBackend();
+        setThreadsTable = (table: WebAssembly.Table) => {
+          // Build the indirect-call-table once the wasm instance
+          // exports are accessible.  JSPI's `promising` factory
+          // wraps the guest function so re-entrant calls suspend.
+          const promising = (WebAssembly as { promising?: (f: unknown) => unknown }).promising;
+          if (typeof promising !== 'function') return;
+          threadsBackend!.setIndirectCallTable(
+            makeIndirectCallTable(table, promising),
+          );
+        };
+        // Pre-wire slot 0 with a placeholder so pthread_self()
+        // during early startup doesn't see an unwired backend.
+        threadsBackend.setIndirectCallTable({
+          call: () => Promise.reject(new Error('indirect table not yet wired')),
+        });
+      }
       imports.codepod = createKernelImports({
         memory: memoryProxy,
         wasiHost: host,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,
+        threadsBackend,
       });
     }
 
@@ -310,6 +345,14 @@ export class ProcessManager {
     // Wire up the real memory reference for the codepod import proxy
     if (setMemoryRef) {
       setMemoryRef(instance.exports.memory as WebAssembly.Memory);
+    }
+
+    // Wire up the indirect-function-table for the threads backend
+    // (cooperative-serial uses it to call start_routine pointers
+    // back into the guest re-entrantly via JSPI promising).
+    if (setThreadsTable) {
+      const table = instance.exports.__indirect_function_table as WebAssembly.Table | undefined;
+      if (table) setThreadsTable(table);
     }
 
     // Check exported memory against limit
@@ -461,6 +504,8 @@ export class ProcessManager {
     const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
 
     let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
+    let setThreadsTable: ((table: WebAssembly.Table) => void) | null = null;
+    let threadsBackend: CooperativeSerialBackend | undefined;
 
     if (needsCodepod) {
       let memRef: WebAssembly.Memory | null = null;
@@ -474,12 +519,38 @@ export class ProcessManager {
         },
       });
 
+      // Threading host imports — same wiring as the async spawn path
+      // above.  Detection is by import-name prefix; binaries that
+      // whole-archive libcodepod_guest_compat.a always import the
+      // host_thread_* / host_mutex_* / host_cond_* surface even if
+      // the source code never calls pthread_*.
+      const codepodImportNames = moduleImportDescs
+        .filter(imp => imp.module === 'codepod')
+        .map(imp => imp.name);
+      const needsThreads = codepodImportNames.some(n => n.startsWith('host_thread_') ||
+                                                        n.startsWith('host_mutex_') ||
+                                                        n.startsWith('host_cond_'));
+      if (needsThreads) {
+        threadsBackend = new CooperativeSerialBackend();
+        setThreadsTable = (table: WebAssembly.Table) => {
+          const promising = (WebAssembly as { promising?: (f: unknown) => unknown }).promising;
+          if (typeof promising !== 'function') return;
+          threadsBackend!.setIndirectCallTable(
+            makeIndirectCallTable(table, promising),
+          );
+        };
+        threadsBackend.setIndirectCallTable({
+          call: () => Promise.reject(new Error('indirect table not yet wired')),
+        });
+      }
+
       imports.codepod = createKernelImports({
         memory: memoryProxy,
         wasiHost: host,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,
+        threadsBackend,
       });
     }
 
@@ -497,6 +568,13 @@ export class ProcessManager {
         return { exit_code: 1, stdout: '', stderr: `${command}: ${e.message}\n` };
       }
       throw e;
+    }
+
+    // Wire the indirect-function-table for the threads backend now
+    // that the wasm instance exists.
+    if (setThreadsTable) {
+      const table = instance.exports.__indirect_function_table as WebAssembly.Table | undefined;
+      if (table) setThreadsTable(table);
     }
 
     // Check exported memory against limit

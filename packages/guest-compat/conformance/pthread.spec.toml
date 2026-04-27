@@ -1,0 +1,9 @@
+canary = "pthread-canary"
+summary = "pthread Tier 1 surface — 4-thread mutex stress test (§Migration Path Step 1)."
+
+[[case]]
+name = "four_thread_mutex_counter"
+inputs = "spawn 4 threads, each increments shared counter 10000 times under mutex, join all"
+expected.exit = 0
+expected.stdout = "pthread:ok"
+expected.note = "counter == 40000 across all 4 thread join points"

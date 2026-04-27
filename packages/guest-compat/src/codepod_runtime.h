@@ -61,6 +61,63 @@ int codepod_host_waitpid(int pid, int out_ptr, int out_cap);
 __attribute__((import_module("codepod"), import_name("host_waitpid_nohang")))
 int codepod_host_waitpid_nohang(int pid);
 
+/* ── Threading host imports ────────────────────────────────────
+ *
+ * Backend-routed pthread surface — see
+ * docs/superpowers/specs/2026-04-27-wasi-threads-design.md.  The
+ * guest binary always imports these; the orchestrator-side backend
+ * implementation varies (cooperative-serial / wasi-threads /
+ * Worker+SAB / WASI Preview 2).  Same .wasm runs on every backend.
+ *
+ * host_thread_spawn(fn_ptr, arg) — schedule start_routine(arg) and
+ * return a thread id.  Cooperative-serial backends inline-invoke
+ * via __indirect_function_table.get(fn_ptr); real-thread backends
+ * dispatch to a wasi-thread or Worker.  Returns -1 on failure.
+ *
+ * host_thread_join(tid) returns the start_routine return value
+ * (cast to int — 32-bit on wasm32).  Suspends via JSPI/Asyncify
+ * until the thread completes.  Returns -1 if tid is invalid.
+ *
+ * host_mutex_*, host_cond_* operate on the opaque payload of the
+ * pthread_mutex_t / pthread_cond_t struct.  The C frontend passes
+ * a pointer to the struct's first opaque slot; the backend
+ * interprets it however it likes (atomic-CAS state, futex word,
+ * etc.).  Cooperative-serial backends ignore the pointer and
+ * always succeed. */
+
+__attribute__((import_module("codepod"), import_name("host_thread_spawn")))
+int codepod_host_thread_spawn(int fn_ptr, int arg);
+
+__attribute__((import_module("codepod"), import_name("host_thread_join")))
+int codepod_host_thread_join(int tid);
+
+__attribute__((import_module("codepod"), import_name("host_thread_detach")))
+int codepod_host_thread_detach(int tid);
+
+__attribute__((import_module("codepod"), import_name("host_thread_self")))
+int codepod_host_thread_self(void);
+
+__attribute__((import_module("codepod"), import_name("host_thread_yield")))
+int codepod_host_thread_yield(void);
+
+__attribute__((import_module("codepod"), import_name("host_mutex_lock")))
+int codepod_host_mutex_lock(int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_mutex_unlock")))
+int codepod_host_mutex_unlock(int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_mutex_trylock")))
+int codepod_host_mutex_trylock(int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_cond_wait")))
+int codepod_host_cond_wait(int cond_ptr, int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_cond_signal")))
+int codepod_host_cond_signal(int cond_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_cond_broadcast")))
+int codepod_host_cond_broadcast(int cond_ptr);
+
 int codepod_json_call(const char *json, char **out, size_t *out_len);
 
 #endif
