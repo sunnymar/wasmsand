@@ -694,7 +694,7 @@ private loaderContext(): LoaderContext {
       networkBridge: this.networkBridge,
       extensionRegistry: this.extensionRegistry,
       threadsBackend: this.threadsBackend,
-      runCommandHandler: this.runCommandHandler, // PR4 wires this through
+      // runCommandHandler is added in PR4 Task 4.1 — do not include in PR2.
     }),
     bindMemoryForProcess: (pid, memory) =>
       this.processManager.setMemoryRef(pid, memory),
@@ -1724,16 +1724,32 @@ async host_run_command(reqPtr: number, reqLen: number, outPtr: number, outCap: n
 },
 ```
 
-Pass `runCommandHandler` through `KernelImportsOptions` so `createKernelImports` receives it. Threading it through requires extending `KernelImportsOptions`:
+Pass `runCommandHandler` through `KernelImportsOptions` so `createKernelImports` receives it. Threading requires extending `KernelImportsOptions` with two fields — the handler itself, and the sandbox instance to bind into the handler's context:
 
 ```ts
 export interface KernelImportsOptions {
   // ... existing ...
   runCommandHandler?: RunCommandHandler;
+  /** The sandbox instance handed to `RunCommandContext.sandbox` when
+   *  the kernel-imports handler invokes `runCommandHandler`. */
+  sandbox: Sandbox;
 }
 ```
 
-In `Sandbox.buildKernelImports`, pass `runCommandHandler: this.runCommandHandler`.
+In `Sandbox.loaderContext()`, pass both:
+
+```ts
+buildKernelImports: (pid) => createKernelImports({
+  vfs: this.vfs,
+  processManager: this.processManager,
+  pid,
+  networkBridge: this.networkBridge,
+  extensionRegistry: this.extensionRegistry,
+  threadsBackend: this.threadsBackend,
+  runCommandHandler: this.runCommandHandler,
+  sandbox: this,
+}),
+```
 
 - [ ] **Step 5: Run the test**
 
@@ -2261,6 +2277,10 @@ Expected: only matches inside `packages/orchestrator/src/shell/` itself (which i
 ```bash
 git rm -r packages/orchestrator/src/shell
 ```
+
+- [ ] **Step 2b: Remove the identity-equality test that referenced `ShellInstance`**
+
+`packages/orchestrator/src/__tests__/sandbox-bootArgv.test.ts` contains a third test (`Sandbox creates exactly one bash instance for PID 1`) that calls `sb.__getShellInstanceProcess()`. That accessor — and the `ShellInstance` class it returned — no longer exist post-PR4. Delete that test case (the first two tests in the file remain valid). Also delete the `__getShellInstanceProcess` accessor from `Sandbox` itself.
 
 - [ ] **Step 3: Move shell-conformance tests that target `/bin/bash`**
 
