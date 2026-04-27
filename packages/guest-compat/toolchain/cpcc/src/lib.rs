@@ -73,4 +73,23 @@ pub const TIER1: &[&str] = &[
     "tzset",
     "wait",
     "waitpid",
+    // pthread Tier 1 — see
+    // docs/superpowers/specs/2026-04-27-wasi-threads-design.md.
+    // Backend-routed: the symbols thunk through codepod::host_*
+    // imports; cpcheck (structural) verifies the .a archive
+    // exports them and the linked binary doesn't fall back to
+    // wasi-libc stubs.
+    "pthread_create",
+    "pthread_join",
+    "pthread_detach",
+    "pthread_exit",
+    "pthread_self",
+    "pthread_mutex_lock",
+    "pthread_mutex_unlock",
+    "pthread_cond_wait",
+    "pthread_cond_signal",
+    "pthread_key_create",
+    "pthread_setspecific",
+    "pthread_getspecific",
+    "pthread_once",
 ];

@@ -21,6 +21,8 @@ import type { ShellLike, StreamCallbacks } from './shell-like.js';
 import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import { createShellImports } from '../host-imports/shell-imports.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
+import { CooperativeSerialBackend } from '../process/threads/cooperative-serial.js';
+import { makeIndirectCallTable } from '../process/threads/indirect-call-table.js';
 import { ProcessKernel, NO_PARENT_PID, type SpawnRequest } from '../process/kernel.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import { createBufferTarget, createNullTarget, createStaticTarget, bufferToString, type FdTarget } from '../wasi/fd-target.js';
@@ -1170,6 +1172,29 @@ function spawnAsyncProcess(
       },
     });
 
+    // Threads backend — guests linked against libcodepod_guest_compat.a
+    // import host_thread_* / host_mutex_* / host_cond_* even if the
+    // source code never calls pthread_*.  The cooperative-serial
+    // backend handles them by inline-invoking start_routine via the
+    // indirect call table; mutex/cond are no-ops.  The
+    // indirect-call-table is wired post-instantiation since it lives
+    // on instance.exports.__indirect_function_table.
+    const codepodImportNames = moduleImportDescs
+      .filter(imp => imp.module === 'codepod')
+      .map(imp => imp.name);
+    const needsThreads = codepodImportNames.some(n => n.startsWith('host_thread_') ||
+                                                      n.startsWith('host_mutex_') ||
+                                                      n.startsWith('host_cond_'));
+    let childThreadsBackend: CooperativeSerialBackend | undefined;
+    if (needsThreads) {
+      childThreadsBackend = new CooperativeSerialBackend();
+      // Pre-wire with a placeholder — replaced below once the
+      // instance exports are accessible.
+      childThreadsBackend.setIndirectCallTable({
+        call: () => Promise.reject(new Error('indirect table not yet wired')),
+      });
+    }
+
     const childKernelImports = createKernelImports({
       memory: childMemoryProxy,
       callerPid: pid,
@@ -1179,6 +1204,7 @@ function spawnAsyncProcess(
       extensionRegistry,
       nativeModules: mgr.nativeModules,
       runCommand,
+      threadsBackend: childThreadsBackend,
       // The child's spawn calls record the child's pid as the new
       // grandchild's ppid — this is how getppid() resolves to the real
       // parent at every level of the process tree.
@@ -1221,11 +1247,51 @@ function spawnAsyncProcess(
       childKernelImports.host_run_command as (...args: number[]) => Promise<number>,
     );
 
+    // Threading async imports — same wrap pattern as host_waitpid.
+    if (needsThreads) {
+      imports.codepod.host_thread_spawn = wrapAsyncImport(
+        childKernelImports.host_thread_spawn as (...args: number[]) => Promise<number>,
+      );
+      imports.codepod.host_thread_join = wrapAsyncImport(
+        childKernelImports.host_thread_join as (...args: number[]) => Promise<number>,
+      );
+      imports.codepod.host_thread_detach = wrapAsyncImport(
+        childKernelImports.host_thread_detach as (...args: number[]) => Promise<number>,
+      );
+      imports.codepod.host_thread_yield = wrapAsyncImport(
+        childKernelImports.host_thread_yield as (...args: number[]) => Promise<number>,
+      );
+      imports.codepod.host_mutex_lock = wrapAsyncImport(
+        childKernelImports.host_mutex_lock as (...args: number[]) => Promise<number>,
+      );
+      imports.codepod.host_cond_wait = wrapAsyncImport(
+        childKernelImports.host_cond_wait as (...args: number[]) => Promise<number>,
+      );
+      // Sync threading imports stay direct.
+      imports.codepod.host_thread_self = childKernelImports.host_thread_self;
+      imports.codepod.host_mutex_unlock = childKernelImports.host_mutex_unlock;
+      imports.codepod.host_mutex_trylock = childKernelImports.host_mutex_trylock;
+      imports.codepod.host_cond_signal = childKernelImports.host_cond_signal;
+      imports.codepod.host_cond_broadcast = childKernelImports.host_cond_broadcast;
+    }
+
     // Start the process asynchronously
     adapter.instantiate(module, imports).then((instance) => {
       if (checkMemLimit(instance)) return;
       childMemRef = instance.exports.memory as WebAssembly.Memory;
       host.setMemory(childMemRef);
+
+      // Wire indirect-function-table for the threads backend now
+      // that the instance exists.
+      if (childThreadsBackend) {
+        const table = instance.exports.__indirect_function_table as WebAssembly.Table | undefined;
+        const promising = (WebAssembly as { promising?: (f: unknown) => unknown }).promising;
+        if (table && typeof promising === 'function') {
+          childThreadsBackend.setIndirectCallTable(
+            makeIndirectCallTable(table, promising),
+          );
+        }
+      }
 
       const startFn = wireChildStart(instance, childAsyncifyBridge, hostScheduler);
       const promise: Promise<void> = Promise.resolve().then(() => startFn()).then(() => undefined).catch(() => {});

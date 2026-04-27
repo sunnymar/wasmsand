@@ -24,67 +24,46 @@
 
 #include <sched.h>
 #include <stddef.h>
-#include <sys/types.h>
 #include <time.h>
+
+/* Opaque pthread types are pulled from wasi-libc's
+ * <bits/alltypes.h> via these __NEED_* triggers.  Going through
+ * the platform headers (rather than redeclaring) avoids the
+ * typedef-redefinition trap when guest code includes both
+ * <sys/types.h> and <pthread.h>.  wasi-libc sizes pthread_mutex_t
+ * / pthread_cond_t at 40 bytes each — plenty of room for the
+ * future real-thread backends to stash atomic state. */
+#define __NEED_pthread_t
+#define __NEED_pthread_mutex_t
+#define __NEED_pthread_mutexattr_t
+#define __NEED_pthread_cond_t
+#define __NEED_pthread_condattr_t
+#define __NEED_pthread_rwlock_t
+#define __NEED_pthread_rwlockattr_t
+#define __NEED_pthread_attr_t
+#define __NEED_pthread_key_t
+#define __NEED_pthread_once_t
+#define __NEED_pthread_spinlock_t
+#define __NEED_pthread_barrier_t
+#define __NEED_pthread_barrierattr_t
+#include <bits/alltypes.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ── Opaque types ─────────────────────────────────────────────────
+/* ── Initializers ─────────────────────────────────────────────────
  *
- * pthread_t is a 32-bit thread id allocated by codepod_pthread.c —
- * NOT a pointer to a thread state, so guest code that compares with
- * ==/!= or stores in arrays works correctly.  Backing state lives
- * in a hidden table inside libcodepod_guest_compat.a.
- *
- * pthread_mutex_t / pthread_cond_t are sized to fit a 64-bit state
- * machine plus a generation counter; init flips them to a valid
- * state, destroy invalidates.  Cooperative impls treat lock/unlock
- * as no-ops (single execution thread) but the layout must allow a
- * future real-thread impl to use the same opaque storage. */
+ * wasi-libc's pthread_mutex_t / pthread_cond_t are zero-init
+ * compatible (the type is a union of int arrays + ptr arrays, all
+ * of which are zero-valid).  PTHREAD_MUTEX_INITIALIZER expands to
+ * a zero-initializer; the backend interprets a zero state as
+ * "untaken".  Same for cond / rwlock. */
 
-typedef unsigned int pthread_t;
-
-typedef struct {
-  unsigned long opaque[2];
-} pthread_mutex_t;
-
-typedef struct {
-  unsigned long opaque[2];
-} pthread_cond_t;
-
-typedef struct {
-  unsigned long opaque[2];
-} pthread_rwlock_t;
-
-typedef struct {
-  unsigned long opaque[2];
-} pthread_attr_t;
-
-typedef struct {
-  unsigned long opaque[2];
-} pthread_mutexattr_t;
-
-typedef struct {
-  unsigned long opaque[2];
-} pthread_condattr_t;
-
-typedef struct {
-  unsigned long opaque[2];
-} pthread_rwlockattr_t;
-
-typedef unsigned int pthread_key_t;
-
-typedef struct {
-  int           done;
-  unsigned int  init_id;
-} pthread_once_t;
-
-#define PTHREAD_ONCE_INIT             { 0, 0 }
-#define PTHREAD_MUTEX_INITIALIZER     { { 0, 0 } }
-#define PTHREAD_COND_INITIALIZER      { { 0, 0 } }
-#define PTHREAD_RWLOCK_INITIALIZER    { { 0, 0 } }
+#define PTHREAD_ONCE_INIT             { 0 }
+#define PTHREAD_MUTEX_INITIALIZER     { { { 0 } } }
+#define PTHREAD_COND_INITIALIZER      { { { 0 } } }
+#define PTHREAD_RWLOCK_INITIALIZER    { { { 0 } } }
 
 /* Mutex types — codepod accepts these but the cooperative impl
  * doesn't actually distinguish them (no contention possible). */
