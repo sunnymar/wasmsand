@@ -71,18 +71,18 @@ int chroot(const char *path);
  * impl.  When autoconf DOES detect them (because configure links
  * the compat archive), the macro doesn't fire.
  *
- * exec family: POSIX exec replaces the current process image, which
- * wasm doesn't expose (the wasi `process-replace` proposal isn't
- * stable yet).  All variants stub to ENOSYS so callers can detect
- * "exec unsupported" cleanly instead of silently spawning. */
+ * exec family — replace the calling process image with a new program.
+ * Codepod's emulation: spawn the new program (host_spawn), wait for
+ * it (host_waitpid), exit with its status — the caller's wasm
+ * instance never resumes, semantically equivalent to a real exec
+ * for the fork+exec+wait pattern.  Real impls in codepod_exec.c.
+ * The l-form variadic helpers below are still inline; they delegate
+ * to execv / execvp. */
 pid_t fork(void);
 pid_t vfork(void);
-static inline int execv(const char *path, char *const argv[]) {
-    (void)path; (void)argv; errno = ENOSYS; return -1; }
-static inline int execvp(const char *file, char *const argv[]) {
-    (void)file; (void)argv; errno = ENOSYS; return -1; }
-static inline int execve(const char *path, char *const argv[], char *const envp[]) {
-    (void)path; (void)argv; (void)envp; errno = ENOSYS; return -1; }
+int execv(const char *path, char *const argv[]);
+int execvp(const char *file, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
 
 #include <stdarg.h>
 #define CODEPOD_EXEC_MAX_ARGS 64
