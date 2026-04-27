@@ -131,12 +131,13 @@ follow-on efforts:
 The boundary principle is *aspirational* for legacy code and
 *enforceable* for any code added by this refactor.
 
-**Anti-weaponization.** Touching deferred Python-coupled code during
-this refactor (e.g., editing `sandbox.ts` and noticing the Python
-shim install nearby) does *not* obligate the editor to clean it up.
-Cleanup of deferred items is bundled into the CPython port. Reviewers
-should not block PRs in this refactor on grounds that they "should
-have also fixed" deferred Python debt.
+**Scope discipline.** Each PR in this series is reviewed against
+its stated scope, not against the broader Python-cleanup goal that
+lands later. Editing `sandbox.ts` and seeing the Python shim install
+nearby is fine; cleaning it up "while we're here" is not — that's
+the CPython port's job, and pulling it forward inflates the diff
+and risks regression. The deferred items have a known landing point;
+trust the staging.
 
 ## Source-Tree Changes
 
@@ -298,7 +299,9 @@ The full list after the refactor.
 - `host_cond_signal(ptr)`
 - `host_cond_broadcast(ptr)`
 
-**Dynamic extension dispatch** (no current consumer):
+**Dynamic extension dispatch** (currently consumed by RustPython
+via the auto-create-virtual-command machinery; that consumer is
+deferred Python-coupled debt, but the imports themselves stay):
 
 - `host_extension_invoke(req, out_ptr, out_cap)` (async)
 - `host_native_invoke(module, method, args, out_ptr, out_cap)`
@@ -341,13 +344,46 @@ The TS surface that `mcp-server`, `sdk-server`, and other hosts use.
 
 **Sandbox lifecycle:**
 
-- `Sandbox.create({ bootArgv, env?, vfs?, threadsBackend?, network?,
-  persistence?, … })` — `bootArgv[0]` is spawned as PID 1. **No `bash`
-  or `shell` parameter.** Default supplied by the *caller* (typically
-  `["/bin/bash"]`).
+- `Sandbox.create({ bootArgv, bootImports?, runCommandHandler?, env?,
+  vfs?, threadsBackend?, network?, persistence?, … })`:
+  - `bootArgv[0]` is spawned as PID 1. **No `bash` or `shell`
+    parameter.** Default supplied by the *caller* (typically
+    `["/bin/bash"]`).
+  - `bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>`
+    — optional callback the host server passes to supply
+    userland-specific imports for the boot process. The kernel
+    invokes it during boot, passes a `KernelApi` handle, merges
+    the returned imports into the boot process's import object
+    under the `codepod` namespace **alongside** the kernel
+    primitives. This is how bash-host wires its shell-legacy
+    imports (`host_stat`, `host_read_file`, `host_register_tool`,
+    etc.) without the kernel ever knowing they exist.
+  - `runCommandHandler?: (req: RunRequest) => Promise<RunResponse>`
+    — host-registered callback that backs `host_run_command` (see
+    §Kernel Surface). bash-host registers a callback that invokes
+    `sandbox.process(1).callExport("__run_command", ...)`.
 - `Sandbox.destroy()` — tears down.
 - `Sandbox.fork()`, `Sandbox.snapshot()`, `Sandbox.restore()` —
   existing, unchanged.
+
+**`KernelApi`** (passed to `bootImports`): a curated TypeScript
+handle exposing the kernel capabilities userland imports need.
+Concretely:
+
+- `vfs`: read/stat/write/list operations on the sandbox's VFS.
+- `processManager`: `registerTool(name, impl)`, `hasTool(name)`,
+  `spawn(...)`, `listProcesses()`. This is what `host_register_tool`
+  / `host_has_tool` need. Mutating methods are exposed
+  intentionally — userland imports are part of the trust boundary.
+- `time`: monotonic + wall clock readers (for `host_time`).
+- `memory`: helpers for read/write into the boot process's linear
+  memory (the same helpers `host-imports/common.ts` provides today).
+
+`KernelApi` is the **only** way bash-host (and any future userland
+host module) reaches into kernel state. It does not export internal
+classes or singletons; it returns a typed handle scoped to the
+specific sandbox instance. The dependency direction is
+`host-server → kernel-public-api`, never `host-server → kernel-internals`.
 
 **Process control (generic):**
 
@@ -439,6 +475,47 @@ binaries default to CLI mode. The mode is configured per-spawn:
 `host_spawn` accepts an optional `mode` field for guests that want
 to launch a long-running export-driven child (rare; not currently
 exercised by any in-tree binary).
+
+### Re-entrancy and JSPI Contract for Resident Processes
+
+`Process.callExport` must respect two invariants for resident
+processes:
+
+**1. Async/JSPI suspension.** `callExport` returns a Promise that
+resolves when the wasm export does. Today's `ShellInstance` wraps
+the export with `WebAssembly.promising(...)` (JSPI) or with the
+asyncify bridge so the wasm stack can suspend across host imports
+(`host_run_command`, `host_waitpid`, etc.) and resume. The new
+generic loader retains this exactly: every export wrapped by
+`callExport` is JSPI-or-asyncify-wrapped, and any host-registered
+callback the kernel invokes from within an import handler (e.g.,
+the `runCommandHandler` backing `host_run_command`) is itself
+async — kernel awaits the callback's Promise before returning to
+the suspended wasm stack. The registration shape is therefore
+`async (req) => Promise<Response>`, and the kernel handler wraps
+the dispatch to the registered callback in `WebAssembly.Suspending`
+(or asyncify equivalent), the same way today's
+`ShellInstance.host_run_command` already does.
+
+**2. Single-flight serialization.** A resident process has one
+in-flight `callExport` at a time. Bash's `__run_command` is not
+re-entrant, and neither is most code that runs in resident mode.
+The generic Process API therefore queues subsequent `callExport`
+calls behind the in-flight one (FIFO). This avoids two failure
+modes in the round-trip path
+`RustPython → host_run_command → runCommandHandler →
+process(1).callExport("__run_command", …)`:
+
+- *Corruption*: a second `callExport` interleaving with the first
+  would share wasm stack and globals.
+- *Deadlock*: a recursive `host_run_command` (e.g., bash spawns a
+  Python subprocess that calls `host_run_command`) would await its
+  own outer call.
+
+Both are prevented by the FIFO queue and by the single-flight
+invariant being a public guarantee of `Process.callExport`. The
+queue is per-process (not per-sandbox), so independent resident
+processes can run their exports concurrently.
 
 ### Boot at Sandbox Creation
 
@@ -690,10 +767,17 @@ require.
   `sandbox.process(1).callExport("__run_command", ...)`. RustPython
   consumers continue to work with no changes.
 - Delete `Sandbox.run`, `Sandbox.getHistory`, `Sandbox.clearHistory`
-  from the public host API. Consumers (mcp-server's `run_command`
-  tool at `index.ts:282`, sdk-server's dispatcher at `dispatcher.ts:218`,
-  any internal callers) switch to the host-side
-  `bashDispatch.runCommand(sandbox, cmd)` wrapper.
+  from the public host API. Consumers:
+  - mcp-server's `run_command` tool (`index.ts:282`) and sdk-server's
+    dispatcher (`dispatcher.ts:218`) switch to host-side
+    `bashDispatch.runCommand(sandbox, cmd)`.
+  - sdk-server's `shell.history.list` and `shell.history.clear` RPC
+    methods (`dispatcher.ts:135` and `:137`, backed by
+    `dispatcher.ts:443` / `:449`) are **removed**. The capability
+    they exposed comes from `ShellInstance` and goes away with it.
+    If any python-sdk client code calls them, it gets a clear RPC
+    error; reintroducing history (via host-side bash-dispatch
+    bookkeeping) is a follow-up only if there's demand.
 - Move the `bootArgv` default out of orchestrator and into each host
   server. Kernel's `Sandbox.create` now **requires** `bootArgv`.
 - Delete `packages/orchestrator/src/shell/shell-instance.ts` and the
@@ -702,10 +786,35 @@ require.
 **Risk:** high. Largest blast radius of the migration; touches every
 in-tree consumer.
 
-**Verification:** unit tests, guest-compat tests, mcp-server +
-sdk-server smoke tests, Python-SDK end-to-end (`Sandbox()`,
-`sb.commands.run("ls /")`), explicit `Sandbox.fork()` test (verifies
-bootArgv inheritance).
+**Verification (PR4-specific):**
+
+- Unit tests, guest-compat tests, mcp-server + sdk-server smoke
+  tests, Python-SDK end-to-end (`Sandbox()`,
+  `sb.commands.run("ls /")`).
+- Explicit `Sandbox.fork()` test verifying `bootArgv` inheritance.
+- Explicit `Sandbox.run` removal test: assert that
+  `Sandbox.run/getHistory/clearHistory` no longer exist on the
+  prototype, and that the corresponding sdk-server RPC methods
+  (`shell.history.list/clear`) return method-not-found errors.
+- **End-to-end `host_run_command` callback test.** The genuinely
+  new code path post-PR4. A guest binary (RustPython, or a tiny
+  test guest) calls `host_run_command(cmd)`; the kernel handler
+  delegates to the host-registered callback; the callback invokes
+  `process(1).callExport("__run_command", ...)`; the bash boot
+  process executes; result returns. Assert that round-trip
+  succeeds, that JSPI/asyncify suspension works correctly across
+  the chain, and that re-entrant calls (test guest calls
+  `host_run_command` while a previous one is in flight) are
+  serialized FIFO without deadlock.
+
+**On splitting this PR.** PR4 carries 9 distinct changes
+(bash-dispatch wrappers, 5 internal rewires, shell-legacy import
+moves, callback rewire, Sandbox.run/history deletion, bootArgv
+default move, shell-instance deletion). It can plausibly split into
+**PR4a** (bash-dispatch + internal rewires + Sandbox.run/history
+deletion) and **PR4b** (callback + import moves + shell-instance
+deletion). Decided at implementation time based on PR4a's actual
+diff size; not gating in the spec.
 
 ### PR5 — Rename `orchestrator/` → `kernel/`
 
@@ -798,9 +907,6 @@ Explicitly *not* in this refactor:
   kernel.
 - **`codepod-server` build pipeline structure.** Bundling kernel +
   selected userland into a single binary continues unchanged.
-- **Renaming `host_extension_invoke`.** "Extension" is arguably a
-  host-plugin abstraction rather than a primitive. Worth revisiting
-  when hostbridge lands; not worth the churn now.
 
 ## Open Questions / Future Work
 
