@@ -9,6 +9,12 @@ export interface PlatformAdapter {
   /** Load a .wasm module from a path (Node: filesystem) or URL (Browser: fetch). */
   loadModule(pathOrUrl: string): Promise<WebAssembly.Module>;
 
+  /**
+   * Read raw bytes from a path (Node: filesystem) or URL (Browser: fetch).
+   * Used to install host-side artifacts (e.g. the shell wasm) into the VFS.
+   */
+  readBytes(pathOrUrl: string): Promise<Uint8Array>;
+
   /** Instantiate a module with the given import object. */
   instantiate(
     module: WebAssembly.Module,

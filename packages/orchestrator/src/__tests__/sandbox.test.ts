@@ -96,9 +96,10 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Init overhead is ~2.5MB (pip registry JSON, python shims, etc.).
-    // Use a limit that fits init + first file (40KB) but not the second (200KB).
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 2_700_000 });
+    // Init overhead is now ~1.5MB, dominated by /bin/bash (~1.4MB). Limit
+    // fits init + first 40KB write but not init + 200KB second write.
+    // (Pre-PR1 init was ~2.5MB; previous limit of 2.7MB had similar slack.)
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 1_700_000 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(40_000));
     expect(() => {
       sandbox.writeFile('/tmp/b.txt', new Uint8Array(200_000));
