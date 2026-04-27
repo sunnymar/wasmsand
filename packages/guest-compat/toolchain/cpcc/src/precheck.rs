@@ -53,8 +53,67 @@ fn find_object_for(nm_output: &str, sym: &str) -> Option<String> {
     None
 }
 
-/// Stages 2+3: inspect the pre-opt `.wasm`. Every queried symbol's marker
-/// must be exported, and the symbol's function body must call the marker.
+/// Structural verification of the pre-opt `.wasm` (default mode):
+///   - every Tier 1 symbol is exported (proves it's defined inside
+///     the wasm, not pulled from an extern)
+///   - none of them appears in the import section (proves no wasi
+///     stub of the same name won the link).
+///
+/// Combined with cpcc's `--whole-archive` of libcodepod_guest_compat,
+/// this is sufficient to know our compat impl is what runs.  Doesn't
+/// need any marker plumbing in the source — robust to LTO inlining.
+pub fn check_wasm_structural(pre_opt: &Path, symbols: &[&str]) -> Result<()> {
+    let bytes = std::fs::read(pre_opt).with_context(|| format!("reading {}", pre_opt.display()))?;
+    let mut exported_funcs: std::collections::HashSet<String> = Default::default();
+    let mut imported_funcs: std::collections::HashSet<String> = Default::default();
+    let parser = wasmparser::Parser::new(0);
+    for payload in parser.parse_all(&bytes) {
+        let payload = payload.context("wasm parse")?;
+        match payload {
+            wasmparser::Payload::ImportSection(reader) => {
+                for imp in reader.into_imports() {
+                    let imp = imp.context("import")?;
+                    if matches!(
+                        imp.ty,
+                        wasmparser::TypeRef::Func(_) | wasmparser::TypeRef::FuncExact(_)
+                    ) {
+                        imported_funcs.insert(imp.name.to_string());
+                    }
+                }
+            }
+            wasmparser::Payload::ExportSection(reader) => {
+                for exp in reader {
+                    let exp = exp.context("export")?;
+                    if exp.kind == wasmparser::ExternalKind::Func {
+                        exported_funcs.insert(exp.name.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for sym in symbols {
+        if !exported_funcs.contains(*sym) {
+            return Err(anyhow!(
+                "structural check failed: pre-opt wasm missing export {sym} \
+                 (Tier 1 symbol must be defined inside, not extern)"
+            ));
+        }
+        if imported_funcs.contains(*sym) {
+            return Err(anyhow!(
+                "structural check failed: {sym} appears in wasm imports — \
+                 a wasi stub of the same name won the link.  Check \
+                 cpcc --whole-archive ordering."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Stages 2+3 (instrumented mode): inspect the pre-opt `.wasm`. Every
+/// queried symbol's marker must be exported, and the symbol's function
+/// body must call the marker.  Requires `-DCODEPOD_GUEST_COMPAT_MARKERS=1`
+/// at compat-archive build time (cpcc adds it when `CPCC_MARKERS=1`).
 pub fn check_wasm(pre_opt: &Path, symbols: &[&str]) -> Result<()> {
     let bytes = std::fs::read(pre_opt).with_context(|| format!("reading {}", pre_opt.display()))?;
     let mut exports: std::collections::HashMap<String, u32> = Default::default();

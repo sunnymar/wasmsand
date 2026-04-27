@@ -9,6 +9,12 @@ pub struct Env {
     pub skip_version_check: bool,
     pub preserve_pre_opt: Option<PathBuf>,
     pub wasm_opt: WasmOptMode,
+    /// CPCC_MARKERS=1 enables instrumented mode: cpcc passes
+    /// `-DCODEPOD_GUEST_COMPAT_MARKERS=1` to clang and forces
+    /// `__codepod_guest_compat_marker_*` exports at link time.
+    /// Default off; structural verification via `cpcheck --mode=structural`
+    /// (the default) doesn't require markers.
+    pub markers_enabled: bool,
 }
 
 pub enum WasmOptMode {
@@ -38,6 +44,12 @@ impl Env {
             } else {
                 WasmOptMode::Default
             },
+            // Off by default.  CI / production builds use structural
+            // verification; flip to "1" while iterating on the compat
+            // layer to enable marker-based per-symbol verification.
+            markers_enabled: std::env::var_os("CPCC_MARKERS")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false),
         }
     }
 }

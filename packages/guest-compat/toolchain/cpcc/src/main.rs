@@ -80,10 +80,28 @@ fn build_clang_invocation(
             argv.push(archive.clone().into_os_string());
             argv.push("-Wl,--no-whole-archive".into());
             for sym in TIER1 {
+                // Always force-export the Tier 1 symbol itself.  This
+                // is what structural verification (default) checks
+                // for in the wasm export section, and it's what guest
+                // tooling expects.
                 argv.push(format!("-Wl,--export={sym}").into());
-                argv.push(format!("-Wl,--export=__codepod_guest_compat_marker_{sym}").into());
+                if env.markers_enabled {
+                    // Instrumented mode also force-exports the marker
+                    // function so cpcheck's --mode=markers can locate
+                    // it in stage 2.
+                    argv.push(
+                        format!("-Wl,--export=__codepod_guest_compat_marker_{sym}").into(),
+                    );
+                }
             }
         }
+    }
+    // -DCODEPOD_GUEST_COMPAT_MARKERS=1 expands the marker macros into
+    // their real bodies in codepod_markers.h.  Without it, the macros
+    // compile to nothing (no marker functions emitted, marker-call
+    // sites are no-ops) — the production / default mode.
+    if env.markers_enabled {
+        argv.push("-DCODEPOD_GUEST_COMPAT_MARKERS=1".into());
     }
     argv
 }
