@@ -38,7 +38,16 @@ fn build_clang_invocation(
     argv.push(format!("--sysroot={}", sdk.sysroot().display()).into());
     argv.push("--target=wasm32-wasip1".into());
     argv.push("-O2".into());
-    argv.push("-std=c11".into());
+    // Default to C23 (gnu23): gives us nullptr keyword and the
+    // unreachable()/byteswap/etc. additions to <stddef.h>, both of
+    // which gnulib code paths in coreutils require.  Backward-compat:
+    // C23 is a near-pure superset of C11 that mostly adds new
+    // keywords; the exception is `bool` becoming a real keyword.
+    // Pre-C23 code that used a `typedef ... bool` would break, but
+    // none of our current ports do so (BusyBox uses smallint, jq /
+    // file use int).  Ports that need an older standard can pass
+    // `-std=...` after; clang takes the last -std= flag.
+    argv.push("-std=gnu23".into());
     argv.push("-Wall".into());
     argv.push("-Wextra".into());
     if let Some(inc) = env.include.as_ref() {
@@ -71,10 +80,28 @@ fn build_clang_invocation(
             argv.push(archive.clone().into_os_string());
             argv.push("-Wl,--no-whole-archive".into());
             for sym in TIER1 {
+                // Always force-export the Tier 1 symbol itself.  This
+                // is what structural verification (default) checks
+                // for in the wasm export section, and it's what guest
+                // tooling expects.
                 argv.push(format!("-Wl,--export={sym}").into());
-                argv.push(format!("-Wl,--export=__codepod_guest_compat_marker_{sym}").into());
+                if env.markers_enabled {
+                    // Instrumented mode also force-exports the marker
+                    // function so cpcheck's --mode=markers can locate
+                    // it in stage 2.
+                    argv.push(
+                        format!("-Wl,--export=__codepod_guest_compat_marker_{sym}").into(),
+                    );
+                }
             }
         }
+    }
+    // -DCODEPOD_GUEST_COMPAT_MARKERS=1 expands the marker macros into
+    // their real bodies in codepod_markers.h.  Without it, the macros
+    // compile to nothing (no marker functions emitted, marker-call
+    // sites are no-ops) — the production / default mode.
+    if env.markers_enabled {
+        argv.push("-DCODEPOD_GUEST_COMPAT_MARKERS=1".into());
     }
     argv
 }
@@ -117,12 +144,18 @@ fn main() -> Result<ExitCode> {
             .unwrap_or(ExitCode::FAILURE));
     }
 
-    // Post-link: if an output `.wasm` was produced and the user asked for
-    // pre-opt preservation, copy the just-linked binary to the stable path
-    // BEFORE any optional wasm-opt pass.
-    if let Some(out_wasm) = preserve::output_wasm(&cli.args) {
-        preserve::copy_to_preserve(&out_wasm, env.preserve_pre_opt.as_deref())?;
-        wasm_opt::maybe_run(&out_wasm, &env.wasm_opt)?;
+    // Post-link: pre-opt preservation is gated on the user naming a
+    // `.wasm` output (canary/test builds), but wasm-opt runs against
+    // any link output — BusyBox links to `busybox_unstripped` with no
+    // extension, and that binary is still wasm by virtue of
+    // --target=wasm32-wasip1 and still wants the --asyncify pass.
+    if is_link_invocation(&cli.args) {
+        if let Some(out_wasm) = preserve::output_wasm(&cli.args) {
+            preserve::copy_to_preserve(&out_wasm, env.preserve_pre_opt.as_deref())?;
+        }
+        if let Some(out_path) = preserve::output_path(&cli.args) {
+            wasm_opt::maybe_run(&out_path, &env.wasm_opt)?;
+        }
     }
 
     Ok(ExitCode::SUCCESS)

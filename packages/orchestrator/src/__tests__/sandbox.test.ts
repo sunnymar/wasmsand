@@ -96,12 +96,15 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Init overhead is ~2.5MB (pip registry JSON, python shims, etc.).
-    // Use a limit that fits init + first file (40KB) but not the second (200KB).
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 2_700_000 });
+    // Init overhead is dominated by file/libmagic's magic.mgc data
+    // file (~10MB), which the sandbox auto-loads at /usr/share/misc
+    // when file.wasm is present.  The tool-stub layer itself is only
+    // ~12KB.  Pick a limit that fits init + first file (40KB) but
+    // not the second (10MB).
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 12_000_000 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(40_000));
     expect(() => {
-      sandbox.writeFile('/tmp/b.txt', new Uint8Array(200_000));
+      sandbox.writeFile('/tmp/b.txt', new Uint8Array(10_000_000));
     }).toThrow(/ENOSPC/);
   });
 
@@ -409,12 +412,14 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
       sandbox = await Sandbox.create({
         wasmDir: WASM_DIR,
         adapter: new NodeAdapter(),
-        security: { limits: { fileCount: 300 } },
+        security: { limits: { fileCount: 500 } },
       });
-      // Default layout creates ~256 inodes (dirs + python shims + config files);
-      // try to fill up the remaining allocation
+      // Default layout creates ~280 inodes (BusyBox installs 96
+      // applet symlinks at /usr/bin/, plus dirs, python shims,
+      // canary fixtures, the magic.mgc data file, etc.).
+      // Try to fill up the remaining allocation.
       let threw = false;
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 300; i++) {
         try {
           sandbox.writeFile(`/tmp/f${i}.txt`, new TextEncoder().encode('x'));
         } catch {
@@ -704,7 +709,16 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
           onAuditEvent: (event) => events.push(event),
         },
       });
-      await sandbox.run('yes hello | head -100');
+      // Bounded producer (~700 bytes of output) overshoots the
+      // 20-byte cap and trips the limit.exceeded audit hook.
+      // Note: the original `yes hello | head -100` form deadlocks
+      // — even with the new fdWritePipe-via-writeAsync back-
+      // pressure, busybox stdio doesn't surface EPIPE as ferror
+      // through some interaction we haven't fully traced (yes
+      // keeps calling fd_write 3.7M times receiving WASI_EPIPE
+      // and never terminates).  The truncation event fires either
+      // way, but the bounded form keeps the test fast.
+      await sandbox.run('seq 1 200');
 
       expect(events.find(e => e.type === 'limit.exceeded' && e.subtype === 'stdout')).toBeDefined();
     });

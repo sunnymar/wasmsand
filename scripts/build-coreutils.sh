@@ -89,7 +89,14 @@ if [[ "$COPY_FIXTURES" -eq 1 ]]; then
   echo ""
   echo "Copying to test fixtures..."
 
-  TOOLS=(cat echo head tail wc sort uniq grep ls mkdir rm cp mv touch tee tr cut basename dirname env printf find sed awk jq du df gzip tar bc dc hostname base64 sha256sum sha1sum sha224sum sha384sum sha512sum md5sum stat xxd rev nproc fmt fold nl expand unexpand paste comm join split strings od cksum truncate tree patch file column cmp timeout numfmt csplit zip unzip arch factor shuf sum link unlink base32 dd tsort nice nohup hostid uptime chown chgrp sudo groups logname users who)
+  # Tools removed from this list because they're now provided by
+  # upstream c-ports (packages/c-ports/) instead of Rust standalones:
+  #   - jq, file → packages/c-ports/{jq,file}/
+  #   - csplit, fmt, join, numfmt, sha224sum, sha384sum →
+  #     packages/c-ports/coreutils/
+  # Their fixtures are deployed by the corresponding c-port's
+  # `make copy-fixtures` and tracked in git directly.
+  TOOLS=(cat echo head tail wc sort uniq grep ls mkdir rm cp mv touch tee tr cut basename dirname env printf find sed awk du df gzip tar bc dc hostname base64 sha256sum sha1sum sha512sum md5sum stat xxd rev nproc fold nl expand unexpand paste comm split strings od cksum truncate tree patch column cmp timeout zip unzip arch factor shuf sum link unlink base32 dd tsort nice nohup hostid uptime chown chgrp sudo groups logname users who)
   for tool in "${TOOLS[@]}"; do
     cp "$TARGET_DIR/$tool.wasm" "$FIXTURES_DIR/$tool.wasm"
   done

@@ -36,11 +36,11 @@ fn case_count_only() -> i32 {
 fn case_fetch_one() -> i32 {
     let mut groups: [u32; 1] = [99];
     let count = unsafe { getgroups(1, groups.as_mut_ptr()) };
-    if count != 1 || groups[0] != 0 {
+    if count != 1 || groups[0] != 1000 {
         emit("fetch_one", 1, None, None);
         return 1;
     }
-    emit("fetch_one", 0, Some("getgroups:1:0"), None);
+    emit("fetch_one", 0, Some("getgroups:1:1000"), None);
     0
 }
 

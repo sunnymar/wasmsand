@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Guest-compat implementation-signature check for busybox.wasm.
 # Invoked by CI (Task 8) and by developers after `make -C packages/c-ports/busybox all`.
-# Exits non-zero if any of the 16 Tier 1 symbols in busybox.wasm routes to a
+# Exits non-zero if any Tier 1 symbol in busybox.wasm routes to a
 # wasi-libc stub instead of the codepod compat body (§Verifying Precedence,
-# §Link-Order Regressions).
+# §Link-Order Regressions).  TIER1 is the authoritative list — see
+# packages/guest-compat/toolchain/cpcc/src/lib.rs.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
@@ -24,8 +25,8 @@ if [[ ! -x "$CPCHECK" ]]; then
   exit 2
 fi
 
-# §Verifying Precedence: with all 16 Tier 1 symbols. cpcheck with no
-# --symbol flags defaults to TIER1 (packages/guest-compat/toolchain/cpcc/src/bin/cpcheck.rs:22).
+# §Verifying Precedence: cpcheck with no --symbol flags defaults to the
+# full TIER1 list (packages/guest-compat/toolchain/cpcc/src/bin/cpcheck.rs:22).
 # BusyBox links the archive with --whole-archive, so every Tier 1 marker
 # must be present regardless of which symbols BusyBox source calls directly.
 "$CPCHECK" --archive "$ARCHIVE" --pre-opt-wasm "$WASM"

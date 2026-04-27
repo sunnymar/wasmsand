@@ -14,3 +14,12 @@
 	path = packages/rust-ports/grex
 	url = https://github.com/pemistahl/grex.git
 	branch = main
+[submodule "packages/c-ports/jq/upstream"]
+	path = packages/c-ports/jq/upstream
+	url = https://github.com/jqlang/jq.git
+[submodule "packages/c-ports/file/upstream"]
+	path = packages/c-ports/file/upstream
+	url = https://github.com/file/file.git
+[submodule "packages/c-ports/coreutils/upstream"]
+	path = packages/c-ports/coreutils/upstream
+	url = https://github.com/coreutils/coreutils.git

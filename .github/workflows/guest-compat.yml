@@ -71,11 +71,33 @@ jobs:
         # definition, which is also what real consumers run against.
         run: deno run -A --no-check scripts/run-conformance-traces.ts --include-rust
 
+      - name: Install c-port host build deps
+        # bison 3.x for coreutils' parse-datetime.y (macOS' system bison
+        # is 2.3 for licensing reasons; Ubuntu CI has 3.x by default but
+        # we install explicitly for clarity).
+        # autopoint, autoconf, automake, gperf, texinfo are required
+        # by coreutils' bootstrap.
+        # libtoolize / libtool for jq + file autotools chains.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bison gperf texinfo \
+            autopoint autoconf automake libtool rsync
+
       - name: Build BusyBox via cpcc
         run: make -C packages/c-ports/busybox all
 
       - name: Signature-check BusyBox (§Verifying Precedence)
         run: ./packages/c-ports/busybox/scripts/signature-check.sh
+
+      - name: Build jq via cpcc
+        run: make -C packages/c-ports/jq copy-fixtures
+
+      - name: Build file/libmagic via cpcc
+        run: make -C packages/c-ports/file copy-fixtures
+
+      - name: Build GNU coreutils 6-tool batch via cpcc
+        run: make -C packages/c-ports/coreutils copy-fixtures
 
       - name: Build coreutils via cargo-codepod
         run: ./scripts/build-coreutils.sh --engine=cargo-codepod --copy-fixtures

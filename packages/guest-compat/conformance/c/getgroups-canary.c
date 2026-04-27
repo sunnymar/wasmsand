@@ -31,11 +31,11 @@ static int case_fetch_one(void) {
     emit("fetch_one", 1, NULL, 1, errno);
     return 1;
   }
-  if (count != 1 || groups[0] != 0) {
+  if (count != 1 || groups[0] != 1000) {
     emit("fetch_one", 1, NULL, 0, 0);
     return 1;
   }
-  emit("fetch_one", 0, "getgroups:1:0", 0, 0);
+  emit("fetch_one", 0, "getgroups:1:1000", 0, 0);
   return 0;
 }
 

@@ -349,7 +349,10 @@ describe('pkg shell builtin', () => {
 
     const result = await sandbox.run('pkg install');
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('no URL specified');
+    // Message changed to "no package name or URL specified" when
+    // pkg gained registry-name lookup; substring assertion keeps
+    // the test stable across either phrasing.
+    expect(result.stderr).toContain('URL specified');
   });
 
   it('pkg unknown subcommand returns error', async () => {

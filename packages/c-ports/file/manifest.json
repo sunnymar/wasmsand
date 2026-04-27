@@ -1,0 +1,6 @@
+{
+  "name": "file",
+  "files": [
+    { "src": "magic.mgc", "dest": "/usr/share/misc/magic.mgc" }
+  ]
+}

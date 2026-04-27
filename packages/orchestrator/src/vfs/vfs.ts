@@ -15,7 +15,8 @@ import {
   createSymlinkInode,
 } from './inode.js';
 import { deepCloneRoot } from './snapshot.js';
-import type { VirtualProvider } from './provider.js';
+import type { MountEntry, VirtualProvider } from './provider.js';
+import type { ProcessInfo } from './proc-provider.js';
 import { DevProvider } from './dev-provider.js';
 import { ProcProvider } from './proc-provider.js';
 
@@ -67,6 +68,14 @@ export class VFS {
   private providers: Map<string, VirtualProvider> = new Map();
   /** Optional callback invoked after mutating VFS operations. */
   private onChangeCallback: (() => void) | null = null;
+  /**
+   * Source for /proc/<pid>/* entries.  The VFS itself doesn't own
+   * a process kernel — the ShellInstance does — so this is a
+   * callback set externally after the kernel is wired up.  Falls
+   * back to an empty list if unset (e.g., during construction or
+   * for raw VFS instances used in unit tests).
+   */
+  private processListProvider: (() => ProcessInfo[]) | null = null;
 
   constructor(options?: VfsOptions) {
     this.root = createDirInode(0o555);
@@ -76,7 +85,14 @@ export class VFS {
     this.initDefaultLayout();
     this.initializing = false;
     this.registerProvider('/dev', new DevProvider());
-    this.registerProvider('/proc', new ProcProvider(() => this.getStorageStats()));
+    this.registerProvider(
+      '/proc',
+      new ProcProvider(
+        () => this.getStorageStats(),
+        () => this.getMountList(),
+        () => this.processListProvider?.() ?? [],
+      ),
+    );
   }
 
   /** Create a VFS from an already-populated root (used by cowClone). */
@@ -105,7 +121,11 @@ export class VFS {
         if (mount === '/dev') {
           vfs.providers.set(mount, new DevProvider());
         } else if (mount === '/proc') {
-          vfs.providers.set(mount, new ProcProvider(() => vfs.getStorageStats()));
+          vfs.providers.set(mount, new ProcProvider(
+            () => vfs.getStorageStats(),
+            () => vfs.getMountList(),
+            () => vfs.processListProvider?.() ?? [],
+          ));
         } else {
           // User mounts: share the provider instance
           vfs.providers.set(mount, provider);
@@ -159,9 +179,72 @@ export class VFS {
     return Array.from(this.providers.keys());
   }
 
+  /**
+   * Build the live mount table — the structured form of /proc/mounts.
+   * The root inode tree shows up as 'codepodfs / codepodfs ...'; each
+   * registered provider contributes a row using its declared fsType
+   * (defaulting to 'virtfs' for legacy providers without one).
+   *
+   * Mount options follow the kernel conventions: 'ro' on read-only
+   * mounts, otherwise 'rw'.  We don't track per-mount options beyond
+   * read/write today; if more granularity is needed (nosuid, nodev)
+   * the providers can carry their own options string.
+   */
+  getMountList(): MountEntry[] {
+    const entries: MountEntry[] = [
+      { fsname: 'codepodfs', mountPath: '/', fsType: 'codepodfs', options: 'rw,relatime' },
+    ];
+    for (const [mountPath, provider] of this.providers) {
+      const fsType = provider.fsType ?? 'virtfs';
+      // Mount options reflect what the provider permits.  We don't
+      // expose a writable flag generically yet, so use a sane default
+      // per-fstype (proc/devtmpfs are conventionally rw).
+      const options = (fsType === 'proc' || fsType === 'devtmpfs')
+        ? 'rw,nosuid,nodev,relatime'
+        : 'rw,relatime';
+      entries.push({ fsname: fsType, mountPath, fsType, options });
+    }
+    return entries;
+  }
+
   /** Set a callback to be invoked after mutating VFS operations. */
   setOnChange(cb: (() => void) | null): void {
     this.onChangeCallback = cb;
+  }
+
+  /**
+   * Wire the source of /proc/<pid>/* entries.  Called by the
+   * ShellInstance once its ProcessKernel exists; the ProcProvider
+   * built at VFS-construction time queries through this on every
+   * read so newly-spawned processes appear without re-registration.
+   */
+  setProcessListProvider(fn: (() => ProcessInfo[]) | null): void {
+    this.processListProvider = fn;
+  }
+
+  /**
+   * If `path` resolves to a streaming provider entry — one whose
+   * provider implements streamRead/streamWrite — return a pair of
+   * functions that the FdTable can call per syscall.  Otherwise
+   * return null and the caller falls back to the static
+   * load-and-slice path through readFile/writeFile.
+   *
+   * Used by FdTable.open: streaming files don't materialize a
+   * buffer at open time, so /dev/urandom can be read forever
+   * without holding any backing memory.
+   */
+  streamFile(path: string): {
+    read?: (length: number) => Uint8Array;
+    write?: (data: Uint8Array) => number;
+  } | null {
+    const match = this.matchProvider(path);
+    if (!match) return null;
+    const { provider, subpath } = match;
+    if (!provider.streamRead && !provider.streamWrite) return null;
+    return {
+      read: provider.streamRead ? (n: number) => provider.streamRead!(subpath, n) : undefined,
+      write: provider.streamWrite ? (d: Uint8Array) => provider.streamWrite!(subpath, d) : undefined,
+    };
   }
 
   /** Notify the onChange callback if set and not during init/restore. */
@@ -574,6 +657,44 @@ export class VFS {
 
     oldParent.children.delete(oldName);
     newParent.children.set(newName, child);
+    this.notifyChange();
+  }
+
+  /**
+   * POSIX hard link — make `newPath` an alias for `oldPath`'s
+   * underlying inode.  Both names index the same FileInode, so a
+   * write through either appears in both.  Linux semantics:
+   *   - oldPath must exist
+   *   - newPath must not exist (EEXIST otherwise)
+   *   - oldPath must be a regular file (EPERM on directories;
+   *     symlink target follows the conventional behavior of
+   *     linking the symlink's referent, not the symlink itself)
+   * Wired to the WASI path_link syscall in wasi-host so guest
+   * binaries that call link(2) (BusyBox `ln` without -s, etc.)
+   * see the new path immediately.
+   */
+  link(oldPath: string, newPath: string): void {
+    const { parent: newParent, name: newName } = this.resolveParent(newPath);
+    this.assertWritePermission(newParent);
+    if (newParent.children.has(newName)) {
+      throw new VfsError('EEXIST', `file exists: ${newPath}`);
+    }
+
+    // Resolve oldPath following symlinks to the underlying file.
+    let inode = this.resolve(oldPath);
+    if (inode.type === 'symlink') {
+      // Conventional: hard-link the symlink's target, not the
+      // symlink itself.  resolve() doesn't auto-follow at the
+      // leaf, so do it here.
+      inode = this.resolve(inode.target);
+    }
+    if (inode.type === 'dir') {
+      throw new VfsError('EACCES', `hard link not allowed for directory: ${oldPath}`);
+    }
+
+    this.assertFileCountLimit();
+    newParent.children.set(newName, inode);
+    this.currentFileCount++;
     this.notifyChange();
   }
 

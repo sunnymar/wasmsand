@@ -40,11 +40,11 @@ describe('DevProvider (/dev)', () => {
     expect(s.size).toBe(0);
   });
 
-  it('/dev directory is listable with all 4 devices', () => {
+  it('/dev directory is listable with all expected devices', () => {
     const vfs = new VFS();
     const entries = vfs.readdir('/dev');
     const names = entries.map(e => e.name).sort();
-    expect(names).toEqual(['null', 'random', 'urandom', 'zero']);
+    expect(names).toEqual(['full', 'null', 'random', 'urandom', 'zero']);
     // All entries are files
     for (const entry of entries) {
       expect(entry.type).toBe('file');
@@ -55,7 +55,7 @@ describe('DevProvider (/dev)', () => {
     const vfs = new VFS();
     const s = vfs.stat('/dev');
     expect(s.type).toBe('dir');
-    expect(s.size).toBe(4);
+    expect(s.size).toBe(5);
   });
 
   it('/dev/zero returns zero bytes', () => {
@@ -174,11 +174,13 @@ describe('ProcProvider (/proc)', () => {
     expect(text).toContain('MemFree');
   });
 
-  it('/proc is listable with all 5 files', () => {
+  it('/proc is listable with all expected files', () => {
     const vfs = new VFS();
     const entries = vfs.readdir('/proc');
     const names = entries.map(e => e.name).sort();
-    expect(names).toEqual(['cpuinfo', 'diskstats', 'meminfo', 'uptime', 'version']);
+    expect(names).toEqual([
+      'cpuinfo', 'diskstats', 'loadavg', 'meminfo', 'mounts', 'uptime', 'version',
+    ]);
     for (const entry of entries) {
       expect(entry.type).toBe('file');
     }
@@ -188,7 +190,167 @@ describe('ProcProvider (/proc)', () => {
     const vfs = new VFS();
     const s = vfs.stat('/proc');
     expect(s.type).toBe('dir');
-    expect(s.size).toBe(5);
+    expect(s.size).toBe(7);
+  });
+
+  it('/proc/mounts reflects the live VFS mount table', () => {
+    const vfs = new VFS();
+    const text = new TextDecoder().decode(vfs.readFile('/proc/mounts'));
+    // Root + /proc + /dev are present after construction.
+    expect(text).toContain('codepodfs / codepodfs');
+    expect(text).toContain('proc /proc proc');
+    expect(text).toContain('devtmpfs /dev devtmpfs');
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Per-PID /proc entries — populated from a callback so that newly-
+  // spawned processes appear without a registration step.  These tests
+  // wire a fake list directly on the VFS to keep them independent of
+  // ShellInstance / ProcessKernel; the integration is covered through
+  // Sandbox.run() in guest-compat.test.ts.
+  // ──────────────────────────────────────────────────────────────────────
+  describe('per-PID /proc entries', () => {
+    function vfsWith(procs: { pid: number; ppid: number; state: string; exit_code: number; command: string }[]): VFS {
+      const vfs = new VFS();
+      vfs.setProcessListProvider(() => procs);
+      return vfs;
+    }
+
+    it('/proc lists numeric PID directories alongside top-level files', () => {
+      const vfs = vfsWith([
+        { pid: 1, ppid: 0, state: 'running', exit_code: -1, command: 'shell' },
+        { pid: 2, ppid: 1, state: 'running', exit_code: -1, command: 'awk' },
+      ]);
+      const names = vfs.readdir('/proc').map(e => e.name).sort();
+      expect(names).toContain('1');
+      expect(names).toContain('2');
+      expect(names).toContain('uptime');
+    });
+
+    it('/proc/<pid> is a directory containing stat / status / cmdline / comm', () => {
+      const vfs = vfsWith([{ pid: 1, ppid: 0, state: 'running', exit_code: -1, command: 'shell' }]);
+      expect(vfs.stat('/proc/1').type).toBe('dir');
+      const entries = vfs.readdir('/proc/1').map(e => e.name).sort();
+      expect(entries).toEqual(['cmdline', 'comm', 'stat', 'status']);
+    });
+
+    it('/proc/<pid>/comm returns the basename of the program', () => {
+      const vfs = vfsWith([{ pid: 7, ppid: 1, state: 'running', exit_code: -1, command: '/bin/awk -F : { print }' }]);
+      const text = new TextDecoder().decode(vfs.readFile('/proc/7/comm'));
+      expect(text).toBe('awk\n');
+    });
+
+    it('/proc/<pid>/status carries the POSIX-relevant fields', () => {
+      const vfs = vfsWith([{ pid: 7, ppid: 1, state: 'running', exit_code: -1, command: 'awk' }]);
+      const text = new TextDecoder().decode(vfs.readFile('/proc/7/status'));
+      expect(text).toContain('Name:\tawk');
+      expect(text).toContain('Pid:\t7');
+      expect(text).toContain('PPid:\t1');
+      expect(text).toContain('State:\tR (running)');
+      expect(text).toContain('Uid:\t1000\t1000\t1000\t1000');
+    });
+
+    it('/proc/<pid>/stat starts with "<pid> (<comm>) <state> <ppid>"', () => {
+      const vfs = vfsWith([{ pid: 7, ppid: 1, state: 'running', exit_code: -1, command: 'awk' }]);
+      const text = new TextDecoder().decode(vfs.readFile('/proc/7/stat'));
+      expect(text.startsWith('7 (awk) R 1 ')).toBe(true);
+    });
+
+    it('exited processes show up as zombies (Z) until reaped', () => {
+      const vfs = vfsWith([{ pid: 7, ppid: 1, state: 'exited', exit_code: 0, command: 'awk' }]);
+      const text = new TextDecoder().decode(vfs.readFile('/proc/7/status'));
+      expect(text).toContain('State:\tZ (zombie)');
+    });
+
+    it('/proc/<pid>/cmdline is NUL-separated (Linux convention)', () => {
+      const vfs = vfsWith([{ pid: 7, ppid: 1, state: 'running', exit_code: -1, command: 'awk -F : { print }' }]);
+      const text = new TextDecoder().decode(vfs.readFile('/proc/7/cmdline'));
+      expect(text).toBe('awk\0-F\0:\0{\0print\0}');
+    });
+
+    it('reading /proc/<unknown-pid>/comm raises ENOENT', () => {
+      const vfs = vfsWith([{ pid: 1, ppid: 0, state: 'running', exit_code: -1, command: 'shell' }]);
+      expect(() => vfs.readFile('/proc/999/comm')).toThrow(/ENOENT/);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // /dev streaming devices — endless stream semantics required for
+  // tools like `head -c N /dev/urandom`, `dd if=/dev/zero`, etc.  The
+  // earlier read-once-then-slice model would either truncate at a
+  // fixed buffer size or leak memory, so the FdTable now routes per-
+  // syscall reads/writes through provider.streamRead / streamWrite.
+  // ──────────────────────────────────────────────────────────────────────
+  describe('/dev streaming devices', () => {
+    it('/dev lists null, zero, random, urandom, full', () => {
+      const vfs = new VFS();
+      const names = vfs.readdir('/dev').map(e => e.name).sort();
+      expect(names).toEqual(['full', 'null', 'random', 'urandom', 'zero']);
+    });
+
+    it('streamFile() returns null for non-streaming paths', () => {
+      const vfs = new VFS();
+      expect(vfs.streamFile('/proc/version')).toBeNull();
+      expect(vfs.streamFile('/tmp')).toBeNull();
+    });
+
+    it('/dev/zero stream returns exactly the requested length, all zeros', () => {
+      const vfs = new VFS();
+      const stream = vfs.streamFile('/dev/zero');
+      expect(stream).not.toBeNull();
+      const data = stream!.read!(1024);
+      expect(data.byteLength).toBe(1024);
+      expect(data.every(b => b === 0)).toBe(true);
+    });
+
+    it('/dev/urandom stream produces fresh bytes on every call', () => {
+      const vfs = new VFS();
+      const stream = vfs.streamFile('/dev/urandom');
+      const a = stream!.read!(64);
+      const b = stream!.read!(64);
+      expect(a.byteLength).toBe(64);
+      expect(b.byteLength).toBe(64);
+      // Two crypto-random reads being byte-identical has probability
+      // 2^-512; treat any equality as a failure.
+      let equal = true;
+      for (let i = 0; i < 64; i++) {
+        if (a[i] !== b[i]) { equal = false; break; }
+      }
+      expect(equal).toBe(false);
+    });
+
+    it('/dev/urandom honors > 64 KiB requests (chunks the crypto API)', () => {
+      const vfs = new VFS();
+      const stream = vfs.streamFile('/dev/urandom');
+      const data = stream!.read!(200_000);
+      expect(data.byteLength).toBe(200_000);
+      // Sanity: not all-zero, not constant.
+      const nonZero = data.some(b => b !== 0);
+      expect(nonZero).toBe(true);
+    });
+
+    it('/dev/null write accepts everything, read returns 0 bytes (EOF)', () => {
+      const vfs = new VFS();
+      const stream = vfs.streamFile('/dev/null');
+      expect(stream!.write!(new Uint8Array([1, 2, 3]))).toBe(3);
+      expect(stream!.read!(64).byteLength).toBe(0);
+    });
+
+    it('/dev/full read returns zeros, write throws ENOSPC', () => {
+      const vfs = new VFS();
+      const stream = vfs.streamFile('/dev/full');
+      expect(stream!.read!(8).every(b => b === 0)).toBe(true);
+      expect(() => stream!.write!(new Uint8Array([1, 2, 3]))).toThrow(/ENOSPC/);
+    });
+
+    it('/dev/zero / /dev/random / /dev/urandom reject writes with EROFS', () => {
+      const vfs = new VFS();
+      for (const dev of ['zero', 'random', 'urandom']) {
+        const stream = vfs.streamFile(`/dev/${dev}`);
+        expect(() => stream!.write!(new Uint8Array([1])))
+          .toThrow(/EROFS/);
+      }
+    });
   });
 
   it('/proc files are read-only (EROFS on write to uptime)', () => {
@@ -260,9 +422,10 @@ describe('Provider integration with VFS', () => {
 
     // Listing should work
     const devEntries = clone.readdir('/dev');
-    expect(devEntries.length).toBe(4);
+    expect(devEntries.length).toBe(5);
     const procEntries = clone.readdir('/proc');
-    expect(procEntries.length).toBe(5);
+    // uptime, version, cpuinfo, meminfo, loadavg, diskstats, mounts
+    expect(procEntries.length).toBe(7);
   });
 
   it('root readdir still works (does not include virtual mounts)', () => {
@@ -361,7 +524,7 @@ describe('providers after snapshot/restore and fork', () => {
       // readdir /dev should list all devices
       const entries = child.readDir('/dev');
       const names = entries.map(e => e.name).sort();
-      expect(names).toEqual(['null', 'random', 'urandom', 'zero']);
+      expect(names).toEqual(['full', 'null', 'random', 'urandom', 'zero']);
     } finally {
       child.destroy();
     }

@@ -22,6 +22,14 @@ export interface PlatformAdapter {
    */
   scanTools(wasmDir: string): Promise<Map<string, string>>;
 
+  /**
+   * Read a binary asset from the same location scanTools resolves.  Used
+   * to pre-populate the VFS with sidecar data files that ports need —
+   * e.g. file/libmagic's `magic.mgc`.  Returns null if the file isn't
+   * present (callers treat the data file as optional).
+   */
+  readDataFile?(wasmDir: string, name: string): Promise<Uint8Array | null>;
+
   /** Whether the platform supports Worker-based execution (hard kill). */
   supportsWorkerExecution?: boolean;
 }

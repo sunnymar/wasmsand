@@ -99,9 +99,8 @@ path = "src/bin/sed.rs"
 name = "awk"
 path = "src/bin/awk.rs"
 
-[[bin]]
-name = "jq"
-path = "src/bin/jq.rs"
+# jq is now ported from upstream C — see packages/c-ports/jq/.
+# The previous Rust standalone (src/bin/jq.rs) has been retired.
 
 [[bin]]
 name = "uname"
@@ -203,17 +202,14 @@ path = "src/bin/base64.rs"
 name = "sha1sum"
 path = "src/bin/sha1sum.rs"
 
-[[bin]]
-name = "sha224sum"
-path = "src/bin/sha224sum.rs"
+# sha224sum / sha384sum: ported from upstream GNU coreutils (cksum.c
+# with -DHASH_ALGO_SHA{224,384}=1).  See packages/c-ports/coreutils/.
 
 [[bin]]
 name = "sha256sum"
 path = "src/bin/sha256sum.rs"
 
-[[bin]]
-name = "sha384sum"
-path = "src/bin/sha384sum.rs"
+# sha384sum: see sha224sum comment above.
 
 [[bin]]
 name = "sha512sum"
@@ -239,9 +235,7 @@ path = "src/bin/rev.rs"
 name = "nproc"
 path = "src/bin/nproc.rs"
 
-[[bin]]
-name = "fmt"
-path = "src/bin/fmt.rs"
+# fmt: ported from upstream GNU coreutils.
 
 [[bin]]
 name = "fold"
@@ -267,9 +261,7 @@ path = "src/bin/paste.rs"
 name = "comm"
 path = "src/bin/comm.rs"
 
-[[bin]]
-name = "join"
-path = "src/bin/join.rs"
+# join: ported from upstream GNU coreutils.
 
 [[bin]]
 name = "split"
@@ -299,9 +291,9 @@ path = "src/bin/tree.rs"
 name = "patch"
 path = "src/bin/patch.rs"
 
-[[bin]]
-name = "file"
-path = "src/bin/file.rs"
+# file is now ported from upstream C (file/file libmagic) — see
+# packages/c-ports/file/.  The previous Rust stub (src/bin/file.rs)
+# has been retired.
 
 [[bin]]
 name = "column"
@@ -315,13 +307,7 @@ path = "src/bin/cmp.rs"
 name = "timeout"
 path = "src/bin/timeout.rs"
 
-[[bin]]
-name = "numfmt"
-path = "src/bin/numfmt.rs"
-
-[[bin]]
-name = "csplit"
-path = "src/bin/csplit.rs"
+# numfmt, csplit: ported from upstream GNU coreutils.
 
 [[bin]]
 name = "zip"
