@@ -11,39 +11,6 @@ import { ProcessManager } from './process/manager.js';
 import { ShellInstance } from './shell/shell-instance.js';
 import type { ShellLike } from './shell/shell-like.js';
 
-/**
- * Applets shipped by BusyBox 1.37.0 that codepod auto-symlinks at
- * /usr/bin/<applet> → /usr/bin/busybox when busybox.wasm is present.
- * Mirrors docs/superpowers/findings/2026-04-25-busybox-migrate-applets.txt
- * — the curated list of upstream applets we've enabled in our
- * busybox.config (96 entries).  Anything not on this list (column,
- * csplit, file, fmt, iconv, join, jq, numfmt, rg, sha224sum,
- * sha384sum, sudo, zip — see busybox-keep-rust-applets.txt) keeps
- * its Rust standalone.  Sorted alphabetically for human review.
- */
-const BUSYBOX_APPLETS: readonly string[] = [
-  'arch', 'awk', 'base32', 'base64', 'basename',
-  'bc', 'cal', 'cat', 'chgrp', 'chown',
-  'cksum', 'cmp', 'comm', 'cp', 'cut',
-  'dc', 'dd', 'df', 'diff', 'dirname',
-  'du', 'echo', 'env', 'expand', 'expr',
-  'factor', 'false', 'find', 'fold', 'grep',
-  'groups', 'gzip', 'head', 'hexdump', 'hostid',
-  'hostname', 'id', 'link', 'ln', 'logname',
-  'ls', 'md5sum', 'mkdir', 'mktemp', 'mv',
-  'nice', 'nl', 'nohup', 'nproc', 'od',
-  'paste', 'patch', 'printenv', 'printf', 'readlink',
-  'realpath', 'rev', 'rm', 'rmdir', 'sed',
-  'seq', 'sha1sum', 'sha256sum', 'sha512sum', 'shuf',
-  'sleep', 'sort', 'split', 'stat', 'strings',
-  'sum', 'tac', 'tail', 'tar', 'tee',
-  'timeout', 'touch', 'tr', 'tree', 'true',
-  'truncate', 'tsort', 'uname', 'unexpand', 'uniq',
-  'unlink', 'unzip', 'uptime', 'users', 'wc',
-  'who', 'whoami', 'xargs', 'xxd', 'yes',
-  'zcat',
-];
-
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
 export interface StreamCallbacks {
   onStdout?: (chunk: string) => void;
@@ -78,6 +45,7 @@ import { CODEPOD_EXT_SOURCE, generateCommandShim } from './extension/codepod-ext
 import { SUBPROCESS_PY_SOURCE } from './process/subprocess-shim.js';
 import { PackageRegistry } from './packages/registry.js';
 import { ToolRegistry } from './packages/tool-registry.js';
+import { applyManifest, loadManifest } from './packages/manifest.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -527,40 +495,23 @@ export class Sandbox {
       mgr.registerTool('python3', `${wasmDir}/python3.wasm`);
     }
 
-    // BusyBox-as-default: if busybox.wasm shipped alongside the
-    // standalones, install applet symlinks at /usr/bin/<applet> →
-    // /usr/bin/busybox for the 96 applets it covers.  This also
-    // overrides each applet's registry entry so the shell dispatches
-    // through busybox even when the user types the applet name
-    // bare (e.g. `grep`) — the standalone Rust .wasm files stay on
-    // disk for compatibility but become inert.  Equivalent to a
-    // sandbox-wide `busybox --install -s` at startup.
-    const busyboxPath = tools.get('busybox');
-    if (busyboxPath) {
-      mgr.registerMulticallTool('busybox', busyboxPath, [...BUSYBOX_APPLETS]);
+    // Per-tool manifest pass: each .wasm may ship a sibling
+    // `<name>.manifest.json` produced by its host build (cpcc-level
+    // Makefile in packages/c-ports/<port>/) that declares sidecar
+    // data files to install into the VFS, multicall dispatch
+    // (busybox-style applets), and any extra symlinks.  Tools
+    // without a manifest are pure WASI binaries with no install
+    // side-effects (e.g. the Rust coreutils standalones).
+    const ctx = { mgr, vfs, adapter, wasmDir };
+    for (const [name, path] of tools) {
+      const manifest = await loadManifest(adapter, wasmDir, name);
+      if (manifest) await applyManifest(manifest, ctx, path);
     }
 
     // Standard aliases via symlinks — these resolve naturally through the VFS
     vfs.withWriteAccess(() => {
       try { vfs.symlink('/usr/bin/python3', '/usr/bin/python'); } catch { /* already exists */ }
     });
-
-    // file/libmagic ships a sidecar magic database (magic.mgc) that
-    // libmagic searches for at the configure-time `--prefix=/usr` path.
-    // Pre-load it into the VFS so `file foo.bin` works out of the box
-    // without the user setting MAGIC=... by hand.  Optional — if the
-    // .mgc isn't in wasmDir (e.g. older fixtures, slim distributions),
-    // file still runs for `--version` / `--help` and falls back to a
-    // helpful error for actual classification.
-    if (tools.has('file') && adapter.readDataFile) {
-      const mgc = await adapter.readDataFile(wasmDir, 'magic.mgc');
-      if (mgc) {
-        vfs.withWriteAccess(() => {
-          vfs.mkdirp('/usr/share/misc');
-          vfs.writeFile('/usr/share/misc/magic.mgc', mgc);
-        });
-      }
-    }
 
     return tools;
   }

@@ -349,5 +349,5 @@ Use `default-features = false` to minimize binary size. Avoid dependencies that 
 | `Cargo.toml` (root) | Workspace config — add standalone crates to `members` |
 | `target/wasm32-wasip1/release/` | Build output — `.wasm` binaries |
 | `packages/orchestrator/src/platform/__tests__/fixtures/` | Test fixtures — drop `.wasm` files here |
-| `packages/orchestrator/src/sandbox.ts` | `BUSYBOX_APPLETS` list — controls which symlinks resolve to `busybox.wasm` |
+| `packages/c-ports/busybox/manifest.json` | Multicall applets list — controls which symlinks resolve to `busybox.wasm` |
 | `scripts/copy-wasm.sh` | Copies fixtures to packaging directory |

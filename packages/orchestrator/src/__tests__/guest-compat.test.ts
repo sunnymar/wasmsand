@@ -186,7 +186,7 @@ describe('Guest compatibility canaries', () => {
     const result = await sandbox.run('getgroups-canary');
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toBe('getgroups:1:0');
+    expect(result.stdout.trim()).toBe('getgroups:1:1000');
   });
 
   it('exposes the narrow signal compatibility header surface', async () => {
@@ -243,11 +243,13 @@ describe('Guest compatibility canaries', () => {
     // The sandbox auto-installs BusyBox applet symlinks at sandbox-
     // creation time when busybox.wasm is present in wasmDir.  This
     // is equivalent to running `busybox --install -s` once at boot:
-    // every applet name in the curated list (BUSYBOX_APPLETS in
-    // sandbox.ts, derived from the migration plan) is symlinked
-    // /usr/bin/<applet> → /usr/bin/busybox, and the registry entry
-    // for that name is overridden to the busybox.wasm path so the
-    // shell dispatches through the multicall binary.
+    // every applet name in the curated list (declared in
+    // packages/c-ports/busybox/manifest.json's `multicall.applets`,
+    // shipped to wasmDir as busybox.manifest.json by the port's
+    // copy-fixtures step) is symlinked /usr/bin/<applet> →
+    // /usr/bin/busybox, and the registry entry for that name is
+    // overridden to the busybox.wasm path so the shell dispatches
+    // through the multicall binary.
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
       adapter: new NodeAdapter(),

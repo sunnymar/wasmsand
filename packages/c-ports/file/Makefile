@@ -116,9 +116,13 @@ $(BUILD_DIR)/file.wasm: $(WORK_DIR)/Makefile ensure-compat
 		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" file
 	cp $(WORK_DIR)/src/file $(BUILD_DIR)/file.wasm
 
-copy-fixtures: $(BUILD_DIR)/file.wasm $(BUILD_DIR)/magic.mgc
+copy-fixtures: $(BUILD_DIR)/file.wasm $(BUILD_DIR)/magic.mgc manifest.json
 	cp $(BUILD_DIR)/file.wasm $(FIXTURES)/file.wasm
 	cp $(BUILD_DIR)/magic.mgc $(FIXTURES)/magic.mgc
+	# Manifest declares magic.mgc's install path — orchestrator's
+	# manifest pass copies it into /usr/share/misc/magic.mgc so
+	# libmagic finds it without MAGIC=... at runtime.
+	cp manifest.json $(FIXTURES)/file.manifest.json
 
 clean:
 	rm -rf $(BUILD_DIR)

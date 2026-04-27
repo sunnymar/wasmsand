@@ -103,8 +103,12 @@ $(BUILD_DIR)/busybox.wasm: configure ensure-compat
 			busybox
 	cp $(SRC_DIR)/busybox_unstripped $(BUILD_DIR)/busybox.wasm
 
-copy-fixtures: $(BUILD_DIR)/busybox.wasm
+copy-fixtures: $(BUILD_DIR)/busybox.wasm manifest.json
 	cp $(BUILD_DIR)/busybox.wasm $(FIXTURES)/busybox.wasm
+	# Manifest declares the multicall applets list — orchestrator's
+	# manifest pass uses it to install /usr/bin/<applet> symlinks
+	# and override registry entries to dispatch through busybox.
+	cp manifest.json $(FIXTURES)/busybox.manifest.json
 
 clean:
 	rm -rf $(BUILD_DIR) $(SRC_DIR)
