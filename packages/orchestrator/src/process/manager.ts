@@ -95,22 +95,25 @@ export class ProcessManager {
       this.registry.set(applet, wasmPath);
     }
 
-    try {
-      this.vfs.withWriteAccess(() => {
-        for (const applet of applets) {
-          const appletPath = `/usr/bin/${applet}`;
-          // Replace any prior tool stub (registerTool may have written
-          // one earlier in registerTools' scan).  Failing to unlink is
-          // fine — the path may not exist yet.
-          try { this.vfs.unlink(appletPath); } catch { /* ok */ }
-          this.vfs.symlink(`/usr/bin/${name}`, appletPath);
-        }
-      });
-    } catch {
-      // VfsProxy in worker mode doesn't expose withWriteAccess /
-      // symlink yet; the registry overrides above are still in place,
-      // so the shell resolves correctly via the resolveTool path.
-    }
+    // VfsProxy in worker mode doesn't expose withWriteAccess / symlink
+    // yet; feature-detect rather than try/catch so genuine failures
+    // mid-loop (e.g. a real symlink error on applet #5) surface
+    // instead of silently leaving applets #6–N un-symlinked.  Without
+    // VFS write access the registry overrides above still resolve
+    // correctly via resolveTool — symlinks are a UX nicety, not load-
+    // bearing for dispatch.
+    const vfsLike = this.vfs as { withWriteAccess?: unknown };
+    if (typeof vfsLike.withWriteAccess !== 'function') return;
+    this.vfs.withWriteAccess(() => {
+      for (const applet of applets) {
+        const appletPath = `/usr/bin/${applet}`;
+        // Replace any prior tool stub (registerTool may have written
+        // one earlier in registerTools' scan).  Failing to unlink is
+        // fine — the path may not exist yet.
+        try { this.vfs.unlink(appletPath); } catch { /* ok */ }
+        this.vfs.symlink(`/usr/bin/${name}`, appletPath);
+      }
+    });
   }
 
   /** Register and preload a tool from VFS — for runtime-installed packages. */

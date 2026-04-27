@@ -32,4 +32,39 @@ describe('ProcessKernel', () => {
     expect(target!.type).toBe('pipe_read');
     kernel.dispose();
   });
+
+  // Direct ppid plumbing — guards against any of the four pid-creation
+  // entry points (allocPid / registerPending / registerProcess /
+  // registerExited) silently dropping back to the NO_PARENT_PID
+  // default.  /proc/<pid>/stat exercises this end-to-end but only via
+  // allocPid; covering the others here keeps the contract honest.
+  it('records ppid through a 3-generation chain (allocPid)', () => {
+    const kernel = new ProcessKernel();
+    const a = kernel.allocPid();
+    const b = kernel.allocPid(a);
+    const c = kernel.allocPid(b);
+    expect(kernel.getPpid(a)).toBe(0);  // NO_PARENT_PID
+    expect(kernel.getPpid(b)).toBe(a);
+    expect(kernel.getPpid(c)).toBe(b);
+    kernel.dispose();
+  });
+
+  it('records ppid through registerPending', () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    const child = kernel.allocPid();  // freshly allocated, ppid=0
+    kernel.registerPending(child, 'cat', parent);
+    expect(kernel.getPpid(child)).toBe(parent);
+    kernel.dispose();
+  });
+
+  it('records ppid through registerExited (fresh entry)', () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    // 999 was never allocPid'd — exercises the else branch that
+    // creates a new entry rather than updating an existing one.
+    kernel.registerExited(999, 0, parent);
+    expect(kernel.getPpid(999)).toBe(parent);
+    kernel.dispose();
+  });
 });
