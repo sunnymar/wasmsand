@@ -16,6 +16,22 @@ function createClient() {
   return { client, transport };
 }
 
+/** Connect, create a sandbox, and return the connected client + sandbox_id.
+ *  Every per-sandbox tool requires a sandbox_id since the multi-sandbox
+ *  refactor — this is the boilerplate every test needs. */
+async function setupClientWithSandbox(): Promise<{
+  client: Client;
+  transport: StdioClientTransport;
+  sandboxId: string;
+}> {
+  const ctx = createClient();
+  await ctx.client.connect(ctx.transport);
+  const create = await ctx.client.callTool({ name: 'create_sandbox', arguments: {} });
+  const content = create.content as Array<{ type: string; text: string }>;
+  const { sandbox_id } = JSON.parse(content[0].text);
+  return { client: ctx.client, transport: ctx.transport, sandboxId: sandbox_id };
+}
+
 describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: false }, () => {
   let transport: StdioClientTransport | undefined;
 
@@ -38,17 +54,22 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
     const result = await ctx.client.listTools();
     const names = result.tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      'list_directory', 'read_file', 'restore', 'run_command',
+      'create_sandbox', 'destroy_sandbox',
+      'export_state', 'import_state',
+      'list_directory', 'list_sandboxes',
+      'read_file', 'restore', 'run_command',
       'snapshot', 'write_file',
     ]);
   }, 30_000);
 
   it('run_command executes shell commands', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
-    const result = await ctx.client.callTool({ name: 'run_command', arguments: { command: 'echo hello world' } });
+    const result = await ctx.client.callTool({
+      name: 'run_command',
+      arguments: { sandbox_id: ctx.sandboxId, command: 'echo hello world' },
+    });
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content).toHaveLength(1);
@@ -59,9 +80,8 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
   }, 30_000);
 
   it('write_file + read_file round-trip', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
     const testContents = 'Hello from integration test!\nLine 2.';
     const testPath = '/home/user/test-roundtrip.txt';
@@ -69,14 +89,14 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
     // Write
     const writeResult = await ctx.client.callTool({
       name: 'write_file',
-      arguments: { path: testPath, contents: testContents },
+      arguments: { sandbox_id: ctx.sandboxId, path: testPath, contents: testContents },
     });
     expect(writeResult.isError).toBeFalsy();
 
     // Read back
     const readResult = await ctx.client.callTool({
       name: 'read_file',
-      arguments: { path: testPath },
+      arguments: { sandbox_id: ctx.sandboxId, path: testPath },
     });
     expect(readResult.isError).toBeFalsy();
     const content = readResult.content as Array<{ type: string; text: string }>;
@@ -84,19 +104,21 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
   }, 30_000);
 
   it('list_directory returns entries', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
-    // Create a file so there's something to list
+    // Create a file so there's something to list.  Use redirect rather
+    // than `touch` — BusyBox 1.37.0's touch applet under codepod
+    // currently exits 0 without creating the file (tracked separately,
+    // pre-dates this PR).
     await ctx.client.callTool({
       name: 'run_command',
-      arguments: { command: 'touch /home/user/listed-file.txt' },
+      arguments: { sandbox_id: ctx.sandboxId, command: 'echo > /home/user/listed-file.txt' },
     });
 
     const result = await ctx.client.callTool({
       name: 'list_directory',
-      arguments: { path: '/home/user' },
+      arguments: { sandbox_id: ctx.sandboxId, path: '/home/user' },
     });
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
@@ -106,13 +128,12 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
   }, 30_000);
 
   it('run_command handles pipes', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
     const result = await ctx.client.callTool({
       name: 'run_command',
-      arguments: { command: 'echo one two three | wc -w' },
+      arguments: { sandbox_id: ctx.sandboxId, command: 'echo one two three | wc -w' },
     });
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
@@ -122,13 +143,12 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
   }, 30_000);
 
   it('run_command preserves double quotes in commands', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
     const result = await ctx.client.callTool({
       name: 'run_command',
-      arguments: { command: 'echo "hello world"' },
+      arguments: { sandbox_id: ctx.sandboxId, command: 'echo "hello world"' },
     });
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
@@ -138,13 +158,12 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
   }, 30_000);
 
   it('run_command preserves single quotes in commands', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
     const result = await ctx.client.callTool({
       name: 'run_command',
-      arguments: { command: "echo 'hello world'" },
+      arguments: { sandbox_id: ctx.sandboxId, command: "echo 'hello world'" },
     });
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
@@ -154,19 +173,18 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
   }, 30_000);
 
   it('run_command preserves quoted redirect content', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
     // Write via quoted echo + redirect
     await ctx.client.callTool({
       name: 'run_command',
-      arguments: { command: 'echo "hello" > /tmp/quote-test.txt' },
+      arguments: { sandbox_id: ctx.sandboxId, command: 'echo "hello" > /tmp/quote-test.txt' },
     });
     // Read it back
     const result = await ctx.client.callTool({
       name: 'read_file',
-      arguments: { path: '/tmp/quote-test.txt' },
+      arguments: { sandbox_id: ctx.sandboxId, path: '/tmp/quote-test.txt' },
     });
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
@@ -174,13 +192,12 @@ describe('MCP Server (integration)', { sanitizeOps: false, sanitizeResources: fa
   }, 30_000);
 
   it('read_file returns error for missing file', async () => {
-    const ctx = createClient();
+    const ctx = await setupClientWithSandbox();
     transport = ctx.transport;
-    await ctx.client.connect(ctx.transport);
 
     const result = await ctx.client.callTool({
       name: 'read_file',
-      arguments: { path: '/nonexistent/path/does-not-exist.txt' },
+      arguments: { sandbox_id: ctx.sandboxId, path: '/nonexistent/path/does-not-exist.txt' },
     });
     expect(result.isError).toBe(true);
   }, 30_000);

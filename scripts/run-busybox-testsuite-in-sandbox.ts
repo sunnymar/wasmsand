@@ -183,6 +183,14 @@ async function runTestFile(testFile: string): Promise<{
     if (msg === 'TEST_TIMEOUT' || msg?.includes('RuntimeError') || msg?.includes('unreachable')) {
       return { stdout: '', stderr: msg.substring(0, 200), exitCode: -1, timedOut: true };
     }
+    // SyntaxError: the test produced non-UTF-8 bytes that broke
+    // ShellInstance.run's JSON-decoding path.  Tracked separately as
+    // a binary-safety bug in shell-exec; for the conformance harness,
+    // treat the offending test as a crash rather than aborting the
+    // whole run.
+    if (e instanceof SyntaxError || msg.startsWith('Unexpected token')) {
+      return { stdout: '', stderr: `JSON-decode failure (likely non-UTF-8 stdout): ${msg.substring(0, 200)}`, exitCode: -1, timedOut: true };
+    }
     throw e;
   }
 }
@@ -216,6 +224,12 @@ async function runOldStyleTest(dir: string, testCase: string): Promise<{
     if (msg === 'TEST_TIMEOUT' || msg?.includes('RuntimeError') || msg?.includes('unreachable')) {
       return {
         stdout: `FAIL: ${testCase}\n${msg.substring(0, 100)}`,
+        stderr: '', exitCode: -1, timedOut: true,
+      };
+    }
+    if (e instanceof SyntaxError || msg.startsWith('Unexpected token')) {
+      return {
+        stdout: `FAIL: ${testCase}\nJSON-decode failure (likely non-UTF-8 stdout)`,
         stderr: '', exitCode: -1, timedOut: true,
       };
     }

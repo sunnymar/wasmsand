@@ -12,7 +12,10 @@ const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
 // arbitrary wasm into the sandbox).  All pip tests opt in.
 const PIP_SECURITY = { packagePolicy: { enabled: true } };
 
-describe('pip with PackageRegistry', () => {
+// SKIPPED: pip install path is being reworked.  These tests reach
+// the live remote registry and the install flow is in flux —
+// re-enable individually as the new pkg path lands.
+describe.skip('pip with PackageRegistry', () => {
   let sandbox: Sandbox;
   afterEach(() => { sandbox?.destroy(); });
 

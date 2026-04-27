@@ -299,12 +299,15 @@ describe('Security MVP acceptance', () => {
     sb.destroy();
   });
 
-  // File count limit
+  // File count limit — sandbox boot now writes ~350 inodes (tool
+  // stubs for the 136 wasm tools + the 96 BusyBox applet symlinks +
+  // magic.mgc + manifests + /etc/codepod configs).  Pick a limit
+  // ~50 above that baseline so the loop trips the cap partway in.
   it('file count limit prevents inode exhaustion', async () => {
     const sb = await Sandbox.create({
       wasmDir: WASM_DIR,
       adapter: new NodeAdapter(),
-      security: { limits: { fileCount: 300 } },
+      security: { limits: { fileCount: 400 } },
     });
     let threw = false;
     for (let i = 0; i < 250; i++) {
