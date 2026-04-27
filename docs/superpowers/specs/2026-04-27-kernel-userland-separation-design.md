@@ -392,8 +392,11 @@ The TS surface that `mcp-server`, `sdk-server`, and other hosts use.
     etc.) without the kernel ever knowing they exist.
   - `runCommandHandler?: (req: RunRequest) => Promise<RunResponse>`
     — host-registered callback that backs `host_run_command` (see
-    §Kernel Surface). bash-host registers a callback that invokes
-    `sandbox.process(1).callExport("__run_command", ...)`.
+    §Kernel Surface for the recursive-deadlock discussion).
+    bash-host registers a callback that spawns a **fresh CLI bash**
+    via `sandbox.spawn(["/bin/bash", "-c", req.cmd], { mode: "cli", … })`,
+    captures stdout/stderr via fds, and awaits `waitpid` —
+    explicitly **not** re-entering PID 1's `callExport`.
 - `Sandbox.destroy()` — tears down.
 - `Sandbox.fork()`, `Sandbox.snapshot()`, `Sandbox.restore()` —
   existing, unchanged.
@@ -816,9 +819,14 @@ require.
 - Rewire `host_run_command`'s kernel-imports.ts handler to delegate
   to a host-registered callback (passed via `Sandbox.create` opts
   alongside `bootArgv`). Both `mcp-server` and `sdk-server` register
-  a bash-aware callback that calls
-  `sandbox.process(1).callExport("__run_command", ...)`. RustPython
-  consumers continue to work with no changes.
+  a bash-aware callback that **spawns a fresh CLI bash** via
+  `sandbox.spawn(["/bin/bash", "-c", req.cmd], { mode: "cli", … })`,
+  captures stdout/stderr from the child's fds, and returns the
+  result on exit. The callback **must not** re-enter PID 1's
+  `callExport` — the recursive-deadlock case (see §Kernel Surface
+  Deferred and §Resident Mode) requires a fresh process per call,
+  matching today's `ShellInstance` behavior. RustPython consumers
+  continue to work with no changes.
 - Delete `Sandbox.run`, `Sandbox.getHistory`, `Sandbox.clearHistory`
   from the public host API. Consumers:
   - mcp-server's `run_command` tool (`index.ts:282`) and sdk-server's
@@ -852,13 +860,16 @@ in-tree consumer.
 - **End-to-end `host_run_command` callback test.** The genuinely
   new code path post-PR4. A guest binary (RustPython, or a tiny
   test guest) calls `host_run_command(cmd)`; the kernel handler
-  delegates to the host-registered callback; the callback invokes
-  `process(1).callExport("__run_command", ...)`; the bash boot
-  process executes; result returns. Assert that round-trip
+  delegates to the host-registered callback; the callback spawns
+  a fresh CLI bash via `sandbox.spawn(["/bin/bash", "-c", cmd],
+  { mode: "cli", … })`, reads stdout/stderr from the child's fds,
+  awaits `waitpid`, returns the result. Assert that round-trip
   succeeds, that JSPI/asyncify suspension works correctly across
-  the chain, and that re-entrant calls (test guest calls
-  `host_run_command` while a previous one is in flight) are
-  serialized FIFO without deadlock.
+  the chain, that the callback does **not** invoke
+  `process(1).callExport`, and that the recursive-deadlock case
+  (PID 1 is mid-`__run_command` when the inner `host_run_command`
+  fires) completes without hanging — verifying the fresh-spawn
+  policy actually side-steps the queue.
 
 **On splitting this PR.** PR4 carries 9 distinct changes
 (bash-dispatch wrappers, 5 internal rewires, shell-legacy import
