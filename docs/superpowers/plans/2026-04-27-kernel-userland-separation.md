@@ -2087,15 +2087,15 @@ git commit -m "feat(mcp-server): add bash-dispatch + bash-host-imports modules; 
 **Files:**
 - Modify: `packages/sdk-server/src/dispatcher.ts`
 
-- [ ] **Step 1: Update `sandbox.run` RPC handler**
+- [ ] **Step 1: Update the `run` RPC handler**
 
-In `dispatcher.ts:218`, replace the `sb.run(cmd)` call with `runCommand(sb, cmd)`:
+In `packages/sdk-server/src/dispatcher.ts:95` (the `case 'run':` block — verified against current source; the per-sandbox run method is named `'run'`, not `'sandbox.run'`), replace the `sb.run(cmd)` call with `runCommand(sb, cmd)`:
 
 ```ts
 import { runCommand, makeRunCommandHandler } from './bash-dispatch.ts';
 import { bashBootImports } from './bash-host-imports.ts';
 
-case 'sandbox.run': {
+case 'run': {
   const result = await runCommand(sb, params.cmd, params);
   return result;
 }
