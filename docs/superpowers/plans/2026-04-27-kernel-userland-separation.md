@@ -325,6 +325,24 @@ export class Process {
 
   // Wired by the loader after instantiation. Undefined for stub instances.
   private exportsRef: ProcessExports | undefined;
+  private memoryRef: WebAssembly.Memory | undefined;
+
+  /** Linear memory of this process. Late-bound — undefined until the
+   *  loader has called __setExports + __setMemory after instantiation.
+   *  bash-dispatch reads this via `proc.memory` to allocate input/output
+   *  buffers for __run_command. */
+  get memory(): WebAssembly.Memory {
+    if (!this.memoryRef) throw new Error(`Process ${this.pid} memory not yet bound`);
+    return this.memoryRef;
+  }
+
+  /** All wrapped exports of this process. Late-bound. bash-dispatch reads
+   *  `proc.exports.__alloc` to allocate guest-side memory before
+   *  __run_command. */
+  get exports(): Record<string, (...args: number[]) => unknown> {
+    if (!this.exportsRef) throw new Error(`Process ${this.pid} exports not yet bound`);
+    return this.exportsRef.exports;
+  }
 
   private constructor(opts: { pid: number; mode: ProcessMode }) {
     this.pid = opts.pid;
@@ -346,22 +364,31 @@ export class Process {
     this.exportsRef = refs;
   }
 
+  /** Internal wiring used by loader.ts. */
+  __setMemory(mem: WebAssembly.Memory): void {
+    this.memoryRef = mem;
+  }
+
   /**
-   * Invoke a wasm export on this process.
+   * Invoke a wasm export on this process. Arguments are i32 (numeric)
+   * because that is what the wasm ABI carries — strings/JSON must be
+   * marshalled by the caller via wasm linear memory (allocate, write
+   * bytes, pass ptr+len, read result back). See `bash-dispatch.ts`'s
+   * `callRunCommand` helper for the canonical example.
    *
-   * Single-flight FIFO: subsequent callExport calls queue behind the in-flight
-   * one. Per-process queue (independent processes run concurrently). See the
-   * spec's §Resident Mode for why this matters and when it does NOT prevent
-   * deadlock (recursive host_run_command — host callback must spawn a fresh
-   * process, not re-enter PID 1).
+   * Single-flight FIFO: subsequent callExport calls queue behind the
+   * in-flight one. Per-process queue (independent processes run
+   * concurrently). See the spec's §Resident Mode for why this matters
+   * and when it does NOT prevent deadlock (recursive host_run_command
+   * — host callback must spawn a fresh process, not re-enter PID 1).
    */
-  async callExport(name: string, ...args: unknown[]): Promise<unknown> {
+  async callExport(name: string, ...args: number[]): Promise<number> {
     const exports = this.exportsRef?.exports;
     if (!exports || !(name in exports)) {
       throw new Error(`no export named ${name}`);
     }
     const fn = exports[name];
-    const next = this.inflight.then(() => fn(...(args as number[])));
+    const next = this.inflight.then(() => fn(...args)) as Promise<number>;
     // Capture into inflight so subsequent calls queue behind this one,
     // even if `next` rejects.
     this.inflight = next.catch(() => {});
@@ -516,9 +543,31 @@ Create `packages/orchestrator/src/process/loader.ts`:
  * for PR2 and move out in PR4.
  */
 
-import type { Sandbox } from '../sandbox.ts';
 import { Process, type ProcessMode } from './process.ts';
 import type { PlatformAdapter } from '../platform/adapter.ts';
+import type { VfsLike } from '../vfs/vfs-like.ts';
+import type { ProcessManager } from './manager.ts';
+import type { WasiHost } from '../wasi/wasi-host.ts';
+
+/**
+ * Narrow context passed in by the Sandbox. The loader does not import
+ * `Sandbox` directly — that would put the kernel's process layer in a
+ * dependency cycle with the top-level facade and force every Sandbox
+ * field that the loader needs to be public. Instead, Sandbox constructs
+ * a `LoaderContext` once and passes it to every `loadProcess` call.
+ */
+export interface LoaderContext {
+  vfs: VfsLike;
+  adapter: PlatformAdapter;
+  processManager: ProcessManager;
+  wasi: WasiHost;
+  /** Build the kernel's standard codepod::host_* imports for this pid. */
+  buildKernelImports(pid: number): Record<string, WebAssembly.ImportValue>;
+  /** Bind the freshly-instantiated process's memory so import handlers
+   *  can read/write its linear memory. (Late-bound by the kernel's
+   *  memoryRef proxy used inside kernel-imports.) */
+  bindMemoryForProcess(pid: number, memory: WebAssembly.Memory): void;
+}
 
 export interface LoadProcessOptions {
   argv: string[];
@@ -535,7 +584,7 @@ export interface LoadProcessOptions {
 }
 
 export async function loadProcess(
-  sandbox: Sandbox,
+  ctx: LoaderContext,
   opts: LoadProcessOptions,
 ): Promise<Process> {
   const { argv, mode } = opts;
@@ -543,24 +592,23 @@ export async function loadProcess(
   if (!path) throw new Error('loadProcess: argv[0] is required');
 
   // Resolve the wasm bytes from the VFS.
-  const bytes = sandbox.vfs.readFile(path);
+  const bytes = ctx.vfs.readFile(path);
   if (bytes.length < 8 || bytes[0] !== 0x00 || bytes[1] !== 0x61) {
     throw new Error(`loadProcess: ${path} is not a wasm binary`);
   }
 
-  const adapter: PlatformAdapter = sandbox.adapter;
-  const module = await adapter.compile(bytes);
+  const module = await ctx.adapter.compile(bytes);
 
   // Allocate a pid in the ProcessManager.
-  const pid = sandbox.processManager.allocatePid({
+  const pid = ctx.processManager.allocatePid({
     argv, env: opts.env ?? {}, cwd: opts.cwd ?? '/',
   });
 
   const proc = Process.__forLoader({ pid, mode });
 
   // Build imports: WASI + standard kernel codepod imports + caller extras.
-  const wasiImports = sandbox.wasi.buildImports(pid);
-  const kernelImports = sandbox.buildKernelImports(pid);
+  const wasiImports = ctx.wasi.buildImports(pid);
+  const kernelImports = ctx.buildKernelImports(pid);
   const codepodImports: Record<string, WebAssembly.ImportValue> = {
     ...kernelImports,
     ...(opts.extraCodepodImports ?? {}),
@@ -571,12 +619,14 @@ export async function loadProcess(
     codepod: codepodImports,
   };
 
-  const instance = await adapter.instantiate(module, imports);
+  const instance = await ctx.adapter.instantiate(module, imports);
 
   // Wire memory back into the imports so they can read/write the linear
-  // memory of the freshly-instantiated process.
+  // memory of the freshly-instantiated process. Bind it on the Process
+  // too so callers (bash-dispatch) can reach it via `proc.memory`.
   const memoryRef = instance.exports.memory as WebAssembly.Memory;
-  sandbox.bindMemoryForProcess(pid, memoryRef);
+  ctx.bindMemoryForProcess(pid, memoryRef);
+  proc.__setMemory(memoryRef);
 
   // Wrap exports with JSPI / Asyncify if the binary requires it.
   const wrappedExports: Record<string, (...args: number[]) => unknown> = {};
@@ -613,42 +663,48 @@ export async function loadProcess(
   // Wire termination. Resident: drop the instance + free pid. CLI: same
   // (since _start already returned, this is just bookkeeping).
   proc.__setTerminate(async () => {
-    sandbox.processManager.releasePid(pid);
+    ctx.processManager.releasePid(pid);
   });
 
   return proc;
 }
 ```
 
-- [ ] **Step 4: Add the supporting `Sandbox` accessors used by the loader**
+- [ ] **Step 4: Add a private `loaderContext()` method on Sandbox**
 
-Modify `packages/orchestrator/src/sandbox.ts` — add public read access to `vfs`, `adapter`, `processManager`, `wasi`, plus `buildKernelImports(pid)` and `bindMemoryForProcess(pid, mem)` methods. These already exist internally; surface them or add thin accessors:
+Modify `packages/orchestrator/src/sandbox.ts` — keep `vfs`, `adapter`, `processManager`, `wasi` as **private** fields. Expose them only via a single private factory method that returns a `LoaderContext`:
 
 ```ts
-// In Sandbox class:
-readonly vfs: VFS;
-readonly adapter: PlatformAdapter;
-readonly processManager: ProcessManager;
-readonly wasi: WasiHost;
+// In Sandbox class — fields stay private:
+private readonly vfs: VFS;
+private readonly adapter: PlatformAdapter;
+private readonly processManager: ProcessManager;
+private readonly wasi: WasiHost;
 
-buildKernelImports(pid: number): Record<string, WebAssembly.ImportValue> {
-  // Delegate to existing kernel-imports.ts factory; bind to this sandbox + pid.
-  return createKernelImports({
+private loaderContext(): LoaderContext {
+  return {
     vfs: this.vfs,
+    adapter: this.adapter,
     processManager: this.processManager,
-    pid,
-    networkBridge: this.networkBridge,
-    extensionRegistry: this.extensionRegistry,
-    threadsBackend: this.threadsBackend,
-  });
-}
-
-bindMemoryForProcess(pid: number, memory: WebAssembly.Memory): void {
-  this.processManager.setMemoryRef(pid, memory);
+    wasi: this.wasi,
+    buildKernelImports: (pid) => createKernelImports({
+      vfs: this.vfs,
+      processManager: this.processManager,
+      pid,
+      networkBridge: this.networkBridge,
+      extensionRegistry: this.extensionRegistry,
+      threadsBackend: this.threadsBackend,
+      runCommandHandler: this.runCommandHandler, // PR4 wires this through
+    }),
+    bindMemoryForProcess: (pid, memory) =>
+      this.processManager.setMemoryRef(pid, memory),
+  };
 }
 ```
 
-If `ProcessManager.allocatePid` / `releasePid` / `setMemoryRef` aren't already public, expose them. If they require additional work (e.g., the existing manager doesn't have an `allocatePid` separate from `spawn`), name the actual existing method here and adjust the loader accordingly. Read `manager.ts` to find the right entry points before writing.
+`Sandbox.create` and `Sandbox.fork` call `loadProcess(this.loaderContext(), opts)`. The loader sees only the narrow interface; the rest of `Sandbox` stays sealed.
+
+If `ProcessManager.allocatePid` / `releasePid` / `setMemoryRef` aren't already public, expose them on `ProcessManager` (it's a kernel-internal class — its own surface can grow without crossing the boundary). If they require additional work (e.g., the existing manager doesn't have an `allocatePid` separate from `spawn`), read `manager.ts` to identify the closest existing methods and adapt the loader to call them; the surface change should land on `ProcessManager`, not on `Sandbox`.
 
 - [ ] **Step 5: Run the loader test to verify it passes**
 
@@ -673,11 +729,14 @@ git add packages/orchestrator/src/process/loader.ts packages/orchestrator/src/pr
 git commit -m "feat(kernel): add generic process loader (instantiate + JSPI + resident mode)"
 ```
 
-### Task 2.4: `Sandbox.create({ bootArgv })` + `sandbox.process(pid)`
+### Task 2.4: `ShellInstance` uses `loadProcess` internally; `Sandbox.create({ bootArgv })`; `sandbox.process(1)` exposed
 
 **Files:**
+- Modify: `packages/orchestrator/src/shell/shell-instance.ts`
 - Modify: `packages/orchestrator/src/sandbox.ts`
 - Test: `packages/orchestrator/src/__tests__/sandbox-bootArgv.test.ts` (new)
+
+**This task is intentionally one atomic unit.** Splitting "expose sandbox.process(1)" from "make ShellInstance use loadProcess" produces a transient with two resident bash instances (legacy ShellInstance + loader-PID-1). Their state, history, env, and fds would diverge silently. We avoid that by collapsing both changes into a single commit: ShellInstance becomes a thin wrapper around `loadProcess`, and `sandbox.process(1)` returns the underlying `Process`. Exactly one bash instance per sandbox the entire time.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -711,7 +770,28 @@ Deno.test('Sandbox.create defaults bootArgv to /bin/bash for compat', async () =
     await sb.destroy();
   }
 });
+
+Deno.test('Sandbox creates exactly one bash instance for PID 1', async () => {
+  // Asserts no double-instantiation: the legacy ShellInstance and the
+  // generic loader produce a single Process. We check that
+  // sb.process(1) and the underlying ShellInstance.process refer to the
+  // same Process object identity.
+  const sb = await Sandbox.create({ bootArgv: ['/bin/bash'] });
+  try {
+    const procFromSandbox = sb.process(1)!;
+    // Internal accessor exposed on the kernel package for test purposes:
+    const procFromShell = sb.__getShellInstanceProcess();
+    assert(
+      procFromSandbox === procFromShell,
+      'sandbox.process(1) and ShellInstance.process must be the same Process',
+    );
+  } finally {
+    await sb.destroy();
+  }
+});
 ```
+
+The third test guards against the dual-PID-1 regression. It assumes a test-only accessor `Sandbox.__getShellInstanceProcess()` returning the `Process` ShellInstance is wrapping. Add that accessor as part of this task; it can be removed once ShellInstance itself is deleted in PR4.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -721,9 +801,48 @@ deno test -A --no-check packages/orchestrator/src/__tests__/sandbox-bootArgv.tes
 
 Expected: FAIL — `bootArgv` option not yet recognized; `sandbox.process(1)` not yet defined.
 
-- [ ] **Step 3: Add `bootArgv` to `Sandbox.create`**
+- [ ] **Step 3: Refactor `ShellInstance.create` to delegate to `loadProcess`**
 
-In `packages/orchestrator/src/sandbox.ts`, modify the `Sandbox.create` signature (the `options` interface) and use the loader for PID 1:
+In `packages/orchestrator/src/shell/shell-instance.ts`, the relevant flow runs from `static async create()` through the `_start()` invocation (around line 482) and the asyncify init (around line 495-510). Replace that block with:
+
+```ts
+import { loadProcess, type LoaderContext } from '../process/loader.ts';
+import type { Process } from '../process/process.ts';
+
+static async create(
+  loaderCtx: LoaderContext,
+  shellExecWasmPath: string,
+  opts: ShellCreateOptions,
+): Promise<ShellInstance> {
+  // shell-specific host_run_command — spawns a fresh ShellInstance for
+  // subprocess execution today; this behavior is preserved as-is and
+  // moves out to bash-host in PR4.
+  const shellHostRunCommand = makeShellHostRunCommand(loaderCtx, opts);
+
+  const proc = await loadProcess(loaderCtx, {
+    argv: ['/bin/bash'],
+    mode: 'resident',
+    extraCodepodImports: {
+      host_run_command: shellHostRunCommand,
+    },
+  });
+
+  return new ShellInstance(proc);
+}
+
+private constructor(private readonly procField: Process) {}
+
+/** Public so Sandbox can hand the same Process out via sandbox.process(1). */
+get process(): Process { return this.procField; }
+```
+
+Move all the previously-inlined memory-binding, JSPI/asyncify wrapping, and `_start` invocation logic out of ShellInstance — those now live inside `loadProcess`. Drop unused fields (`instance`, raw export refs, `memoryRef`) — they're held inside the `Process`.
+
+`makeShellHostRunCommand` keeps the existing fresh-ShellInstance-per-subprocess implementation as a module-private function. It's the legacy bash-aware `host_run_command` impl that PR4 replaces with the host-registered `runCommandHandler` callback.
+
+- [ ] **Step 4: Add `bootArgv`, `process(1)`, and the test accessor to `Sandbox`**
+
+In `packages/orchestrator/src/sandbox.ts`:
 
 ```ts
 export interface SandboxOptions {
@@ -737,45 +856,62 @@ export interface SandboxOptions {
 }
 ```
 
-In the body of `Sandbox.create`, replace the `ShellInstance.create(...)` line with both:
+In the body of `Sandbox.create`, switch to **two-phase construction** so that `loadProcess` can run after the Sandbox is fully built (it needs a working `loaderContext()` which depends on initialized fields):
 
 ```ts
 const bootArgv = options.bootArgv ?? ['/bin/bash'];
 
-// PR2: use the generic loader to spawn PID 1 alongside the existing
-// ShellInstance pathway. shell-instance.ts will be reduced to a thin
-// wrapper in Task 2.5; for now both paths run.
+// Phase 1: build the Sandbox object with all dependencies wired but no
+// PID 1 yet. The `runner` field is left undefined; everything else
+// (vfs, processManager, wasi, networkBridge, extensionRegistry, …) is
+// fully initialized.
 const sandboxInstance = new Sandbox(/* existing constructor args */);
 sandboxInstance.bootArgvField = bootArgv;
 
-// Existing ShellInstance.create call stays:
-const runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, { ... });
-sandboxInstance.runner = runner;
-
-// Spawn PID 1 via the new generic loader. ShellInstance retained the
-// instance under a different bookkeeping path; in PR4 the two converge.
-const pid1 = await loadProcess(sandboxInstance, { argv: bootArgv, mode: 'resident' });
-sandboxInstance.pid1 = pid1;
+// Phase 2: spawn PID 1 via ShellInstance, which now delegates to
+// loadProcess via the loader context. This requires Phase 1 to have
+// completed because loaderContext() reads from the fully-initialized
+// fields.
+await sandboxInstance.bootPid1(shellExecWasmPath, {
+  /* existing opts: networkBridge, extensionRegistry, … */
+});
 
 return sandboxInstance;
 ```
 
-NOTE: this temporarily creates two bash instances per sandbox (one via ShellInstance, one via loader). That waste is intentional and disappears in Task 2.5. The plan accepts double-instantiation only for the PR2 transient — PR2 ships green, PR3+PR4 collapses to one.
-
-If double-instantiation is too costly to ship (very large wasm or memory pressure), add a `legacyShell` flag to `loadProcess` that *does not* run `_start` again — relying on ShellInstance having already done so. Decide at implementation time based on sandbox boot timing.
-
-- [ ] **Step 4: Add `sandbox.process(pid)` accessor**
-
-Add a method to the `Sandbox` class:
+Add the `bootPid1` method to the `Sandbox` class:
 
 ```ts
-process(pid: number): Process | undefined {
-  if (pid === 1) return this.pid1;
-  return this.processManager.processByPid(pid);
+private async bootPid1(
+  shellExecWasmPath: string,
+  opts: ShellCreateOptions,
+): Promise<void> {
+  const runner = await ShellInstance.create(
+    this.loaderContext(),
+    shellExecWasmPath,
+    opts,
+  );
+  this.runner = runner;
 }
 ```
 
-If `ProcessManager` has no `processByPid`, add a thin getter that maps the manager's internal PID table to `Process` instances. For PR2, returning the `Process` only for pid 1 is sufficient — the test asserts only `process(1)`.
+This shape is reused in `Sandbox.fork()` (PR4) — the forked sandbox builds in Phase 1, then awaits `bootPid1()` against its own loader context. Centralizing PID 1 spawn in `bootPid1` removes the today's pattern of `ShellInstance.create` being called from inside the constructor, which was the source of the "where do I get the Sandbox to pass to loadProcess?" awkwardness.
+
+Add the public accessor and the test-only accessor to the `Sandbox` class:
+
+```ts
+process(pid: number): Process | undefined {
+  if (pid === 1) return this.runner.process;
+  return this.processManager.processByPid(pid);
+}
+
+/** Test-only. Removed in PR4 along with ShellInstance. */
+__getShellInstanceProcess(): Process {
+  return this.runner.process;
+}
+```
+
+If `ProcessManager` has no `processByPid`, add a getter that maps its internal PID table to `Process` instances. For PR2 the test only asserts `process(1)`; non-PID-1 lookups can return undefined until PR4 wires them up.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
@@ -783,91 +919,7 @@ If `ProcessManager` has no `processByPid`, add a thin getter that maps the manag
 deno test -A --no-check packages/orchestrator/src/__tests__/sandbox-bootArgv.test.ts
 ```
 
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add packages/orchestrator/src/sandbox.ts packages/orchestrator/src/__tests__/sandbox-bootArgv.test.ts
-git commit -m "feat(kernel): Sandbox.create accepts bootArgv; sandbox.process(1) exposed"
-```
-
-### Task 2.5: Reduce `shell-instance.ts` to thin wrapper
-
-**Files:**
-- Modify: `packages/orchestrator/src/shell/shell-instance.ts`
-
-This task collapses the double-instantiation introduced in Task 2.4. After it, `ShellInstance` reuses the loader's `Process` and only adds bash-specific dispatch.
-
-- [ ] **Step 1: Read the current `ShellInstance.create` flow**
-
-Open `packages/orchestrator/src/shell/shell-instance.ts`. The relevant flow runs from the entry of `static async create()` through the `_start()` invocation (around line 482-495) to the construction of the `ShellInstance` object.
-
-- [ ] **Step 2: Replace the manual instantiation block with a call to `loadProcess`**
-
-Replace the block from `adapter.instantiate(...)` through the `__alloc` / asyncify init (currently lines ~469 through ~510) with:
-
-```ts
-// Delegate generic process loading to the kernel's process loader.
-const proc = await loadProcess(sandbox, {
-  argv: ['/bin/bash'],
-  mode: 'resident',
-  // ShellInstance previously injected `host_run_command` via its own
-  // wrapping of kernelImports. The wrapping moves into the loader
-  // itself in PR4; for now, ShellInstance still patches the import
-  // via extraCodepodImports. The patch is shell-specific (it dispatches
-  // back to a fresh ShellInstance for subprocess), so it stays here.
-  extraCodepodImports: {
-    host_run_command: shellHostRunCommand,
-  },
-});
-
-const wrappedRunCommand = (...args: number[]) =>
-  proc.callExport('__run_command', ...args);
-
-const memoryRef = proc.exportsRef!.exports.memory as unknown as WebAssembly.Memory;
-const shell = new ShellInstance(proc, wrappedRunCommand, memoryRef);
-```
-
-Where `shellHostRunCommand` is the existing JSPI-or-asyncify-wrapped `host_run_command` function ShellInstance currently builds (it spawns a fresh ShellInstance for subprocess execution today — that behavior is preserved as-is and moves out in PR4). Keep its definition as a module-private function.
-
-- [ ] **Step 3: Update the `ShellInstance` constructor signature**
-
-Change the constructor to accept the new arguments:
-
-```ts
-private constructor(
-  proc: Process,
-  wrappedRunCommand: (...args: number[]) => Promise<number>,
-  memoryRef: WebAssembly.Memory,
-) {
-  this.proc = proc;
-  this.runCommandImpl = wrappedRunCommand;
-  this.memoryRef = memoryRef;
-}
-```
-
-Drop now-unused fields (`instance`, raw export refs) — they're held inside the `Process` now.
-
-- [ ] **Step 4: Update `Sandbox.create` to skip the duplicate spawn**
-
-Back in `sandbox.ts`, simplify the boot block: ShellInstance now wraps the same Process the loader returned. Remove the `const pid1 = await loadProcess(...)` line that ran in parallel; let `ShellInstance.create` own PID 1.
-
-```ts
-const runner = await ShellInstance.create(sandboxInstance, ...);
-sandboxInstance.runner = runner;
-sandboxInstance.pid1 = runner.process; // expose the underlying Process
-```
-
-`ShellInstance` exposes a `process: Process` getter for this.
-
-- [ ] **Step 5: Run the existing shell tests**
-
-```bash
-deno test -A --no-check packages/orchestrator/src/shell/__tests__/*.test.ts
-```
-
-Expected: PASS — shell continues to work via the new wrapper.
+Expected: PASS — including the third test that verifies single-instance identity.
 
 - [ ] **Step 6: Run the guest-compat tests including the pthread canary**
 
@@ -875,7 +927,7 @@ Expected: PASS — shell continues to work via the new wrapper.
 deno test -A --no-check packages/orchestrator/src/__tests__/guest-compat.test.ts
 ```
 
-Expected: PASS — pthread canary still asserts counter == 40000. This is the guard against breaking the wasi-threads work that just landed.
+Expected: PASS — pthread canary still asserts counter == 40000.
 
 - [ ] **Step 7: Run the full suite**
 
@@ -888,11 +940,11 @@ Expected: all green.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add packages/orchestrator/src/shell/shell-instance.ts packages/orchestrator/src/sandbox.ts
-git commit -m "refactor(kernel): ShellInstance delegates spawn+JSPI to generic process loader"
+git add packages/orchestrator/src/shell/shell-instance.ts packages/orchestrator/src/sandbox.ts packages/orchestrator/src/__tests__/sandbox-bootArgv.test.ts
+git commit -m "feat(kernel): ShellInstance uses generic loader; sandbox.process(1) exposed"
 ```
 
-### Task 2.6: PR2 PR
+### Task 2.5: PR2 PR
 
 - [ ] **Step 1: Push and open the PR**
 
@@ -1232,7 +1284,20 @@ EOF
 
 **Goal:** This is the substantive PR. Move bash-specific knowledge out of the kernel package into `sdk-server` and `mcp-server`. Delete `shell/` directory. Implement the host-registered `runCommandHandler` callback (fresh resident bash per call). Rewire the 5 in-tree `ShellInstance` consumers and the worker bridge to the generic Process API.
 
-**This PR can plausibly split into PR4a (consumer rewires + Sandbox.run/history removal) and PR4b (callback + import moves + shell-instance.ts deletion). Decided at implementation time based on diff size.**
+**This PR can plausibly split into PR4a (consumer rewires + Sandbox.run/history removal) and PR4b (callback + import moves + shell-instance.ts deletion).** Concrete split criterion: split if the combined PR4 diff exceeds **~1500 LOC** or touches **more than 8 distinct file groups** (where a "file group" is one of: kernel/host-imports, kernel/process, kernel/sandbox, kernel/execution, kernel/cli+index, sdk-server, mcp-server, shell-conformance-tests). Below those thresholds, ship as one PR4 — split costs more in review-context-switch than it saves.
+
+**Pre-PR4 audit step:** before starting Task 4.0, run
+
+```bash
+grep -rn 'shell\.history\|getHistory\|clearHistory' packages/ scripts/
+```
+
+across the whole repo (not just orchestrator). Verify that:
+- only `sdk-server/src/dispatcher.ts` and `packages/orchestrator/src/sandbox.ts` reference these methods (which PR4 already plans to handle), AND
+- `packages/python-sdk/` does not call `shell.history.list/clear` from any client code, AND
+- `packages/mcp-server-rust/` (if it exists) does not implement these RPC methods.
+
+If anything else surfaces, decide before PR4: deprecate-and-warn for one release, or break-and-fix-callers in the same PR.
 
 **Files:**
 - Create: `packages/sdk-server/src/bash-dispatch.ts`
@@ -1249,6 +1314,268 @@ EOF
 - Modify: `packages/mcp-server/src/index.ts`
 - Delete: `packages/orchestrator/src/shell/` (entire directory) — last step of PR4
 
+### Task 4.0: Define `KernelApi` and `bootImports`
+
+**Files:**
+- Create: `packages/orchestrator/src/kernel-api.ts` (interface definition + memory proxy implementation)
+- Modify: `packages/orchestrator/src/sandbox.ts` (accept `bootImports` option; build a `KernelApi` per sandbox)
+- Modify: `packages/orchestrator/src/process/loader.ts` (call `bootImports(api)` and merge result into `extraCodepodImports`)
+- Modify: `packages/orchestrator/src/index.ts` (export `KernelApi`)
+- Test: `packages/orchestrator/src/__tests__/boot-imports.test.ts` (new)
+
+This task lands the host-facing surface the rest of PR4 depends on (Tasks 4.1, 4.2, 4.3, 4.5 all reference `KernelApi` and `bootImports`). Without it, those tasks have implicit dependencies that won't surface until late.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `packages/orchestrator/src/__tests__/boot-imports.test.ts`:
+
+```ts
+import { assertEquals, assert, assertThrows } from 'jsr:@std/assert';
+import { Sandbox } from '../sandbox.ts';
+import type { KernelApi } from '../kernel-api.ts';
+
+Deno.test('bootImports merges userland imports into the boot process', async () => {
+  let apiSeen: KernelApi | undefined;
+  const sb = await Sandbox.create({
+    bootArgv: ['/bin/bash'],
+    bootImports: (api) => {
+      apiSeen = api;
+      return {
+        // A trivial imported function that just returns a known value.
+        // Bash will not call it (this is a contract test, not an
+        // execution test) — but its presence in the import bag is
+        // what we are verifying.
+        host_userland_canary: () => 0xC0DE,
+      };
+    },
+  });
+  try {
+    assert(apiSeen, 'bootImports should have been invoked');
+    // KernelApi exposes vfs, processManager, time, memory.
+    assert(typeof apiSeen.vfs.readFile === 'function');
+    assert(typeof apiSeen.processManager.registerTool === 'function');
+    assert(typeof apiSeen.time.now === 'function');
+    assert(typeof apiSeen.memory.readString === 'function');
+  } finally {
+    await sb.destroy();
+  }
+});
+
+Deno.test('KernelApi.memory throws if used during bootImports construction', async () => {
+  // Memory is late-bound: it does not exist until WebAssembly.instantiate
+  // returns. Calling api.memory.readString synchronously inside
+  // bootImports must throw, not silently misbehave.
+  await assertThrows(
+    async () => {
+      await Sandbox.create({
+        bootArgv: ['/bin/bash'],
+        bootImports: (api) => {
+          // Forbidden: synchronous use of api.memory before the boot
+          // process is instantiated.
+          api.memory.readString(0, 0);
+          return {};
+        },
+      });
+    },
+    Error,
+    'memory not yet bound',
+  );
+});
+
+Deno.test('KernelApi.memory works from inside an import handler (post-instantiate)', async () => {
+  // The proxy resolves the moment instantiate returns, so import
+  // handlers (which only run after that) see live memory.
+  let importHandlerCalled = false;
+  const sb = await Sandbox.create({
+    bootArgv: ['/bin/bash'],
+    bootImports: (api) => ({
+      host_userland_inspect: (ptr: number, len: number) => {
+        // This handler runs after instantiation; api.memory is live.
+        const _decoded = api.memory.readString(ptr, len);
+        importHandlerCalled = true;
+        return 0;
+      },
+    }),
+  });
+  try {
+    // We can't easily trigger a guest call to host_userland_inspect
+    // without a custom test guest, so this test asserts only that
+    // bootImports + Sandbox.create succeeds and the handler is wired
+    // (not invoked).
+    assert(sb.process(1));
+    // importHandlerCalled stays false because bash does not call our
+    // canary import — that's fine; the assertion is about wiring.
+    assertEquals(importHandlerCalled, false);
+  } finally {
+    await sb.destroy();
+  }
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+```bash
+deno test -A --no-check packages/orchestrator/src/__tests__/boot-imports.test.ts
+```
+
+Expected: FAIL — `bootImports` option not yet accepted; `KernelApi` not yet defined.
+
+- [ ] **Step 3: Define `KernelApi` interface + memory proxy**
+
+Create `packages/orchestrator/src/kernel-api.ts`:
+
+```ts
+import type { VfsLike } from './vfs/vfs-like.ts';
+
+export interface KernelApiProcessManager {
+  registerTool(name: string, impl: unknown): void;
+  hasTool(name: string): boolean;
+}
+
+export interface KernelApiTime {
+  /** Wall clock seconds since epoch. */
+  now(): number;
+  /** Monotonic nanoseconds. */
+  monotonic(): bigint;
+}
+
+export interface KernelApiMemory {
+  readString(ptr: number, len: number): string;
+  readBytes(ptr: number, len: number): Uint8Array;
+  writeString(s: string, outPtr: number, outCap: number): number;
+  writeBytes(b: Uint8Array, outPtr: number, outCap: number): number;
+  writeJson(obj: unknown, outPtr: number, outCap: number): number;
+}
+
+export interface KernelApi {
+  vfs: VfsLike;
+  processManager: KernelApiProcessManager;
+  time: KernelApiTime;
+  memory: KernelApiMemory;
+}
+
+/** Late-bound memory proxy. The kernel constructs this with no Memory
+ *  attached, passes it to bootImports (which uses it only inside import
+ *  handlers — closures), and sets `current` after WebAssembly.instantiate
+ *  returns. Calling any method while `current` is undefined throws —
+ *  this catches the bug where bootImports tries to read memory
+ *  synchronously during construction. */
+export class MemoryProxy implements KernelApiMemory {
+  current: WebAssembly.Memory | undefined;
+
+  private require(): WebAssembly.Memory {
+    if (!this.current) {
+      throw new Error('KernelApi.memory not yet bound (memory not yet bound)');
+    }
+    return this.current;
+  }
+
+  readString(ptr: number, len: number): string {
+    const mem = this.require();
+    return new TextDecoder().decode(new Uint8Array(mem.buffer, ptr, len));
+  }
+  readBytes(ptr: number, len: number): Uint8Array {
+    const mem = this.require();
+    return new Uint8Array(mem.buffer.slice(ptr, ptr + len));
+  }
+  writeString(s: string, outPtr: number, outCap: number): number {
+    return this.writeBytes(new TextEncoder().encode(s), outPtr, outCap);
+  }
+  writeBytes(b: Uint8Array, outPtr: number, outCap: number): number {
+    const mem = this.require();
+    if (b.length > outCap) return b.length; // signal: need bigger buffer
+    new Uint8Array(mem.buffer, outPtr, b.length).set(b);
+    return b.length;
+  }
+  writeJson(obj: unknown, outPtr: number, outCap: number): number {
+    return this.writeString(JSON.stringify(obj), outPtr, outCap);
+  }
+}
+```
+
+- [ ] **Step 4: Add `bootImports` to `SandboxOptions` and wire it into `bootPid1`**
+
+In `packages/orchestrator/src/sandbox.ts`:
+
+```ts
+export interface SandboxOptions {
+  // ... existing fields including bootArgv ...
+  bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
+}
+
+class Sandbox {
+  // ... existing fields ...
+  private readonly memoryProxy = new MemoryProxy();
+
+  private buildKernelApi(): KernelApi {
+    return {
+      vfs: this.vfs,
+      processManager: {
+        registerTool: (name, impl) => this.processManager.registerTool(name, impl),
+        hasTool: (name) => this.processManager.hasTool(name),
+      },
+      time: {
+        now: () => Date.now() / 1000,
+        monotonic: () => BigInt(performance.now() * 1e6 | 0),
+      },
+      memory: this.memoryProxy,
+    };
+  }
+
+  private async bootPid1(
+    shellExecWasmPath: string,
+    opts: ShellCreateOptions,
+  ): Promise<void> {
+    const userland = this.bootImportsFn?.(this.buildKernelApi()) ?? {};
+    const runner = await ShellInstance.create(
+      this.loaderContext(userland),
+      shellExecWasmPath,
+      opts,
+    );
+    this.runner = runner;
+  }
+}
+```
+
+- [ ] **Step 5: Pass userland imports through `loaderContext` and `loadProcess`**
+
+Modify `loaderContext()` to accept the userland-import bag and forward it via the existing `extraCodepodImports` mechanism. Inside `loadProcess`, after instantiation, set `memoryProxy.current = instance.exports.memory` so the late-bound proxy resolves before any import handler can run.
+
+```ts
+// In Sandbox:
+private loaderContext(userlandImports: Record<string, WebAssembly.ImportValue>): LoaderContext {
+  return {
+    vfs: this.vfs,
+    adapter: this.adapter,
+    processManager: this.processManager,
+    wasi: this.wasi,
+    buildKernelImports: (pid) => ({
+      ...createKernelImports({ /* existing args */ }),
+      ...userlandImports,
+    }),
+    bindMemoryForProcess: (pid, memory) => {
+      this.processManager.setMemoryRef(pid, memory);
+      this.memoryProxy.current = memory; // late-bind the KernelApi memory
+    },
+  };
+}
+```
+
+- [ ] **Step 6: Run the test to verify it passes**
+
+```bash
+deno test -A --no-check packages/orchestrator/src/__tests__/boot-imports.test.ts
+```
+
+Expected: PASS — all three tests green (canary import wired; pre-instantiate memory access throws; post-instantiate handler wiring works).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add packages/orchestrator/src/kernel-api.ts packages/orchestrator/src/sandbox.ts packages/orchestrator/src/process/loader.ts packages/orchestrator/src/index.ts packages/orchestrator/src/__tests__/boot-imports.test.ts
+git commit -m "feat(kernel): add KernelApi + bootImports for userland-supplied host imports"
+```
+
 ### Task 4.1: `runCommandHandler` callback wiring in kernel
 
 **Files:**
@@ -1261,23 +1588,54 @@ EOF
 Create `packages/orchestrator/src/__tests__/run-command-handler.test.ts`:
 
 ```ts
-import { assertEquals, assert } from 'jsr:@std/assert';
+import { assertEquals, assert, assertRejects } from 'jsr:@std/assert';
 import { Sandbox } from '../sandbox.ts';
+import type { Process } from '../process/process.ts';
+
+/**
+ * Inline JSON marshaling helper. The bash-dispatch module (Task 4.2)
+ * encapsulates this as `callRunCommand(proc, cmd)`; this test predates
+ * that module and inlines the marshaling so it has zero cross-task
+ * dependency. The shape mirrors what main.rs:39-90 expects:
+ *   __run_command(cmd_ptr, cmd_len, out_ptr, out_cap) -> bytes_written
+ */
+async function callRunCommandInline(proc: Process, cmd: string): Promise<{ exit_code: number; stdout: string; stderr: string }> {
+  const memory = proc.memory;
+  const alloc = proc.exports.__alloc as (n: number) => number;
+  const reqBytes = new TextEncoder().encode(JSON.stringify({ cmd }));
+  const reqPtr = alloc(reqBytes.length);
+  new Uint8Array(memory.buffer, reqPtr, reqBytes.length).set(reqBytes);
+  let outCap = 64 * 1024;
+  let outPtr = alloc(outCap);
+  let written = await proc.callExport('__run_command', reqPtr, reqBytes.length, outPtr, outCap);
+  if (written > outCap) {
+    outCap = written;
+    outPtr = alloc(outCap);
+    written = await proc.callExport('__run_command', reqPtr, reqBytes.length, outPtr, outCap);
+  }
+  const decoded = new TextDecoder().decode(new Uint8Array(memory.buffer, outPtr, written));
+  const parsed = JSON.parse(decoded) as { result: { exit_code: number; stdout: string; stderr: string } };
+  return parsed.result;
+}
 
 Deno.test('runCommandHandler is invoked when a guest calls host_run_command', async () => {
   let handlerCalled = 0;
   let lastCmd = '';
   const sb = await Sandbox.create({
-    runCommandHandler: async (req) => {
+    runCommandHandler: async (req, _ctx) => {
       handlerCalled++;
       lastCmd = req.cmd;
       return { exit_code: 0, stdout: 'mock-stdout', stderr: '' };
     },
   });
   try {
-    // Run a Python program (or test guest) that calls host_run_command.
-    // For PR4 we use the existing RustPython integration as the test.
-    const result = await sb.run('python3 -c "import _codepod; r = _codepod.run_command(\\"echo hi\\"); print(r)"');
+    // Drive PID 1 (bash) to execute a Python one-liner that calls
+    // _codepod.run_command, which translates to host_run_command. The
+    // kernel's host_run_command handler then delegates to our mock.
+    const result = await callRunCommandInline(
+      sb.process(1)!,
+      'python3 -c "import _codepod; r = _codepod.run_command(\\"echo hi\\"); print(r)"',
+    );
     assertEquals(handlerCalled, 1);
     assertEquals(lastCmd, 'echo hi');
     assert(result.stdout.includes('mock-stdout'));
@@ -1286,16 +1644,18 @@ Deno.test('runCommandHandler is invoked when a guest calls host_run_command', as
   }
 });
 
-Deno.test('runCommandHandler defaults to fresh-resident-bash dispatch when not provided', async () => {
-  // No handler -> kernel uses a built-in fallback that errors.
-  // Host servers MUST register one; this test asserts the default error.
+Deno.test('runCommandHandler returns error when not registered', async () => {
+  // No handler — kernel returns an error to the guest's host_run_command.
+  // The spec says hosts MUST register; this test pins the kernel's
+  // not-registered behavior so accidental fallbacks get caught.
   const sb = await Sandbox.create();
   try {
-    // RustPython _codepod.run_command should fail with a clear message.
     await assertRejects(
-      () => sb.run('python3 -c "import _codepod; _codepod.run_command(\\"echo hi\\")"'),
+      () => callRunCommandInline(
+        sb.process(1)!,
+        'python3 -c "import _codepod; _codepod.run_command(\\"echo hi\\")"',
+      ),
       Error,
-      'no runCommandHandler registered',
     );
   } finally {
     await sb.destroy();
@@ -1303,7 +1663,7 @@ Deno.test('runCommandHandler defaults to fresh-resident-bash dispatch when not p
 });
 ```
 
-NOTE: the second test's failure message depends on the kernel's default behavior. Pick one: either kernel errors with "no runCommandHandler registered", or kernel falls back to spawning a fresh resident bash itself. The spec says hosts must register; therefore the kernel default error matches the spec. Update the test if the implementation chooses the fallback path.
+The second test asserts that absent a registered handler, the kernel surfaces an error to the guest (which propagates back through the bash subprocess and trips `assertRejects`). The exact error message is implementation-dependent — the assertion checks that a rejection occurs at all, not the message text.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1476,17 +1836,61 @@ import type {
 export interface RunOpts { env?: Record<string, string>; cwd?: string; }
 export interface RunResult { exit_code: number; stdout: string; stderr: string; }
 
-/** User-facing run via PID 1 (the resident shell session). */
+/**
+ * User-facing run via PID 1 (the resident shell session).
+ *
+ * Marshals JSON across the wasm ABI:
+ *   __run_command(cmd_ptr, cmd_len, out_ptr, out_cap) -> bytes_written | required_size
+ * (See packages/shell-exec/src/main.rs:39-90.)
+ *
+ * The shell exposes a `__alloc(size)` export for caller-side memory allocation;
+ * we allocate input + output buffers there, copy bytes in, call the export,
+ * then read the response bytes back from linear memory.
+ */
 export async function runCommand(
   sandbox: Sandbox,
   cmd: string,
   opts?: RunOpts,
 ): Promise<RunResult> {
-  const raw = await sandbox.process(1)!.callExport(
-    '__run_command',
-    JSON.stringify({ cmd, ...opts }),
-  );
-  return JSON.parse(raw as string) as RunResult;
+  return await callRunCommand(sandbox.process(1)!, cmd, opts);
+}
+
+/**
+ * Call __run_command on a specific process. Used both by `runCommand` (which
+ * targets PID 1) and by `makeRunCommandHandler` (which spawns a fresh
+ * resident bash and targets that child).
+ */
+async function callRunCommand(
+  proc: Process,
+  cmd: string,
+  opts?: RunOpts,
+): Promise<RunResult> {
+  const memory = proc.memory; // late-bound from loader.ts post-instantiate
+  const alloc = proc.exports.__alloc as ((n: number) => number) | undefined;
+  if (!alloc) throw new Error('process does not expose __alloc');
+
+  const reqJson = JSON.stringify({ cmd, ...opts });
+  const reqBytes = new TextEncoder().encode(reqJson);
+  const reqPtr = alloc(reqBytes.length);
+  new Uint8Array(memory.buffer, reqPtr, reqBytes.length).set(reqBytes);
+
+  const OUT_CAP = 64 * 1024;
+  let outPtr = alloc(OUT_CAP);
+  let outCap = OUT_CAP;
+  let written = await proc.callExport('__run_command', reqPtr, reqBytes.length, outPtr, outCap);
+  // Per main.rs:84-86: if written > outCap, realloc and retry.
+  if (written > outCap) {
+    outCap = written;
+    outPtr = alloc(outCap);
+    written = await proc.callExport('__run_command', reqPtr, reqBytes.length, outPtr, outCap);
+  }
+  const outBytes = new Uint8Array(memory.buffer, outPtr, written);
+  const decoded = new TextDecoder().decode(outBytes);
+  // The shell returns { result: { exit_code, stdout, stderr, ... }, env: {...} }
+  // — see WasmOutput in main.rs:73-83. Surface only the result portion to the
+  // caller; env sync is a separate concern handled inside the kernel today.
+  const parsed = JSON.parse(decoded) as { result: RunResult; env: Record<string, string> };
+  return parsed.result;
 }
 
 /** Builds the runCommandHandler that backs guest-issued host_run_command.
@@ -1494,29 +1898,16 @@ export async function runCommand(
 export function makeRunCommandHandler(
   opts: { onFreshSpawn?: () => void } = {},
 ): RunCommandHandler {
-  return async (req: RunRequest): Promise<RunResponse> => {
-    // Implementation note: the handler closes over the Sandbox via a
-    // setter exposed by the kernel after construction. Sandbox.create
-    // calls handler(req) with `this` bound to the sandbox; the handler
-    // then has sandbox.spawn available.
-    // Concretely: the kernel passes the sandbox in to the handler as
-    // part of the RunRequest envelope, OR handler is wrapped at
-    // registration-time. Pick at implementation; treat as injected here.
-    const sb: Sandbox = (req as RunRequest & { __sandbox?: Sandbox }).__sandbox!;
-    if (!sb) throw new Error('runCommandHandler invoked without sandbox binding');
-
+  return async (req, { sandbox }) => {
     opts.onFreshSpawn?.();
-    const child = await sb.spawn(['/bin/bash'], {
+    const child = await sandbox.spawn(['/bin/bash'], {
       mode: 'resident',
       env: req.env,
       cwd: req.cwd,
     });
     try {
-      const raw = await child.callExport(
-        '__run_command',
-        JSON.stringify({ cmd: req.cmd }),
-      );
-      const r = JSON.parse(raw as string) as RunResult;
+      // Reuse the same JSON-marshaling helper that runCommand uses.
+      const r = await callRunCommand(child, req.cmd);
       return { exit_code: r.exit_code, stdout: r.stdout, stderr: r.stderr };
     } finally {
       await child.terminate();
@@ -1525,27 +1916,10 @@ export function makeRunCommandHandler(
 }
 ```
 
-NOTE on sandbox-binding: the kernel needs to inject the live `Sandbox` into the handler invocation context. Two reasonable shapes:
-
-- **(a)** kernel calls `handler(req, { sandbox })`; handler reads sandbox from the second arg.
-- **(b)** kernel wraps the user-supplied handler at registration time:
-  ```ts
-  this.runCommandHandler = (req) => userHandler({ ...req, __sandbox: this });
-  ```
-
-Pick (a) — it's cleaner. Update `RunCommandHandler` type accordingly:
-
-```ts
-export type RunCommandHandler = (req: RunRequest, ctx: { sandbox: Sandbox }) => Promise<RunResponse>;
-```
-
-The dispatch handler then becomes:
-
-```ts
-return async (req, { sandbox }) => {
-  // ... uses sandbox.spawn ...
-};
-```
+The `RunCommandHandler` type was already defined as
+`(req: RunRequest, ctx: { sandbox: Sandbox }) => Promise<RunResponse>` in
+Task 4.1. The `ctx.sandbox` argument is what gives the handler access to
+`sandbox.spawn`; no closure or `__sandbox` smuggling is required.
 
 - [ ] **Step 4: Implement `bash-host-imports.ts`**
 
@@ -1572,93 +1946,45 @@ Create `packages/sdk-server/src/bash-host-imports.ts`:
 import type { KernelApi } from '@codepod/sandbox';
 
 export function bashBootImports(api: KernelApi): Record<string, WebAssembly.ImportValue> {
-  // Each handler below is a mechanical port from the pre-PR3
-  // `packages/orchestrator/src/host-imports/shell-imports.ts`. The substitution
-  // pattern is identical for every entry:
+  // Implementation: copy each handler body byte-for-byte from the pre-PR3
+  // `packages/orchestrator/src/host-imports/shell-imports.ts`. Do NOT invent
+  // new JSON shapes or signatures — the bash binary has compiled-in
+  // expectations about every wire format (e.g., host_stat returns a struct
+  // with `exists`, `is_file`, `is_dir`, `is_symlink`, `size`, `mode`,
+  // `mtime_ms`; see shell-imports.ts:201-217 in the pre-PR3 file).
   //
-  //   - readString(memoryRef.current!, ptr, len) → api.memory.readString(ptr, len)
-  //   - writeBytes(memoryRef.current!, ...)      → api.memory.writeBytes(...)
-  //   - writeJson(memoryRef.current!, ...)       → api.memory.writeJson(...)
-  //   - vfs.X(...)                               → api.vfs.X(...)
-  //   - processManager.X(...)                    → api.processManager.X(...)
+  // Substitution pattern (the only changes from the pre-PR3 source):
   //
-  // The 13 handlers and their pre-PR3 source line ranges (read from the
-  // pre-PR3 file before deletion):
+  //   readString(memoryRef.current!, ptr, len)  → api.memory.readString(ptr, len)
+  //   readBytes(memoryRef.current!, ptr, len)   → api.memory.readBytes(ptr, len)
+  //   writeBytes(memory, outPtr, outCap, ...)   → api.memory.writeBytes(..., outPtr, outCap)
+  //   writeJson(memory, outPtr, outCap, ...)    → api.memory.writeJson(..., outPtr, outCap)
+  //   writeString(memory, outPtr, outCap, ...)  → api.memory.writeString(..., outPtr, outCap)
+  //   vfs.X(...)                                 → api.vfs.X(...)
+  //   processManager.X(...)                      → api.processManager.X(...)
+  //   Date.now() / 1000                          → api.time.now()
   //
-  //   host_stat           — shell-imports.ts handler that wraps vfs.stat
-  //   host_read_file      — wraps vfs.readFile
-  //   host_write_file     — wraps vfs.writeFile (mode-aware)
-  //   host_readdir        — wraps vfs.readdir; serializes DirEntry[]
-  //   host_mkdir          — wraps vfs.mkdir
-  //   host_remove         — wraps vfs.unlink/rmdir; recursive flag
-  //   host_chmod          — wraps vfs.chmod
-  //   host_glob           — walks vfs via globToRegExp + walkVfs helpers
-  //                         (the helpers also live in pre-PR3 shell-imports.ts;
-  //                         move them into this file as private helpers)
-  //   host_rename         — wraps vfs.rename
-  //   host_readlink       — wraps vfs.readlink
-  //   host_register_tool  — wraps processManager.registerTool
-  //   host_has_tool       — wraps processManager.hasTool
-  //   host_time           — wraps api.time.now()
+  // The 13 handlers to copy:
+  //   host_stat, host_read_file, host_write_file, host_readdir, host_mkdir,
+  //   host_remove, host_chmod, host_glob, host_rename, host_readlink,
+  //   host_register_tool, host_has_tool, host_time.
   //
-  // Three example bodies shown here verbatim. Use them as templates for the
-  // remaining ten — every body follows the same shape.
+  // Also copy as module-private helpers (they are file-private in the
+  // pre-PR3 source and stay file-private here):
+  //   globToRegExp, globBaseDir, walkVfs, globMatch.
+  //
+  // Constants to copy: ERR_NOT_FOUND = -1, ERR_PERMISSION_DENIED = -2,
+  // ERR_IO = -3 (currently at the top of shell-imports.ts).
+  //
+  // The implementer should checkout the commit immediately before PR3
+  // deletes shell-imports.ts, copy the file, then mechanically apply the
+  // substitution above. No structural changes — every error code, every
+  // return shape, every helper invocation stays identical to today's
+  // observed behavior.
 
-  return {
-    host_stat: (pathPtr, pathLen, outPtr, outCap) => {
-      const path = api.memory.readString(pathPtr, pathLen);
-      try {
-        const st = api.vfs.stat(path);
-        return api.memory.writeJson({ kind: st.kind, mode: st.mode, size: st.size }, outPtr, outCap);
-      } catch { return -1; }
-    },
-
-    host_read_file: (pathPtr, pathLen, outPtr, outCap) => {
-      const path = api.memory.readString(pathPtr, pathLen);
-      try {
-        const bytes = api.vfs.readFile(path);
-        return api.memory.writeBytes(bytes, outPtr, outCap);
-      } catch { return -1; }
-    },
-
-    host_glob: (patternPtr, patternLen, outPtr, outCap) => {
-      const pattern = api.memory.readString(patternPtr, patternLen);
-      // Reuse the globToRegExp / globBaseDir / walkVfs / globMatch helpers
-      // copied from pre-PR3 shell-imports.ts (declared as module-private
-      // functions in this file). Their signatures and bodies are unchanged.
-      const matches = globMatch(api.vfs, pattern);
-      return api.memory.writeJson({ matches }, outPtr, outCap);
-    },
-
-    host_register_tool: (namePtr, nameLen, kindPtr, kindLen) => {
-      const name = api.memory.readString(namePtr, nameLen);
-      const kind = api.memory.readString(kindPtr, kindLen);
-      api.processManager.registerTool(name, { kind });
-      return 0;
-    },
-
-    host_has_tool: (namePtr, nameLen) => {
-      const name = api.memory.readString(namePtr, nameLen);
-      return api.processManager.hasTool(name) ? 1 : 0;
-    },
-
-    host_time: () => api.time.now(),
-
-    // The remaining 7 handlers (host_write_file, host_readdir, host_mkdir,
-    // host_remove, host_chmod, host_rename, host_readlink) follow the
-    // same template: readString for paths, call api.vfs.X(...), return 0 on
-    // success or -1 on error. Copy each body from the pre-PR3 file with the
-    // four-line substitution rule above.
-  };
+  return { /* the 13 ported handlers */ };
 }
-
-// Move the glob helpers (globToRegExp, globBaseDir, walkVfs, globMatch) here
-// as module-private functions, copied verbatim from pre-PR3 shell-imports.ts.
-// Their inputs need to retarget `vfs` parameter from `VfsLike` to the same
-// `VfsLike` exposed by `KernelApi` — types are identical, no changes inside.
 ```
-
-The implementer should checkout the pre-PR3 commit (the commit immediately before PR3's deletion of `shell-imports.ts`) to read the original handler bodies, then copy each handler verbatim into `bash-host-imports.ts` with the four-line substitution pattern.
 
 - [ ] **Step 5: Add `KernelApi` to the kernel's public exports**
 
@@ -1938,7 +2264,7 @@ git rm -r packages/orchestrator/src/shell
 
 - [ ] **Step 3: Move shell-conformance tests that target `/bin/bash`**
 
-If any tests in `shell/__tests__/` exercised `/bin/bash` end-to-end (vs. testing `ShellInstance` directly), move them to `packages/orchestrator/src/__tests__/bash-conformance/`. Update them to use `runCommand` from the appropriate bash-dispatch module instead of calling `shell.run` directly.
+If any tests in `shell/__tests__/` exercised `/bin/bash` end-to-end (vs. testing `ShellInstance` directly), move them to **`packages/sdk-server/__tests__/bash-conformance/`** — a host-side location. Putting them under sdk-server (rather than `orchestrator/src/__tests__/bash-conformance/`) keeps the path stable across PR5's rename and reflects what the tests actually exercise: the bash userland binary via the host-side `bashDispatch.runCommand` wrapper, not kernel internals. Update each test to import `runCommand` from `sdk-server/src/bash-dispatch.ts` and call it directly instead of `shell.run`.
 
 - [ ] **Step 4: Delete `shell-imports.ts` (now empty post-PR3 carve-out)**
 
@@ -1993,6 +2319,60 @@ Deno.test('host_run_command callback spawns fresh resident bash, not PID 1', asy
     assert(r.stdout.includes('nested'));
     assertEquals(pid1CallCount, 1, 'outer __run_command on PID 1');
     assert(freshSpawnCount >= 1, 'inner host_run_command should spawn fresh bash');
+  } finally {
+    await sb.destroy();
+  }
+});
+
+Deno.test('env state persists across sequential runCommand calls on PID 1', async () => {
+  // Pre-refactor, ShellInstance read the `env` portion of __run_command's
+  // response and applied it to subsequent calls. Post-refactor,
+  // bash-dispatch's callRunCommand discards `env`. PID 1 maintains its
+  // own internal `state.env` across __run_command invocations (see
+  // packages/shell-exec/src/main.rs WasmShellState), so env continuity
+  // should still work — this test pins that invariant.
+  const sb = await Sandbox.create({
+    bootArgv: ['/bin/bash'],
+    bootImports: (api) => bashBootImports(api),
+    runCommandHandler: makeRunCommandHandler(),
+  });
+  try {
+    const r1 = await runCommand(sb, 'export FOO=bar; echo set');
+    assertEquals(r1.exit_code, 0);
+    const r2 = await runCommand(sb, 'echo $FOO');
+    assertEquals(r2.exit_code, 0);
+    assertEquals(r2.stdout.trim(), 'bar', 'env exported in r1 should be visible in r2');
+  } finally {
+    await sb.destroy();
+  }
+});
+
+Deno.test('snapshot + restore preserves PID 1 + VFS', async () => {
+  // Spec calls out snapshot/restore but no other PR exercises it.
+  // Verifies the boot model survives a snapshot round-trip.
+  const sb = await Sandbox.create({
+    bootArgv: ['/bin/bash'],
+    bootImports: (api) => bashBootImports(api),
+    runCommandHandler: makeRunCommandHandler(),
+  });
+  try {
+    await runCommand(sb, 'export SNAPSHOT_TEST=hello');
+    const snap = await sb.snapshot();
+    const sb2 = await Sandbox.restore(snap, {
+      bootImports: (api) => bashBootImports(api),
+      runCommandHandler: makeRunCommandHandler(),
+    });
+    try {
+      // /bin/bash should still exist in restored VFS.
+      assert(sb2.vfs.stat('/bin/bash'));
+      // PID 1 should be reachable.
+      assert(sb2.process(1));
+      // Env state may or may not survive depending on snapshot scope —
+      // this test only asserts VFS + PID 1 reachability, the floor of
+      // snapshot correctness.
+    } finally {
+      await sb2.destroy();
+    }
   } finally {
     await sb.destroy();
   }
@@ -2116,7 +2496,7 @@ For each file in the result:
 - Replace `@codepod/sandbox` with `@codepod/kernel` in import statements.
 - Replace any relative path `../orchestrator/` with `../kernel/`.
 
-A safe sed pass (review the diff before committing):
+A safe sed pass (review the diff before committing). The project runs on Darwin (per CLAUDE.md), where BSD sed differs from GNU sed; using `sed -i.bak` works on both but leaves `.bak` files we must delete. On Linux you can use `sed -i ''` instead.
 
 ```bash
 git grep -l '@codepod/sandbox' | xargs sed -i.bak 's|@codepod/sandbox|@codepod/kernel|g'
@@ -2128,9 +2508,15 @@ find . -name "*.bak" -delete
 
 In `scripts/build-sdk-server.sh` and `scripts/build-mcp.sh`, replace any `packages/orchestrator` path references with `packages/kernel`. Also any references to the old npm name.
 
-- [ ] **Step 6: Update `CLAUDE.md`**
+- [ ] **Step 6: Update `CLAUDE.md` exhaustively**
 
-In the Architecture section, change:
+```bash
+grep -n 'orchestrator' CLAUDE.md
+```
+
+Update **every** match — not just the Architecture line. Likely sites: the test command (`deno test … packages/orchestrator/src/**/*.test.ts`), the Architecture section, the WASM Binaries section's test-fixtures path. Change `packages/orchestrator/` to `packages/kernel/` everywhere it appears.
+
+In the Architecture section specifically, change:
 
 ```
 - **`packages/orchestrator/`** — Core sandbox: VFS, shell executor, process manager, networking, sandbox pool
@@ -2141,6 +2527,8 @@ to:
 ```
 - **`packages/kernel/`** — Core sandbox kernel: VFS, process manager, host imports, networking, pool. (Renamed from `packages/orchestrator/` in the kernel/userland separation refactor — see `docs/superpowers/specs/2026-04-27-kernel-userland-separation-design.md`.)
 ```
+
+**Spec/plan documents are NOT renamed.** They preserve the historical `packages/orchestrator/` path references intentionally, since they document the state at write-time. Add a one-line note at the top of the design spec and this plan if not already present clarifying that pre-PR5 paths in those documents refer to today's directory and are not updated post-rename.
 
 - [ ] **Step 7: Build artifacts from scratch**
 
@@ -2333,9 +2721,9 @@ EOF
 
 After PR1–PR6 are merged to `main`:
 
-- [ ] `grep -r "ShellInstance\|orchestrator" packages/` — only matches inside conformance tests / fixtures, no production imports.
-- [ ] `grep -r "shell-imports" packages/` — zero matches.
-- [ ] `grep -r "@codepod/sandbox" packages/` — zero matches; `@codepod/kernel` everywhere instead.
+- [ ] `grep -rn 'import.*ShellInstance\|from.*orchestrator\|from .@codepod/sandbox.' packages/` — zero matches outside docstrings/comments. (Refined to target import statements specifically; broader greps would match comments and any future `packages/orchestrator-foo/` directory.)
+- [ ] `grep -rn 'shell-imports' packages/` — zero matches.
+- [ ] `grep -rn '@codepod/sandbox' packages/` — zero matches; `@codepod/kernel` everywhere instead.
 - [ ] All unit tests pass.
 - [ ] guest-compat pthread canary asserts counter == 40000.
 - [ ] python-sdk round-trip succeeds (`Sandbox()`, `sb.commands.run("ls /")`).
