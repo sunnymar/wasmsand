@@ -90,18 +90,25 @@ The non-blockers we are explicitly *not* trying to solve:
   (`pthread.h`, `sys/pthread.h`, `pthread_impl.h` if the wasi-libc
   internal headers need shadowing).  Same headers serve all backends;
   ABI / struct layout is fixed.
-- **One `wasm32-wasi-threads` build target** for guest binaries.
-  Source code is unchanged; the *binary* differs (atomics + shared
-  memory).  cpcc grows a `--threads` flag that flips the target +
-  links the threads-flavored compat archive.
-- **Real concurrency on wasmtime.**  wasmtime has native wasi-threads;
-  we wire it through unchanged.  This is the headline backend for
-  the Big Boss CPython use case.
-- **Cooperative correctness on browser + deno.**  Threads exist as a
-  scheduling abstraction over the JSPI/Asyncify event loop: each
-  `pthread_create` creates a logical thread that the runtime
-  multiplexes onto the single guest instance.  No real parallelism;
-  the guest cannot tell the difference except via timing.
+- **One guest binary per port.**  No `<name>.wasm` /
+  `<name>-threads.wasm` split.  Every binary cpcc emits links the
+  same `libcodepod_guest_compat.a`, declares its memory `shared`,
+  and resolves its pthread surface via `codepod::host_*` imports.
+  The portability of WebAssembly is preserved end-to-end.
+- **Backend-routed threading semantics.**  The `codepod::host_*`
+  imports are the seam between the uniform frontend and the
+  per-backend implementation.  cooperative-serial backends
+  implement them as inline-invoke + no-op locks; wasi-threads /
+  Worker+SAB backends implement them as native parallelism +
+  futex/Atomics.wait.
+- **Real concurrency on wasi-threads-capable runtimes.**  wasmtime
+  is the headline real-thread backend for the Big Boss CPython use
+  case; Worker+SAB delivers the same on browsers when COOP/COEP
+  is available.
+- **Cooperative correctness on every other runtime.**  Asyncify
+  (Safari) and JSPI-without-SAB (Deno, no-COEP browsers) get the
+  cooperative-serial backend: pthread_create runs inline, mutex /
+  cond are no-ops.  The guest cannot tell except via timing.
 - **`available_parallelism()` honesty.**  Backends report the real
   number of cores available to guest code.  wasmtime: host CPU count.
   Browser/deno cooperative: 1.  Browser with Worker+SAB upgrade
@@ -128,154 +135,148 @@ The non-blockers we are explicitly *not* trying to solve:
 - Browser's SAB upgrade path is *scoped in* but not Step 1; cooperative
   semantics on browser is the immediate deliverable.
 
-## Design Approaches
+## Approach: Single Binary, Backend-Routed Threading
 
-### A. Real-wasi-threads everywhere, refuse where impossible
+The guest sees one `.wasm` regardless of backend — that's the whole
+portability proposition of WebAssembly.  We do not ship per-backend
+flavors of CPython, Rayon-using crates, or BusyBox.  Instead, the
+divergence lives entirely on the host side:
 
-Build `codepod-shell-exec-threads.wasm` once (atomics + shared memory).
-On wasmtime: instantiate as wasi-threads.  On browser/deno: detect SAB
-+ Worker availability, fall back with an *error at instantiation* if
-threads aren't possible.  Guest binary is the same on every backend.
+- The guest binary always imports a shared memory and links the
+  same `libcodepod_guest_compat.a` with pthread Tier 1 symbols.
+  Those symbols thunk through codepod-private host imports
+  (`codepod::host_thread_spawn`, `host_mutex_lock`, `host_cond_wait`,
+  …) — they do not call wasi-threads imports directly.
+- Each backend implements those host imports differently:
+  - **Cooperative-serial** (Asyncify, JSPI) — `host_thread_spawn`
+    runs the start_routine inline; mutex/cond are no-ops; serialized
+    execution.  Always-available baseline.
+  - **wasi-threads** (wasmtime, future component-model runtimes) —
+    `host_thread_spawn` triggers a real wasi-thread that runs the
+    start_routine pointer against the shared memory; mutex/cond
+    use native futex ops.
+  - **Worker+SAB** (browser/Chromium, browser/WebKit when SAB +
+    COOP/COEP are available) — host spawns a Worker, shares
+    `WebAssembly.Memory({shared:true})`, schedules the start_routine
+    on it; mutex/cond use `Atomics.wait`/`Atomics.notify`.
 
-**Pro:** simplest binary story; no per-backend wasm flavors.
-**Con:** Browser-without-COOP/COEP and Deno-without-`--allow-worker`
-are common configurations (and the COOP/COEP requirement is a
-deal-breaker for embedding codepod in arbitrary host pages).  Refusing
-to instantiate breaks the "load codepod and it works" promise.
+Shared memory in the binary is benign on single-threaded backends —
+the runtime hands back a SAB-or-equivalent and only one OS thread
+ever touches it.  Real-thread backends contend on the same memory.
 
-### B. Two binaries, runtime-selected (chosen)
+**Considered and rejected:**
 
-Ship two flavors per guest binary: `<name>.wasm` (single-threaded,
-no shared memory) and `<name>-threads.wasm` (atomics, shared memory,
-wasi-threads imports).  Backend selects:
+- **Two-binary flavors (`<name>.wasm` + `<name>-threads.wasm`).**
+  Breaks portability and forces every port to build twice.
+- **Refuse to load on backends without real threads.**  Browser
+  pages frequently lack COOP/COEP; refusing breaks the "load codepod
+  and it works" contract.
+- **Always-emulate, never use real wasi-threads.**  Defeats the
+  Big Boss CPython parallelism goal and wastes hardware on wasmtime.
 
-- wasmtime: load `-threads` flavor; wire to wasmtime's wasi-threads
-- browser+SAB+COOP-COEP: load `-threads` flavor; spawn one Worker
-  per logical pthread, share `WebAssembly.Memory({shared:true})`
-- browser without SAB: load single-threaded flavor; pthread API is
-  shimmed via cooperative scheduling
-- deno: same default as browser without SAB
+### Optional fast-path (deferred)
 
-**Pro:** single-threaded path is unaffected for users who don't need
-threads; threads path is real where it can be.  No instantiation
-surprise.
-**Con:** two binary artifacts per port; build complexity doubles
-(but: most ports don't need threads, so this scales by need rather
-than by port count).
-
-### C. Always emulate, never use real wasi-threads
-
-Single binary, single guest instance; cooperatively schedule pthreads
-on the JSPI/Asyncify loop everywhere.
-
-**Pro:** trivial; one code path.
-**Con:** defeats the whole point — no parallelism *anywhere*, even
-on wasmtime where it's free.  Big Boss CPython workload would be
-single-threaded forever.  Not viable.
-
-**Decision: B.**  Two-binary, runtime-selected.  C is the cooperative
-fallback path inside B for backends that can't do real threads.
+The pthread frontend could probe a `host_thread_caps()` import once
+at init and short-circuit `mutex_lock/unlock` to inline no-ops when
+the backend reports cooperative-serial.  Saves the Rust→JS→Rust hop
+but removes the host call's natural yield point — net effect on
+cooperative-correctness is non-trivial.  Profile-driven; not in the
+initial cut.
 
 ## Architecture
 
-### Binary flavors
-
-For each guest binary that wants threads:
+### Frontend / Backend separation
 
 ```
-<name>.wasm           single-threaded, standard wasm32-wasip1
-<name>-threads.wasm   wasm32-wasi-threads:
-                        - imports wasi_thread_spawn from "wasi"
-                        - imports memory{shared:true, maximum:N}
-                        - linked against libcodepod_guest_compat_threads.a
-                          (pthread + atomics + TLS lowering)
+guest .wasm  ──── pthread_create  ──── codepod_pthread.c  ─┐
+                  pthread_mutex_lock                       │
+                  ...                                      │
+                                                           ▼
+                                                   codepod::host_thread_spawn
+                                                   codepod::host_mutex_lock
+                                                   codepod::host_cond_wait
+                                                   ...   (the seam)
+                                                           │
+            ┌──────────────────────────┬─────────────────┬─┴──────────────────┐
+            ▼                          ▼                 ▼                    ▼
+      Cooperative-Serial         wasi-threads     Worker+SAB           WASI Preview 2
+      (Asyncify / JSPI)          (wasmtime)       (browser SAB)        (component model)
+       inline-invoke              real OS         Worker per           runtime-defined
+       no-op mutex                threads         pthread + SAB        threading interface
+       serialized                 native futex    Atomics.wait
 ```
 
-Built by `cpcc --threads` (or `cpcc --target wasm32-wasi-threads`).
-The single-threaded flavor is the default; ports opt in to the
-threads flavor in their Makefile (CPython, future Rayon-using crates).
+**Frontend** is what guest code links against — uniform, single binary
+per port:
 
-Tools without a `-threads.wasm` are loaded as today.  Tools with
-both flavors get backend-selected by `Sandbox.registerTools` —
-extends the manifest pass from `2026-04-19-guest-compat-runtime-design.md`
-with a new `threads: { ... }` declaration:
+- `pthread.h` Tier 1 surface (struct layouts, function signatures
+  pinned)
+- `libcodepod_guest_compat.a` ships `codepod_pthread.c` whose bodies
+  thunk through `codepod::host_*` imports
+- Memory is always declared shared in the linked binary (`-pthread`
+  is the default cpcc flag) — single-threaded backends just hand
+  back a non-contended SAB
+- No backend-specific `#ifdef`s in the frontend.  No `-threads`
+  binary flavor.
 
-```json
-{
-  "name": "python3",
-  "threads": {
-    "binary": "python3-threads.wasm",
-    "minThreads": 1,
-    "maxThreads": 64
-  }
-}
+**Backend** is the host implementation of the `codepod::host_*`
+threading imports.  Each codepod runtime ships one or more.  The
+only invariant a backend must uphold:
+
+- `host_thread_spawn(start_fn_ptr, arg)` returns a thread id and
+  schedules `start_routine(arg)` to run *eventually* — same memory,
+  same indirect function table — and yields the caller through the
+  usual host import suspend point
+- `host_thread_join(tid)` resolves once the spawned routine returns,
+  hands back its return value
+- `host_mutex_lock/unlock` enforce mutual exclusion *if* the backend
+  has more than one OS thread; otherwise they are correctness no-ops
+- `host_cond_wait/signal/broadcast` enforce the wait-and-wake
+  contract; on cooperative-serial backends a guest that reaches
+  `cond_wait` with no signaler available is treated as spuriously
+  woken (POSIX permits this)
+
+### Backend matrix
+
+| Backend | Async wrap | Threading | Availability | Yield point |
+|---------|-----------|-----------|--------------|-------------|
+| **Cooperative-Serial / Asyncify** | binaryen `--asyncify` | inline-invoke serialized | Safari/WebKit, any runtime without JSPI | every host import suspends |
+| **Cooperative-Serial / JSPI** | `WebAssembly.Suspending` | inline-invoke serialized | Chromium ≥137, Deno, Node ≥25 | every host import suspends |
+| **wasi-threads** | native | real wasi-threads | wasmtime; future component-model runtimes that ship the `wasi:thread_spawn` interface | OS preemption; host import is also a yield |
+| **Worker+SAB** | JSPI per Worker, scheduler in main | real shared-memory threads via Workers | browser/Chromium and browser/WebKit when `crossOriginIsolated && SharedArrayBuffer && Worker` | OS preemption (Worker on its own thread) |
+| **WASI Preview 2** | component-model imports | depends on the runtime's threading interface | research target (wasmtime-component, jco) | TBD |
+
+### Backend selection at sandbox boot
+
+```ts
+detectThreadsBackend(adapter, runtime):
+  if (runtime === 'wasmtime')                    return WasiThreadsBackend
+  if (crossOriginIsolated && SharedArrayBuffer)  return WorkerSabBackend
+  // fall back to cooperative-serial; the bridge type (asyncify vs JSPI)
+  // is a separate decision, made by detectAsyncBridge()
+  return CooperativeSerialBackend
 ```
 
-### Runtime backend selection
-
-```
-detectThreadsBackend():
-  if (wasmtime native)              return WasmtimeNativeThreads
-  if (SAB available && Worker available)
-                                    return BrowserSharedMemoryThreads
-  return CooperativeThreads
-```
-
-`AsyncBridge` already exposes `sharedMemory: boolean` per mode; the
-threads backend selection happens *upstream* of bridge selection
-because the binary flavor is determined first, then the bridge is
-chosen for the host import calling convention.
-
-### Per-backend implementation table
-
-| Concern                | Wasmtime native | Browser SAB+Worker | Cooperative (browser-no-SAB / deno) |
-|------------------------|-----------------|---------------------|-------------------------------------|
-| Binary flavor          | `-threads`      | `-threads`          | single-threaded                     |
-| Memory                 | shared, growable | `WebAssembly.Memory({shared:true})` shared across Workers | normal (per-instance) |
-| `pthread_create`       | wasmtime spawns thread | host spawns Worker, posts module + memory + start fn ptr | host appends to ready queue |
-| Thread switching       | OS preemption | OS preemption (Worker on its own thread) | guest cooperatively yields at JSPI suspend points |
-| Atomics                | hardware       | hardware (SAB-backed) | trivial (single OS thread) |
-| TLS                    | wasi-libc TLS, per wasi-thread | wasi-libc TLS, per Worker | switched by cooperative scheduler at yield |
-| `pthread_join`         | OS join        | postMessage + Atomics.wait | scheduler resolves promise |
-| Mutex                  | wasi futex     | `Atomics.wait` on SAB | cooperative — release at yield |
-| `available_parallelism`| host CPU count | configurable (default = `navigator.hardwareConcurrency`) | 1 |
-
-### Cooperative-multiplexing model
-
-Cooperative threads run inside the *single* guest WASM instance.
-The runtime maintains a ready queue of logical threads, each with:
-
-- a stack region (allocated in WASM linear memory)
-- saved register state (captured at the last yield point — same
-  Asyncify save-state mechanism used today for setjmp/longjmp)
-- a TLS pointer (cooperative scheduler swaps the TLS base register
-  on context switch)
-
-Yield points: every host import call (because they all go through
-JSPI/Asyncify already), every `pthread_yield`, every `pthread_mutex_lock`
-that contends, every `pthread_cond_wait`.  Tight loops with no host
-calls do *not* yield — this is a known limitation, identical to the
-single-threaded async constraint we already have.
-
-Atomics are trivially correct because no two threads run at the same
-time; the wasm atomics ops are free (single-OS-thread observability).
+The threading backend lives in `packages/orchestrator/src/process/threads/`
+and registers itself into the `codepod::host_*` import namespace
+*alongside* the existing `host_spawn` / `host_waitpid` / etc. imports.
+Same import table, more entries.
 
 ### CPython implications
 
 CPython's `Modules/_threadmodule.c` calls `pthread_create` /
-`pthread_join` / `pthread_mutex_*` / `pthread_cond_*`.  None of these
-need source changes — the cooperative backend just makes them
-slower (and reduces `os.cpu_count()` to 1 so `concurrent.futures`
-sizes itself correctly).  CPython's GIL is a single mutex; cooperative
-threads serialize naturally and the GIL becomes a no-op-ish.
+`pthread_join` / `pthread_mutex_*` / `pthread_cond_*`.  No source
+changes needed.  On cooperative-serial backends the impl serializes
+(matches the single-threaded `wasm32-wasip1` build's behavior) and
+`os.cpu_count()` reports 1; on wasi-threads or Worker+SAB it
+parallelizes and reports the host count.
 
 ### Rayon implications
 
-Rayon calls `std::thread::available_parallelism()` (returns 1 on
-cooperative backends → Rayon uses a 1-thread pool → serial execution,
-correct but un-parallelized) and `std::thread::spawn` (cooperative
-shim runs them serially).  No source changes; `par_iter` works,
-just doesn't parallelize on cooperative backends.
+Rayon calls `std::thread::available_parallelism()` and
+`std::thread::spawn` against the same pthread frontend.  Single
+binary, parallel where the backend allows; correct-but-serial
+elsewhere.  No `par_iter` feature flags or Cargo gymnastics.
 
 ## POSIX Surface
 
@@ -339,85 +340,112 @@ pthread_setaffinity_np, pthread_getaffinity_np
 
 ## Migration Path
 
-Each step has its own acceptance gate.  Steps 1–2 are cooperative-only
-and unblock CPython-on-codepod with serialized threads.  Steps 3–4
-add real parallelism.  Step 5 is browser-SAB which depends on
-COOP/COEP being deployed in the host environment.
+Each step has its own acceptance gate.  Steps 1–2 land the frontend
+and the cooperative-serial backend (always-available baseline).
+Steps 3–5 add the real-thread backends — wasi-threads first because
+it's the simplest to wire (wasmtime exposes it natively), then
+Worker+SAB for browsers, then WASI Preview 2 if/when its threading
+story matures.  Step 6 ports CPython.  Step 7 is the Rayon
+cross-backend acceptance gate.
 
-### Step 1 — pthread headers + cooperative scheduler stub
+### Step 1 — pthread frontend + cooperative-serial backend
 
 - Add `pthread.h`, `threads.h`, `semaphore.h` to
   `packages/guest-compat/include/`
-- Add `codepod_pthread.c` to `packages/guest-compat/src/` providing
-  Tier 1 symbols that route through new host imports:
-  `host_thread_spawn(start_fn_ptr, arg)` →
-    cooperative scheduler appends to ready queue
-  `host_thread_yield()` →
-    scheduler picks next ready thread
-  `host_mutex_*`, `host_cond_*` →
-    scheduler-side primitives
-- Add cooperative scheduler to `packages/orchestrator/src/process/`
-  (call it `cooperative-scheduler.ts`) that maintains the ready queue,
-  context-switches at yield points, owns thread-local storage maps
-- Single-binary build only (no `-threads.wasm` yet)
-- TIER1 in cpcc grows to include the pthread Tier 1 list
+- Add `codepod_pthread.c` to `packages/guest-compat/src/` — every
+  Tier 1 symbol thunks through `codepod::host_*` imports.  No
+  inline shortcuts; the host import path *is* the implementation.
+- Add the threading host-import surface in
+  `packages/orchestrator/src/host-imports/kernel-imports.ts`:
+  `host_thread_spawn`, `host_thread_join`, `host_thread_detach`,
+  `host_thread_self`, `host_thread_yield`, `host_mutex_lock`,
+  `host_mutex_unlock`, `host_mutex_trylock`, `host_cond_wait`,
+  `host_cond_signal`, `host_cond_broadcast`.  Same JSPI/Asyncify
+  wrapping as the rest of the kernel imports.
+- Add `packages/orchestrator/src/process/threads/cooperative-serial.ts`
+  implementing the host imports as inline-invoke + no-op
+  mutex/cond.  Single OS thread; correctness via serialization.
+- TIER1 in cpcc grows to include the pthread Tier 1 list.
 - Acceptance: a C canary in `packages/guest-compat/conformance/c/`
   spawns 4 threads, each increments a shared counter under mutex
-  10000 times, joins all four, asserts counter == 40000 with no
-  races (trivial since they're cooperative).  Same canary as a
-  Rust binary using `std::thread::spawn`.
+  10000 times, joins all four, asserts counter == 40000.  Same
+  canary as a Rust binary using `std::thread::spawn`.  Both pass on
+  the cooperative-serial backend.
 
-### Step 2 — CPython single-threaded build with cooperative threads
+### Step 2 — backend selection plumbing
+
+- Add `ThreadsBackend` interface in
+  `packages/orchestrator/src/process/threads/backend.ts` exposing
+  the host-import surface as a TypeScript contract.
+- `Sandbox.create()` calls `detectThreadsBackend(adapter, runtime)`
+  and wires the result into `createKernelImports({ threadsBackend })`.
+- For now `detectThreadsBackend` always returns
+  `CooperativeSerialBackend`; subsequent steps add the real-thread
+  backends behind feature flags.
+- Acceptance: same Step 1 canary; the threading host imports are
+  resolved via the `ThreadsBackend` indirection rather than directly
+  bound — the Step 1 canary still passes unchanged.
+
+### Step 3 — wasi-threads backend (wasmtime)
+
+- Add `packages/orchestrator/src/process/threads/wasi-threads.ts`
+  (or, for the Rust sandbox-server, the wasmtime-side equivalent
+  in `packages/sdk-server-wasmtime/`).
+- `host_thread_spawn` calls into wasmtime's wasi-threads spawn,
+  passing the start_routine pointer + arg + the shared memory.
+- `host_mutex_lock/unlock` use atomic CAS + futex_wait/wake on the
+  pthread_mutex_t opaque storage.  `host_cond_*` similarly.
+- `detectThreadsBackend` selects `WasiThreadsBackend` when running
+  on wasmtime.
+- The guest binary is unchanged from Step 1 — same .wasm, different
+  host import implementation.
+- Acceptance: the Step 1 pthread canary on wasmtime shows real
+  parallelism (4 threads contending on a mutex at ~4× single-thread
+  throughput).  `pthread_self()` returns distinct ids per thread.
+
+### Step 4 — Worker+SAB backend (browser)
+
+- Add `packages/orchestrator/src/process/threads/worker-sab.ts`.
+- BrowserAdapter checks `crossOriginIsolated && SharedArrayBuffer
+  && Worker` and reports threading capability up to
+  `detectThreadsBackend`.
+- `host_thread_spawn` posts the start_routine pointer + arg to a
+  fresh Worker that holds a shim for the same WASM module
+  instantiated against the shared `WebAssembly.Memory({shared:true})`.
+  Each Worker has its own JSPI/Asyncify bridge for host imports.
+- `host_mutex_*` use `Atomics.wait/notify` on the shared memory.
+- Same .wasm again — only the host imports differ.
+- Acceptance: same canary, browser test with COOP/COEP headers,
+  shows real parallelism on Chromium and WebKit.
+
+### Step 5 — WASI Preview 2 backend (research)
+
+- Survey the threading interfaces shipped by wasmtime-component
+  and jco; design a `ThreadsBackend` over them if a viable surface
+  exists.
+- Optional/research-driven; cooperative-serial remains the fallback
+  if WASI P2's threading story isn't ready by the time we need it.
+- Acceptance: the same canary passes on a WASI P2 runtime, OR the
+  decision to defer is documented with rationale.
+
+### Step 6 — CPython port
 
 - Add `packages/c-ports/cpython/` with submodule pinned to upstream
-  CPython 3.13 (or current) `wasm32-wasi-threads` config
-- Build via cpcc using the cooperative threads binary
-- Acceptance: `python3 -c "import threading; t = threading.Thread(target=lambda: print('hi')); t.start(); t.join()"`
-  prints `hi` and exits 0.  `python3 -c "import os; print(os.cpu_count())"`
-  prints 1.
+  CPython 3.13 (or current).  Build via cpcc; the binary works on
+  every codepod backend.
+- Acceptance: `python3 -c "import threading; t =
+  threading.Thread(target=lambda: print('hi')); t.start(); t.join()"`
+  prints `hi` and exits 0 on every backend.
+  `python3 -c "import os; print(os.cpu_count())"` prints 1 on
+  cooperative-serial, host-cpu-count on wasi-threads/Worker+SAB.
 
-### Step 3 — wasi-threads binary flavor + cpcc --threads
-
-- cpcc grows `--threads` flag → `--target=wasm32-wasi-threads`,
-  links `libcodepod_guest_compat_threads.a`
-- Build `libcodepod_guest_compat_threads.a` separately: same source
-  as single-threaded archive but compiled with `-pthread -matomics`
-  and the host-import bodies replaced with wasi-threads native ops
-- Manifest schema gets `threads: { binary, minThreads, maxThreads }`
-- Acceptance: a `-threads.wasm` of the Step 1 pthread canary builds
-  cleanly; cpcheck (structural) confirms it imports `wasi_thread_spawn`.
-
-### Step 4 — wasmtime native wasi-threads runtime
-
-- `Sandbox.registerTools` selects `<name>-threads.wasm` over
-  `<name>.wasm` when running on wasmtime AND the manifest declares
-  threads support
-- wasmtime sandbox-server backend wires wasi-threads through
-  `wasmtime::component::Linker::add_to_linker` (or wasmtime-wasi
-  equivalent)
-- Acceptance: the Step 1 pthread canary, run as `-threads.wasm` on
-  wasmtime, shows real parallelism (4 threads contending on a mutex
-  at 4× the rate a single thread could).  `os.cpu_count()` in
-  CPython-on-wasmtime returns the host count.
-
-### Step 5 — browser SAB+Worker backend (optional, gated on demand)
-
-- BrowserAdapter detects `crossOriginIsolated` + `SharedArrayBuffer` +
-  `Worker` availability
-- New `worker-pool.ts` spawns one Worker per pthread, shares the
-  `WebAssembly.Memory({shared:true})` across them
-- Asyncify or JSPI bridge per Worker for host import suspension
-- Acceptance: same Step 4 canary, run in a browser test with
-  COOP/COEP headers, shows real parallelism.
-
-### Step 6 — Rayon canary as Rust port
+### Step 7 — Rayon canary as Rust port
 
 - Add `packages/rust-ports/rayon-canary/` that uses Rayon's
-  `par_iter().map().sum()` over a 1M-element vec, asserts result
-- Verifies the Rust toolchain frontend picks up the threads flavor
-  cleanly
+  `par_iter().map().sum()` over a 1M-element vec, asserts result.
+- Single binary; behavior varies by backend.
 - Acceptance: builds + passes on every backend (serialized on
-  cooperative, parallelized on wasmtime/browser-SAB)
+  cooperative-serial, parallelized on wasi-threads / Worker+SAB).
 
 ## Risks
 
@@ -443,9 +471,9 @@ COOP/COEP being deployed in the host environment.
   versions.  Mitigation: pin wasmtime version, add a regression
   canary that fails CI if a version bump breaks the binding.
 - **Browser SAB delivery is conditional.**  COOP/COEP requirements
-  mean Step 5 only works in host pages that opt in.  Mitigation:
-  Step 5 is explicitly gated on demand; cooperative is the default
-  browser story until a real consumer needs SAB.
+  mean the Worker+SAB backend (Step 4) only works in host pages
+  that opt in.  Mitigation: cooperative-serial is the always-
+  available browser fallback; the same .wasm runs on either path.
 - **Rayon thread-pool sizing.**  Rayon caches `available_parallelism`
   at first call; if our cooperative backend reports 1, Rayon's pool
   is forever 1 even if the binary is later moved to a parallel
@@ -465,9 +493,10 @@ The spec is implemented when:
    wall-clock (proof of real parallelism).
 4. Cooperative backends never deadlock under the canary, even with
    intentionally pessimal scheduling (e.g. priority inversion patterns).
-5. cpcheck (structural mode) confirms the threads-flavored compat
-   archive exports all Tier 1 pthread symbols and the `-threads.wasm`
-   imports `wasi_thread_spawn`.
+5. cpcheck (structural mode) confirms `libcodepod_guest_compat.a`
+   exports all Tier 1 pthread symbols.  The guest binary imports
+   `codepod::host_thread_spawn` etc. — *not* `wasi_thread_spawn` —
+   confirming the backend-routing shape.
 
 ## Relationship To Existing Specs
 
