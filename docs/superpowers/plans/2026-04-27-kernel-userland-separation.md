@@ -254,6 +254,8 @@ EOF
 
 **Goal:** Factor the generic process loading logic out of `shell-instance.ts` into reusable `process/handle.ts` + `process/loader.ts`. Existing `ShellInstance` continues to work as a thin wrapper. New API: `Sandbox.create({ bootArgv, … })` and `sandbox.process(pid)`.
 
+**Architectural shift this PR makes:** ownership of the per-sandbox `ProcessKernel` (currently created inside `ShellInstance.create` at `shell-instance.ts:138`) moves to `Sandbox`. Multiple processes — PID 1 (bash) plus any children spawned via `Sandbox.spawn` — share one `ProcessKernel` per sandbox so their fd-buffer registries are coherent. Each process still gets its own `WasiHost` (constructed inside `loadProcess` per the existing `ProcessManager.spawn` pattern at `manager.ts:185`).
+
 **Files:**
 - Create: `packages/orchestrator/src/process/handle.ts` (the generic `Process` class)
 - Create: `packages/orchestrator/src/process/loader.ts` (instantiate, wire imports, run init, support resident mode)
@@ -273,7 +275,7 @@ Create `packages/orchestrator/src/process/__tests__/handle.test.ts`:
 
 ```ts
 import { assertEquals, assert, assertRejects } from 'jsr:@std/assert';
-import { Process, type ProcessMode } from '../process.ts';
+import { Process, type ProcessMode } from '../handle.ts';
 
 Deno.test('Process exposes pid, mode, and exitCode', () => {
   // We only need a stub instance to test the shape of the class.
@@ -587,11 +589,13 @@ Create `packages/orchestrator/src/process/loader.ts`:
  * for PR2 and move out in PR4.
  */
 
-import { Process, type ProcessMode } from './process.ts';
+import { Process, type ProcessMode } from './handle.ts';
 import type { PlatformAdapter } from '../platform/adapter.ts';
 import type { VfsLike } from '../vfs/vfs-like.ts';
 import type { ProcessManager } from './manager.ts';
-import type { WasiHost } from '../wasi/wasi-host.ts';
+import type { ProcessKernel } from './kernel.ts';
+import { WasiHost } from '../wasi/wasi-host.ts';
+import { createNullTarget, createBufferTarget, bufferToString } from '../wasi/fd-target.ts';
 
 /**
  * Narrow context passed in by the Sandbox. The loader does not import
@@ -604,7 +608,14 @@ export interface LoaderContext {
   vfs: VfsLike;
   adapter: PlatformAdapter;
   processManager: ProcessManager;
-  wasi: WasiHost;
+  /** Sandbox-owned ProcessKernel — fd-buffer registry shared across all
+   *  processes in this sandbox. Loader uses it to initialize fd 0/1/2
+   *  buffers for each new process and reads them for fdReadAndClear. */
+  kernel: ProcessKernel;
+  /** Build a fresh WasiHost for this pid. Each process gets its own;
+   *  see today's pattern in ProcessManager.spawn (manager.ts:185) and
+   *  ShellInstance.create (shell-instance.ts:163). */
+  buildWasiHost(pid: number): WasiHost;
   /** Build the kernel's standard codepod::host_* imports for this pid. */
   buildKernelImports(pid: number): Record<string, WebAssembly.ImportValue>;
   /** Bind the freshly-instantiated process's memory so import handlers
@@ -652,10 +663,23 @@ export async function loadProcess(
     argv, env: opts.env ?? {}, cwd: opts.cwd ?? '/',
   });
 
+  // Initialize fd 0/1/2 in the sandbox's ProcessKernel so the new
+  // process has stdin/stdout/stderr targets. Stdin is null by default
+  // (callers can override via opts in a later iteration); stdout/stderr
+  // are buffer targets that bash-dispatch reads from after each
+  // __run_command via Process.fdReadAndClear.
+  ctx.kernel.initProcess(pid);
+  ctx.kernel.setFdTarget(pid, 0, createNullTarget());
+  ctx.kernel.setFdTarget(pid, 1, createBufferTarget());
+  ctx.kernel.setFdTarget(pid, 2, createBufferTarget());
+
   const proc = Process.__forLoader({ pid, mode });
 
   // Build imports: WASI + standard kernel codepod imports + caller extras.
-  const wasiImports = ctx.wasi.buildImports(pid);
+  // Each process gets its own WasiHost (matching today's per-process
+  // construction pattern in ProcessManager.spawn).
+  const wasi = ctx.buildWasiHost(pid);
+  const wasiImports = wasi.getImports().wasi_snapshot_preview1;
   const kernelImports = ctx.buildKernelImports(pid);
   const codepodImports: Record<string, WebAssembly.ImportValue> = {
     ...kernelImports,
@@ -734,15 +758,27 @@ private readonly adapter: PlatformAdapter;
 private readonly processManager: ProcessManager;
 private readonly wasi: WasiHost;
 
+// Sandbox now owns one ProcessKernel for the whole sandbox lifetime
+// (initialized in the Sandbox constructor: `this.kernel = new ProcessKernel()`).
+// Initial fd-target setup for PID 1 happens in `bootPid1` before
+// `loadProcess` runs; spawned children get their fd targets initialized
+// inside loadProcess itself.
+
 private loaderContext(): LoaderContext {
   return {
     vfs: this.vfs,
     adapter: this.adapter,
     processManager: this.processManager,
-    wasi: this.wasi,
+    kernel: this.kernel,
+    buildWasiHost: (pid) => new WasiHost({
+      vfs: this.vfs,
+      kernel: this.kernel,
+      pid,
+    }),
     buildKernelImports: (pid) => createKernelImports({
       vfs: this.vfs,
       processManager: this.processManager,
+      kernel: this.kernel,
       pid,
       networkBridge: this.networkBridge,
       extensionRegistry: this.extensionRegistry,
@@ -752,12 +788,13 @@ private loaderContext(): LoaderContext {
     bindMemoryForProcess: (pid, memory) =>
       this.processManager.setMemoryRef(pid, memory),
     makeFdReadAndClear: (pid) => (fd) => {
-      // Kernel buffer for stdout/stderr lives in ProcessManager.kernel.
-      // The exact accessor name is `getFdTarget(pid, fd)` (verified at
-      // packages/orchestrator/src/process/manager.ts) — drains the
-      // accumulated UTF-8 buffer and resets length/truncated.
-      const target = this.processManager.kernel?.getFdTarget(pid, fd);
-      if (target?.type !== 'buffer') return { data: '', truncated: false };
+      // Stdout/stderr buffers live in the sandbox's ProcessKernel (the
+      // existing class at packages/orchestrator/src/process/kernel.ts).
+      // ShellInstance currently creates one of these per shell instance;
+      // PR2 hoists ownership to Sandbox so multiple processes (PID 1
+      // plus spawned children) share the same fd-buffer registry.
+      const target = this.kernel.getFdTarget(pid, fd);
+      if (!target || target.type !== 'buffer') return { data: '', truncated: false };
       const data = bufferToString(target);
       const truncated = !!target.truncated;
       target.buf.length = 0;
@@ -1076,13 +1113,20 @@ export interface SandboxSpawnOptions {
   mode: ProcessMode;
   env?: Record<string, string>;
   cwd?: string;
+  /** Optional userland imports for the spawned process (same shape as
+   *  Sandbox.create's bootImports). Required when spawning a fresh bash
+   *  for host_run_command — the spawned bash needs host_stat /
+   *  host_register_tool / etc. Empty by default; non-bash userland
+   *  binaries (CPython, busybox) typically don't need any. */
+  bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
 }
 
 class Sandbox {
   // ... existing fields ...
 
   async spawn(argv: string[], opts: SandboxSpawnOptions): Promise<Process> {
-    return loadProcess(this.loaderContext({}), {
+    const userland = opts.bootImports?.(this.buildKernelApi()) ?? {};
+    return loadProcess(this.loaderContext(userland), {
       argv,
       mode: opts.mode,
       env: opts.env,
@@ -1092,7 +1136,7 @@ class Sandbox {
 }
 ```
 
-The `loaderContext({})` argument is the empty userland-imports bag — sandbox-spawned processes don't get bash's userland-legacy imports unless the caller explicitly arranges for them. (PR4's `makeRunCommandHandler` is the canonical caller; it spawns a fresh `/bin/bash` that needs the bash-host imports — but that wiring lives in PR4 once `bootImports` is in place. For PR2's purposes, child processes get only kernel imports.)
+`loaderContext(userland)` accepts the userland-imports bag and merges it into the codepod imports for the spawned process (alongside the kernel primitives). When `opts.bootImports` is omitted, the bag is empty and the spawned process gets only kernel imports — fine for non-bash userland (CPython, busybox) but **not** for fresh bash. PR4's `makeRunCommandHandler` is the canonical caller that needs to pass `bootImports: bashBootImports` so the spawned bash receives `host_stat`, `host_register_tool`, etc.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1757,12 +1801,21 @@ import { assertEquals, assert, assertRejects } from 'jsr:@std/assert';
 import { Sandbox } from '../sandbox.ts';
 import type { Process } from '../process/handle.ts';
 
+const WASM_DIR = Deno.env.get('CODEPOD_TEST_WASM_DIR') ?? './dist';
+
 /**
  * Inline JSON marshaling helper. The bash-dispatch module (Task 4.2)
  * encapsulates this as `callRunCommand(proc, cmd)`; this test predates
  * that module and inlines the marshaling so it has zero cross-task
- * dependency. The shape mirrors what main.rs:39-90 expects:
- *   __run_command(cmd_ptr, cmd_len, out_ptr, out_cap) -> bytes_written
+ * dependency.
+ *
+ * Wire protocol (matches Task 4.2's `callRunCommand` exactly — see
+ * §Kernel Surface in the spec for the protocol details):
+ *   1. Allocate input + output buffers via __alloc, copy JSON bytes in.
+ *   2. Call __run_command(req_ptr, req_len, out_ptr, out_cap).
+ *   3. Parse response JSON: { result: { exit_code, execution_time_ms }, env }.
+ *      stdout/stderr are NOT in this JSON.
+ *   4. Drain bash's fd 1 / fd 2 buffers via proc.fdReadAndClear().
  */
 async function callRunCommandInline(proc: Process, cmd: string): Promise<{ exit_code: number; stdout: string; stderr: string }> {
   const memory = proc.memory;
@@ -1779,14 +1832,25 @@ async function callRunCommandInline(proc: Process, cmd: string): Promise<{ exit_
     written = await proc.callExport('__run_command', reqPtr, reqBytes.length, outPtr, outCap);
   }
   const decoded = new TextDecoder().decode(new Uint8Array(memory.buffer, outPtr, written));
-  const parsed = JSON.parse(decoded) as { result: { exit_code: number; stdout: string; stderr: string } };
-  return parsed.result;
+  const parsed = JSON.parse(decoded) as {
+    result: { exit_code: number; execution_time_ms: number };
+    env: Record<string, string>;
+  };
+  // Drain stdout/stderr from kernel fd buffers.
+  const stdoutChunk = proc.fdReadAndClear(1);
+  const stderrChunk = proc.fdReadAndClear(2);
+  return {
+    exit_code: parsed.result.exit_code,
+    stdout: stdoutChunk.data,
+    stderr: stderrChunk.data,
+  };
 }
 
 Deno.test('runCommandHandler is invoked when a guest calls host_run_command', async () => {
   let handlerCalled = 0;
   let lastCmd = '';
   const sb = await Sandbox.create({
+    wasmDir: WASM_DIR,
     runCommandHandler: async (req, _ctx) => {
       handlerCalled++;
       lastCmd = req.cmd;
@@ -2019,8 +2083,9 @@ Create `packages/sdk-server/src/bash-dispatch.ts`:
  */
 
 import type {
-  Sandbox, RunCommandHandler, RunRequest, RunResponse,
+  Sandbox, RunCommandHandler, RunRequest, RunResponse, Process,
 } from '@codepod/sandbox';
+import { bashBootImports } from './bash-host-imports.ts';
 
 export interface RunOpts {
   stdin?: string;
@@ -2125,6 +2190,11 @@ export function makeRunCommandHandler(
       mode: 'resident',
       env: req.env,
       cwd: req.cwd,
+      // Fresh bash needs the shell-legacy userland imports (host_stat,
+      // host_register_tool, host_glob, …) — without them, bash's
+      // compiled-in expectations break. bashBootImports is the same
+      // factory the user-facing PID 1 boot uses.
+      bootImports: bashBootImports,
     });
     try {
       // Reuse the same JSON-marshaling helper that runCommand uses.
