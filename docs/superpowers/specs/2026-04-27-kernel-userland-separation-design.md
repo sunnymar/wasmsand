@@ -668,7 +668,14 @@ Explicitly *not* in this refactor:
   - Removal of `packages/python/` and `python3.wasm` from the build.
   - RustPython replacement by CPython.
 
-  These are entangled (build, runtime, tests) and must clear together.
+  These are entangled (build, runtime, tests) and would normally clear
+  together. **Escape hatch:** if any individual PR in this refactor
+  turns out to be blocked by Python coupling we didn't anticipate
+  (e.g. `sandbox.ts` rewire can't proceed without untangling the
+  Python shim install, or `execution/` worker bridge can't be
+  generalized while RustPython hooks into it), we drop RustPython
+  inline rather than working around it. Deferral is for
+  functionality-preservation, not for Python being load-bearing.
 
 - **Hostbridge implementation.** The `host_extension_invoke` /
   `host_native_invoke` primitives stay unchanged. The `/bin/hostbridge`
