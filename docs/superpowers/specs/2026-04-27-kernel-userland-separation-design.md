@@ -131,12 +131,19 @@ follow-on efforts:
 The boundary principle is *aspirational* for legacy code and
 *enforceable* for any code added by this refactor.
 
+**Anti-weaponization.** Touching deferred Python-coupled code during
+this refactor (e.g., editing `sandbox.ts` and noticing the Python
+shim install nearby) does *not* obligate the editor to clean it up.
+Cleanup of deferred items is bundled into the CPython port. Reviewers
+should not block PRs in this refactor on grounds that they "should
+have also fixed" deferred Python debt.
+
 ## Source-Tree Changes
 
 ### Rename
 
 - `packages/orchestrator/` → `packages/kernel/`.
-- npm package `@codepod/orchestrator` → `@codepod/kernel`.
+- npm package `@codepod/sandbox` → `@codepod/kernel`.
 - Internal layout under `packages/kernel/src/` keeps existing dirs
   (`vfs/`, `process/`, `wasi/`, `host-imports/`, `network/`,
   `persistence/`, `pool/`, `platform/`, `packages/`, `pkg/`,
@@ -173,19 +180,41 @@ split:
   `shell-instance.ts` (history, pending-output buffers) moves with it.
 
 `packages/orchestrator/src/host-imports/shell-imports.ts` (403 lines)
-is audited and split:
+is audited and split. The current shell binary depends on a wider
+import surface than `kernel-imports.ts` declares. Every entry in
+`shell-imports.ts` falls into one of three buckets:
 
-- **Generic helpers** (anything that is mechanically shell-named but
-  semantically primitive — file-descriptor I/O, process spawn,
-  argv/env decoding, shared memory access) folds into
-  `kernel-imports.ts`. The two import-builder functions converge into
-  one, with the differences expressed as configuration options
+- **Generic primitive** — same as `kernel-imports.ts` modulo a sync
+  vs async difference or argv-encoding tweak. Examples: `host_pipe`,
+  `host_spawn`, `host_read_fd`, `host_write_fd`. **Action:** fold
+  into `kernel-imports.ts`. The two import-builder functions
+  converge into one; differences become configuration options
   (e.g., a `syncSpawn` callback for synchronous testing).
-- **Truly shell-specific helpers** (e.g., the glob-expansion path: the
-  shell's host-side glob matching against the VFS) move out to the
-  bash-host package alongside `bash-dispatch.ts`, or — if the shell
-  binary doesn't actually need them once it goes through generic
-  imports — get deleted.
+
+- **Shell-legacy convenience import** — file-system convenience
+  helpers and shell-only fixtures that were added when the shell
+  needed quick access. By the naming test these violate the boundary,
+  even where they happen to be useful primitives.
+  Concrete enumeration: `host_stat`, `host_read_file`,
+  `host_write_file`, `host_readdir`, `host_mkdir`, `host_remove`,
+  `host_chmod`, `host_glob`, `host_rename`, `host_readlink`,
+  `host_register_tool`, `host_has_tool`, `host_time`. **Action:**
+  move out wholesale to `bash-host` alongside `bash-dispatch.ts`.
+  These are linked into the shell binary's import object only when
+  it boots; the kernel exposes none of them.
+
+  Long-term: the shell should be rebuilt to use WASI Preview 1
+  (`fd_read`, `path_open`, `path_filestat_get`, …) and `host_spawn`
+  for these. That migration is a follow-up port effort, not part of
+  this refactor.
+
+- **Truly shell-specific helper** — the host-side glob expansion
+  path that walks VFS for the shell. Kept with the shell-legacy
+  bucket above; moves to `bash-host`.
+
+After this PR, `shell-imports.ts` either no longer exists (every
+helper folded or moved) or contains only the shell-legacy bucket
+awaiting its move to `bash-host` in PR4.
 
 Intra-orchestrator consumers of `ShellInstance` are rewired in PR4
 (see Migration Plan):
@@ -285,10 +314,23 @@ The full list after the refactor.
 **Deferred to the CPython-port effort (NOT removed by this refactor):**
 
 - `host_run_command` — RustPython's `codepod-host` crate still consumes
-  it directly, `ShellInstance` wires it into JSPI/Asyncify, and
-  `build-coreutils.sh` marks it as an asyncify import. Removal lands
-  with the broader Python cleanup. The replacement story is
-  unchanged: future guests use `host_spawn`.
+  it directly, and `build-coreutils.sh` marks it as an asyncify import.
+  The import name stays. **What changes in PR4:** today its handler
+  in `kernel-imports.ts` is wrapped by `ShellInstance` (which adds
+  JSPI/Asyncify and dispatches to the running shell wasm via
+  `__run_command`). Since PR4 deletes `ShellInstance`, the handler
+  is rewired to call a **host-registered callback** — a small
+  TypeScript hook the host server passes to `Sandbox.create` (the
+  same registration mechanism `kernel.registerExtension` will use
+  for hostbridge). `mcp-server` and `sdk-server` both register a
+  bash-aware callback that invokes
+  `sandbox.process(1).callExport("__run_command", ...)`. Result:
+  the kernel's `host_run_command` HANDLER becomes generic (delegate
+  to a registered callback); userland-shaped knowledge of "the boot
+  process speaks `__run_command`" lives only in the host server's
+  registered callback. RustPython works unchanged. Future guests
+  use `host_spawn` directly; the `host_run_command` import goes
+  away with RustPython.
 
 Plus the standard WASI Preview 1 surface (`fd_read`, `fd_write`,
 `path_open`, …) handled by the kernel's WASI host.
@@ -325,15 +367,29 @@ The TS surface that `mcp-server`, `sdk-server`, and other hosts use.
 **Extensions:**
 
 - `kernel.registerExtension(name, fn)` — installs a TS function
-  reachable via `host_extension_invoke`. No current consumer; future
-  hostbridge userland will use this.
+  reachable via `host_extension_invoke`. RustPython is the current
+  consumer of `host_extension_invoke` (and `host_native_invoke`)
+  via the auto-create-virtual-command machinery, which itself stays
+  in place as Python-coupled debt; the public
+  `kernel.registerExtension` host API is new in this refactor and
+  has no current consumer at the time of writing — future hostbridge
+  userland will be its first.
 
 **Removed from host API:**
 
-- `sandbox.shell` and `sandbox.commands.run` (and any other
-  shell-shaped surface). Consumers (sdk-server, mcp-server) build their
-  own command-running wrappers using
-  `sandbox.process(1).callExport("__run_command", ...)`.
+- `Sandbox.run(command, callbacks?)` (currently
+  `packages/orchestrator/src/sandbox.ts:537`).
+- `Sandbox.getHistory()` (sandbox.ts:719) and `Sandbox.clearHistory()`
+  (sandbox.ts:725).
+- Any other shell-shaped surface on `Sandbox`.
+
+Consumers (sdk-server at `packages/sdk-server/src/dispatcher.ts:218`,
+mcp-server at `packages/mcp-server/src/index.ts:282`, plus internal
+callers) replace `sandbox.run(cmd)` with their host-side
+`bashDispatch.runCommand(sandbox, cmd)` wrapper, which calls
+`sandbox.process(1).callExport("__run_command", ...)`. Shell history
+becomes the host server's responsibility (or is dropped — neither
+mcp-server nor sdk-server appears to surface it externally).
 
 ## Boot Process Model
 
@@ -358,13 +414,31 @@ it. **This refactor preserves resident mode as a generic kernel
 capability, decoupled from "shell".**
 
 `Process` exposes a `mode: "cli" | "resident"` flag. Resident-mode
-processes treat `proc_exit(0)` during boot as "initialization
-complete"; subsequent `proc_exit` from within an exported call
-terminates only the call, not the process; explicit
-`Process.terminate()` ends a resident process.
+semantics:
+
+- `proc_exit(0)` during `_start` (boot) → caught, treated as
+  "initialization complete"; the wasm instance is retained.
+- `proc_exit(N)` for N != 0 during `_start` → boot failed; instance
+  dropped; `Sandbox.create` rejects with `E_BOOT_FAILED`.
+- `proc_exit(N)` from within an exported call (e.g., the shell's
+  `exit 1` builtin propagating up to wasm) → today's
+  `ShellInstance` does not catch this at the export boundary; it
+  throws and propagates as a trap. **This refactor preserves that
+  behavior.** A resident-mode `proc_exit` mid-call is therefore
+  fatal: the call rejects with `E_PROCESS_TRAP` and (if the process
+  is PID 1) the sandbox transitions to "exited". Userland (the
+  shell binary itself) is responsible for *not* calling `proc_exit`
+  during a `__run_command` invocation if it wants to stay alive —
+  exit codes for the *requested command* travel through the
+  request/response payload, not through `proc_exit`.
+- Explicit `Process.terminate()` from the host ends a resident
+  process.
 
 The boot process (PID 1) defaults to resident mode. Other userland
-binaries default to CLI mode. The mode is configured per-spawn.
+binaries default to CLI mode. The mode is configured per-spawn:
+`host_spawn` accepts an optional `mode` field for guests that want
+to launch a long-running export-driven child (rare; not currently
+exercised by any in-tree binary).
 
 ### Boot at Sandbox Creation
 
@@ -477,9 +551,11 @@ logic. Replacing the parent's boot binary still requires zero kernel
 changes.
 
 `Sandbox.snapshot/restore` capture and replay sandbox state including
-`bootArgv`. The restored sandbox respawns PID 1 from the saved
-`bootArgv` (or, for snapshots that capture wasm memory, restores the
-captured PID 1 instance directly — existing behavior).
+`bootArgv` *and* the VFS contents (so `/bin/bash` is in the
+snapshotted VFS — no need to re-resolve `bootArgv[0]` against the
+host server at restore time). For snapshots that capture wasm memory,
+the captured PID 1 instance is restored directly, skipping the
+re-instantiate-and-await-init path entirely (existing behavior).
 
 ### Public API Change
 
@@ -487,7 +563,7 @@ Today's callers pass shell options; the orchestrator implicitly knows
 bash is the default and wires shell-instance. After this refactor,
 callers pass `bootArgv`. `mcp-server` / `sdk-server` set their default
 to `["/bin/bash"]`. This is a public API change for any external
-consumer of `@codepod/orchestrator`, but our two callers are in-tree,
+consumer of `@codepod/sandbox`, but our two callers are in-tree,
 so it's a sweep.
 
 ## Migration Plan
@@ -498,11 +574,14 @@ effort).
 
 ### PR1 — Install shell wasm into VFS as `/bin/bash`
 
-- At sandbox creation, the kernel writes the shell wasm bytes (passed
-  by the host server, as today) to `/bin/bash` in the sandbox VFS,
-  marked executable.
-- Existing `shellExecWasmPath` parameter to `ShellInstance.create`
-  still accepted (read source unchanged).
+- The host server signature is unchanged: `ShellInstance.create(...,
+  shellExecWasmPath, ...)` continues to accept a host filesystem
+  path. The kernel internally reads bytes from that path and writes
+  them to `/bin/bash` in the sandbox VFS, marked executable, before
+  spawning the shell.
+- Existing in-memory wasm-bytes paths (e.g., the embedded-asset
+  variants) get the same treatment: kernel writes the bytes into
+  VFS first, then spawns from VFS.
 - Add a unit test asserting that immediately after `Sandbox.create`,
   the sandbox VFS has a readable, executable `/bin/bash`.
 
@@ -529,7 +608,10 @@ sdk-server smoke tests, `python-sdk` end-to-end.
     `proc_exit`.
 - Add `Sandbox.create({ bootArgv, … })`. **For this PR**,
   orchestrator still defaults `bootArgv` to `["/bin/bash"]` if not
-  provided, to keep existing callers working without change.
+  provided, to keep existing callers working without change. This
+  default is **transitional** — it preserves the existing implicit
+  behavior, not a new convention. The default goes away in PR4 when
+  host servers take over.
 - Reduce `shell-instance.ts` to a thin wrapper around the new Process
   API. Still does `__run_command` dispatch but spawn / imports /
   JSPI / resident-mode are now via the generic loader. The thin
@@ -559,8 +641,13 @@ tests, Python-SDK round-trip.
   helper folded into kernel-imports) or contains only the
   shell-specific helpers awaiting their move in PR4.
 
-**Risk:** medium. Subtle import-shape mismatches can cause hard-to-
-diagnose runtime failures.
+**Risk:** medium-high. Folding two import builders into one with
+config flags risks silent behavioral divergence — sync vs async
+paths, different argv encoding, sign-extension on ptr/len pairs.
+Mitigation: every PR3 change is gated on a side-by-side import-name
++ signature parity assertion (a unit test that instantiates the
+post-PR3 imports against a recorded pre-PR3 baseline of names and
+arities).
 
 **Verification:** unit tests, guest-compat tests, mcp-server +
 sdk-server smoke tests, Python-SDK round-trip. Targeted test that
@@ -582,13 +669,31 @@ require.
   - `packages/orchestrator/src/index.ts` (1 re-export — drop or
     re-export the new generic API).
   - `packages/orchestrator/src/execution/execution-worker.ts` and
-    `worker-executor.ts` — rewrite the worker bridge to use the
-    generic Process API; bash-protocol awareness, if needed, goes
-    through a dependency on the host-side bash-dispatch (or the
-    worker bridge becomes pure-process and no longer knows about
-    bash).
-- Move shell-specific bits identified in PR3 (glob helpers, etc.)
-  out of `host-imports/` to the bash-host module(s).
+    `worker-executor.ts` — rewrite the worker bridge to use **only
+    the generic Process API**. Worker bridge becomes pure
+    process-execution: spawn process, wire fds, callExport on the
+    boot process, return result. **No dependency on bash-dispatch
+    from inside the kernel package** — that would invert the
+    layering (kernel → host server). If the worker bridge needs to
+    invoke `__run_command` on PID 1, the calling host server passes
+    the command through; the worker just routes it via the generic
+    Process API.
+- Move shell-legacy imports identified in PR3 (`host_stat`,
+  `host_read_file`, `host_register_tool`, etc. — the full list in
+  §Source-Tree Changes / Carve Out) out of kernel `host-imports/`
+  to the bash-host module(s). They get assembled into the boot
+  process's import object only when bash boots.
+- Rewire `host_run_command`'s kernel-imports.ts handler to delegate
+  to a host-registered callback (passed via `Sandbox.create` opts
+  alongside `bootArgv`). Both `mcp-server` and `sdk-server` register
+  a bash-aware callback that calls
+  `sandbox.process(1).callExport("__run_command", ...)`. RustPython
+  consumers continue to work with no changes.
+- Delete `Sandbox.run`, `Sandbox.getHistory`, `Sandbox.clearHistory`
+  from the public host API. Consumers (mcp-server's `run_command`
+  tool at `index.ts:282`, sdk-server's dispatcher at `dispatcher.ts:218`,
+  any internal callers) switch to the host-side
+  `bashDispatch.runCommand(sandbox, cmd)` wrapper.
 - Move the `bootArgv` default out of orchestrator and into each host
   server. Kernel's `Sandbox.create` now **requires** `bootArgv`.
 - Delete `packages/orchestrator/src/shell/shell-instance.ts` and the
