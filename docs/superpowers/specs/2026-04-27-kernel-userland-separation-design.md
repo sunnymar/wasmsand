@@ -316,24 +316,56 @@ deferred Python-coupled debt, but the imports themselves stay):
 
 **Deferred to the CPython-port effort (NOT removed by this refactor):**
 
-- `host_run_command` — RustPython's `codepod-host` crate still consumes
-  it directly, and `build-coreutils.sh` marks it as an asyncify import.
-  The import name stays. **What changes in PR4:** today its handler
-  in `kernel-imports.ts` is wrapped by `ShellInstance` (which adds
-  JSPI/Asyncify and dispatches to the running shell wasm via
-  `__run_command`). Since PR4 deletes `ShellInstance`, the handler
-  is rewired to call a **host-registered callback** — a small
-  TypeScript hook the host server passes to `Sandbox.create` (the
-  same registration mechanism `kernel.registerExtension` will use
-  for hostbridge). `mcp-server` and `sdk-server` both register a
-  bash-aware callback that invokes
-  `sandbox.process(1).callExport("__run_command", ...)`. Result:
-  the kernel's `host_run_command` HANDLER becomes generic (delegate
-  to a registered callback); userland-shaped knowledge of "the boot
-  process speaks `__run_command`" lives only in the host server's
-  registered callback. RustPython works unchanged. Future guests
-  use `host_spawn` directly; the `host_run_command` import goes
-  away with RustPython.
+- `host_run_command` — RustPython's `codepod-host` crate still
+  consumes it directly, and `build-coreutils.sh` marks it as an
+  asyncify import. The import name stays. **What changes in PR4:**
+  today its handler in `kernel-imports.ts` is wrapped by
+  `ShellInstance` (which adds JSPI/Asyncify and dispatches the
+  command — *not* by re-entering the boot shell, but by spinning up
+  a *fresh* `ShellInstance` for that single command). Since PR4
+  deletes `ShellInstance`, the handler is rewired to call a
+  **host-registered callback** — a small TypeScript hook the host
+  server passes to `Sandbox.create`.
+
+  **The callback must NOT re-enter PID 1.** PID 1 is resident bash
+  and may already be running a `__run_command` invocation when
+  `host_run_command` fires (the recursive case: user runs
+  `python -c "subprocess.run('echo hi', shell=True)"` — outer
+  `__run_command` is in flight, RustPython calls
+  `host_run_command`, inner request lands). Single-flight FIFO on
+  PID 1's `callExport` would deadlock here (outer awaits inner;
+  inner queued behind outer). Today's `ShellInstance` avoids this
+  by spawning a fresh bash instance for `host_run_command`; the new
+  callback does the same with the generic Process API:
+
+  ```ts
+  // sdk-server/src/bash-dispatch.ts and mcp-server/src/bash-dispatch.ts
+  async function runCommandHandler(req: RunRequest): Promise<RunResponse> {
+    // Spawn a fresh CLI bash for this single command — not PID 1.
+    const child = await sandbox.spawn(
+      ["/bin/bash", "-c", req.cmd],
+      { mode: "cli", env: req.env, cwd: req.cwd },
+    );
+    const stdout = await child.fd(1).readAll();
+    const stderr = await child.fd(2).readAll();
+    const exit = await child.waitpid();
+    return { exit_code: exit.code, stdout, stderr };
+  }
+  ```
+
+  Result: PID 1's `__run_command` queue carries only user-facing
+  command requests; `host_run_command` (Python subprocess) goes
+  through fresh CLI bash spawns. No re-entry, no deadlock. The
+  per-call cost is one extra wasm instantiation per Python
+  shell-out, matching today's behavior.
+
+  **Why the kernel still stays generic.** The kernel's
+  `host_run_command` handler delegates to the registered callback;
+  it has no knowledge of "the boot process speaks `__run_command`"
+  or "fresh bash spawn instead of PID 1 re-entry" — those policy
+  decisions live in the host server's callback. RustPython works
+  unchanged. Future guests use `host_spawn` directly; the
+  `host_run_command` import goes away with RustPython.
 
 Plus the standard WASI Preview 1 surface (`fd_read`, `fd_write`,
 `path_open`, …) handled by the kernel's WASI host.
@@ -378,6 +410,19 @@ Concretely:
 - `time`: monotonic + wall clock readers (for `host_time`).
 - `memory`: helpers for read/write into the boot process's linear
   memory (the same helpers `host-imports/common.ts` provides today).
+
+**Memory-binding timing.** `bootImports(api)` is invoked **before**
+the boot wasm is instantiated, so the boot process's memory does
+not yet exist when the callback runs. `KernelApi.memory` is
+therefore a **late-bound proxy**: calling its methods *during*
+import construction (i.e., synchronously inside `bootImports`)
+is an error; calling them *from inside import handler functions*
+(which run after instantiation, when the boot memory is live) works
+normally. The proxy is the same shape today's `ShellInstance` uses
+internally — a `memoryRef` that's set after instantiation and
+captured by closure in every import handler. The kernel resolves
+the proxy as soon as `WebAssembly.instantiate` returns, before
+calling `_start`.
 
 `KernelApi` is the **only** way bash-host (and any future userland
 host module) reaches into kernel state. It does not export internal
@@ -424,8 +469,11 @@ mcp-server at `packages/mcp-server/src/index.ts:282`, plus internal
 callers) replace `sandbox.run(cmd)` with their host-side
 `bashDispatch.runCommand(sandbox, cmd)` wrapper, which calls
 `sandbox.process(1).callExport("__run_command", ...)`. Shell history
-becomes the host server's responsibility (or is dropped — neither
-mcp-server nor sdk-server appears to surface it externally).
+support: sdk-server today exposes `shell.history.list` and
+`shell.history.clear` RPC methods backed by `Sandbox.getHistory` /
+`clearHistory`. PR4 removes those RPC methods. If history needs to
+return, it lives in the host-side `bashDispatch` module as a thin
+record of dispatched commands; not gated on this refactor.
 
 ## Boot Process Model
 
@@ -497,25 +545,30 @@ the dispatch to the registered callback in `WebAssembly.Suspending`
 (or asyncify equivalent), the same way today's
 `ShellInstance.host_run_command` already does.
 
-**2. Single-flight serialization.** A resident process has one
-in-flight `callExport` at a time. Bash's `__run_command` is not
-re-entrant, and neither is most code that runs in resident mode.
-The generic Process API therefore queues subsequent `callExport`
-calls behind the in-flight one (FIFO). This avoids two failure
-modes in the round-trip path
-`RustPython → host_run_command → runCommandHandler →
-process(1).callExport("__run_command", …)`:
+**2. Single-flight serialization, with a sharp restriction.** A
+resident process has one in-flight `callExport` at a time. Bash's
+`__run_command` is not re-entrant, and neither is most resident-mode
+code. The generic Process API therefore queues subsequent
+`callExport` calls behind the in-flight one (FIFO). This prevents
+*corruption* — a second `callExport` interleaving with the first
+would share wasm stack and globals.
 
-- *Corruption*: a second `callExport` interleaving with the first
-  would share wasm stack and globals.
-- *Deadlock*: a recursive `host_run_command` (e.g., bash spawns a
-  Python subprocess that calls `host_run_command`) would await its
-  own outer call.
+But FIFO **cannot** prevent the recursive deadlock: if an in-flight
+`callExport` triggers a host import that ultimately tries to issue
+another `callExport` on the *same* process, the second call queues
+forever behind the first. The most concrete case is the
+`host_run_command` round-trip (RustPython subprocess → host →
+back to bash). The cure is at the *callback* level, not the queue:
+`host_run_command`'s registered handler must dispatch to a fresh
+CLI process (e.g., `sandbox.spawn(["/bin/bash", "-c", cmd])`),
+not to PID 1's `callExport`. See §Kernel Surface — Deferred
+(`host_run_command`) for the concrete callback shape.
 
-Both are prevented by the FIFO queue and by the single-flight
-invariant being a public guarantee of `Process.callExport`. The
-queue is per-process (not per-sandbox), so independent resident
-processes can run their exports concurrently.
+The queue is per-process (not per-sandbox), so independent resident
+processes can run their exports concurrently. PID 1 carries only
+non-recursive request streams — the user-facing
+`bashDispatch.runCommand` path. Recursive shell-outs go through
+fresh CLI spawns and never touch PID 1's queue.
 
 ### Boot at Sandbox Creation
 
