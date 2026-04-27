@@ -341,23 +341,43 @@ deferred Python-coupled debt, but the imports themselves stay):
   ```ts
   // sdk-server/src/bash-dispatch.ts and mcp-server/src/bash-dispatch.ts
   async function runCommandHandler(req: RunRequest): Promise<RunResponse> {
-    // Spawn a fresh CLI bash for this single command — not PID 1.
+    // Spawn a *fresh* resident bash for this single command. Not PID 1.
+    // Resident mode is required because today's codepod-shell-exec has
+    // a no-op main() — the only way to execute a command is via
+    // __run_command on a live wasm instance. We instantiate, dispatch
+    // one __run_command, then terminate the instance.
     const child = await sandbox.spawn(
-      ["/bin/bash", "-c", req.cmd],
-      { mode: "cli", env: req.env, cwd: req.cwd },
+      ["/bin/bash"],
+      { mode: "resident", env: req.env, cwd: req.cwd },
     );
-    const stdout = await child.fd(1).readAll();
-    const stderr = await child.fd(2).readAll();
-    const exit = await child.waitpid();
-    return { exit_code: exit.code, stdout, stderr };
+    try {
+      const raw = await child.callExport(
+        "__run_command",
+        JSON.stringify({ cmd: req.cmd }),
+      );
+      const r = JSON.parse(raw);
+      return { exit_code: r.exit_code, stdout: r.stdout, stderr: r.stderr };
+    } finally {
+      await child.terminate();
+    }
   }
   ```
 
-  Result: PID 1's `__run_command` queue carries only user-facing
+  Result: PID 1's `callExport` queue carries only user-facing
   command requests; `host_run_command` (Python subprocess) goes
-  through fresh CLI bash spawns. No re-entry, no deadlock. The
-  per-call cost is one extra wasm instantiation per Python
-  shell-out, matching today's behavior.
+  through a fresh resident bash instance per call. No re-entry on
+  PID 1, no shared queue, no deadlock. Each `Process` has its own
+  `callExport` queue, so the recursive case (PID 1 mid-call →
+  Python → fresh-bash mid-call) involves two independent queues.
+  Per-call cost is one extra wasm instantiation per Python shell-out,
+  matching today's behavior.
+
+  **Future alternative.** If `codepod-shell-exec` grows real CLI
+  argument handling (a `main()` that parses `-c <cmd>` and executes
+  it from `_start`), the callback can switch to
+  `sandbox.spawn(["/bin/bash", "-c", cmd], { mode: "cli" })` and
+  drop the `__run_command` round-trip. Out of scope for this
+  refactor — it's a userland-side improvement to the shell binary.
 
   **Why the kernel still stays generic.** The kernel's
   `host_run_command` handler delegates to the registered callback;
@@ -393,10 +413,13 @@ The TS surface that `mcp-server`, `sdk-server`, and other hosts use.
   - `runCommandHandler?: (req: RunRequest) => Promise<RunResponse>`
     — host-registered callback that backs `host_run_command` (see
     §Kernel Surface for the recursive-deadlock discussion).
-    bash-host registers a callback that spawns a **fresh CLI bash**
-    via `sandbox.spawn(["/bin/bash", "-c", req.cmd], { mode: "cli", … })`,
-    captures stdout/stderr via fds, and awaits `waitpid` —
-    explicitly **not** re-entering PID 1's `callExport`.
+    bash-host registers a callback that spawns a **fresh resident
+    bash** via `sandbox.spawn(["/bin/bash"], { mode: "resident", … })`,
+    invokes `__run_command` once on that child, then terminates it.
+    Explicitly **not** re-entering PID 1's `callExport`. (Resident
+    mode is required because today's `codepod-shell-exec` has a
+    no-op `main()`; cmd execution only happens via `__run_command`
+    on a live instance.)
 - `Sandbox.destroy()` — tears down.
 - `Sandbox.fork()`, `Sandbox.snapshot()`, `Sandbox.restore()` —
   existing, unchanged.
@@ -563,9 +586,9 @@ forever behind the first. The most concrete case is the
 `host_run_command` round-trip (RustPython subprocess → host →
 back to bash). The cure is at the *callback* level, not the queue:
 `host_run_command`'s registered handler must dispatch to a fresh
-CLI process (e.g., `sandbox.spawn(["/bin/bash", "-c", cmd])`),
-not to PID 1's `callExport`. See §Kernel Surface — Deferred
-(`host_run_command`) for the concrete callback shape.
+process (a fresh resident bash today, given `codepod-shell-exec`'s
+no-op `main()`), not to PID 1's `callExport`. See §Kernel Surface —
+Deferred (`host_run_command`) for the concrete callback shape.
 
 The queue is per-process (not per-sandbox), so independent resident
 processes can run their exports concurrently. PID 1 carries only
@@ -819,14 +842,14 @@ require.
 - Rewire `host_run_command`'s kernel-imports.ts handler to delegate
   to a host-registered callback (passed via `Sandbox.create` opts
   alongside `bootArgv`). Both `mcp-server` and `sdk-server` register
-  a bash-aware callback that **spawns a fresh CLI bash** via
-  `sandbox.spawn(["/bin/bash", "-c", req.cmd], { mode: "cli", … })`,
-  captures stdout/stderr from the child's fds, and returns the
-  result on exit. The callback **must not** re-enter PID 1's
-  `callExport` — the recursive-deadlock case (see §Kernel Surface
-  Deferred and §Resident Mode) requires a fresh process per call,
-  matching today's `ShellInstance` behavior. RustPython consumers
-  continue to work with no changes.
+  a bash-aware callback that **spawns a fresh resident bash** via
+  `sandbox.spawn(["/bin/bash"], { mode: "resident", … })`, invokes
+  `__run_command` once on that fresh child, then terminates it.
+  The callback **must not** re-enter PID 1's `callExport` — the
+  recursive-deadlock case (see §Kernel Surface Deferred and
+  §Resident Mode) requires a fresh process per call, matching
+  today's "fresh `ShellInstance` per `host_run_command`" behavior.
+  RustPython consumers continue to work with no changes.
 - Delete `Sandbox.run`, `Sandbox.getHistory`, `Sandbox.clearHistory`
   from the public host API. Consumers:
   - mcp-server's `run_command` tool (`index.ts:282`) and sdk-server's
@@ -861,15 +884,16 @@ in-tree consumer.
   new code path post-PR4. A guest binary (RustPython, or a tiny
   test guest) calls `host_run_command(cmd)`; the kernel handler
   delegates to the host-registered callback; the callback spawns
-  a fresh CLI bash via `sandbox.spawn(["/bin/bash", "-c", cmd],
-  { mode: "cli", … })`, reads stdout/stderr from the child's fds,
-  awaits `waitpid`, returns the result. Assert that round-trip
+  a fresh resident bash via `sandbox.spawn(["/bin/bash"],
+  { mode: "resident", … })`, invokes `__run_command` once on the
+  child, terminates it, returns the result. Assert that round-trip
   succeeds, that JSPI/asyncify suspension works correctly across
   the chain, that the callback does **not** invoke
-  `process(1).callExport`, and that the recursive-deadlock case
-  (PID 1 is mid-`__run_command` when the inner `host_run_command`
-  fires) completes without hanging — verifying the fresh-spawn
-  policy actually side-steps the queue.
+  `sandbox.process(1).callExport`, and that the recursive-deadlock
+  case (PID 1 mid-`__run_command` → guest fires `host_run_command`)
+  completes without hanging — verifying the fresh-spawn policy
+  side-steps PID 1's queue. Also assert that the fresh child is
+  terminated on completion (no leaked resident processes).
 
 **On splitting this PR.** PR4 carries 9 distinct changes
 (bash-dispatch wrappers, 5 internal rewires, shell-legacy import
