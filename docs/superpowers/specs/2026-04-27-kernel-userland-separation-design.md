@@ -594,7 +594,8 @@ The queue is per-process (not per-sandbox), so independent resident
 processes can run their exports concurrently. PID 1 carries only
 non-recursive request streams — the user-facing
 `bashDispatch.runCommand` path. Recursive shell-outs go through
-fresh CLI spawns and never touch PID 1's queue.
+fresh resident bash spawns (each with its own empty `callExport`
+queue) and never touch PID 1's queue.
 
 ### Boot at Sandbox Creation
 
