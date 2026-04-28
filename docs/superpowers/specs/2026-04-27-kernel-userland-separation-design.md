@@ -2,8 +2,9 @@
 
 ## Status
 
-Draft, design phase. No code merged. Replaces no existing spec; predecessor
-to a CPython port effort and to follow-on userland-package reorgs.
+Implementation in progress across staged PRs. Replaces no existing spec;
+predecessor to a CPython port effort, a Rust shell channel-port effort, and
+follow-on userland-package reorgs.
 
 ## Outcome
 
@@ -23,8 +24,10 @@ Concretely:
   `sdk-server`.
 - `host-imports/shell-imports.ts` (an entire shell-named host-imports
   module) is audited and consolidated: generic helpers fold into
-  `kernel-imports.ts`; anything intrinsically shell-shaped moves out
-  with the bash-dispatch wrapper.
+  `kernel-imports.ts`; intrinsically shell-shaped imports move to host
+  bash modules where the current Rust shell ABI permits it. The remaining
+  compatibility imports stay attached to the resident bash runner until the
+  Rust shell is ported to use the generic WASI/fd/process channels.
 - The shell wasm becomes a normal VFS file at `/bin/bash`, instead of
   being passed as a host filesystem path to `ShellInstance.create`.
 - `host_extension_invoke` / `host_native_invoke` remain as kernel
@@ -43,6 +46,14 @@ are entangled — RustPython consumes `host_run_command` directly,
 and `Sandbox.create()` installs Python `/usr/lib/python` shims at boot.
 Removing any of these in isolation regresses functionality; they should
 all clear together as part of the CPython port that replaces RustPython.
+
+Also deferred: deleting the final resident-bash compatibility import layer.
+The Rust shell currently still depends on shell-specific `codepod` imports for
+some filesystem/tool operations and does not consistently surface all output
+through the generic fd buffers (for example command-substitution output through
+host-side dispatch). Until the Rust shell is ported to the proper channels,
+the bash conformance suite remains on the resident runner and PR4 keeps a
+small host-dispatch canary instead of migrating the whole suite.
 
 The product requirement is **boundary correctness for new code**, not
 all-at-once cleanup. Existing functionality is preserved end-to-end
@@ -66,7 +77,8 @@ the kernel must own.
   module within `host-imports/`. By the naming test, the file itself is
   a violation; its contents are a mix of generic primitives that should
   fold into `kernel-imports.ts` and shell-specific helpers that should
-  move out to bash-host.
+  move out to bash-host once the Rust shell channel port makes that
+  mechanically safe.
 - `shell/shell-instance.ts` (1157 lines) is a TS module specifically
   about *the shell*: it knows `__run_command(jsonString)`, the shell
   history, the shell-only call protocol. Generic process-loading bits
@@ -124,6 +136,10 @@ follow-on efforts:
   `host_run_command`, the `Sandbox.create()` Python `/usr/lib/python`
   shim install) — clears with the CPython port that replaces
   RustPython.
+- **Resident-bash compatibility imports** (`host-imports/shell-imports.ts`)
+  — clears with the Rust shell channel port. PR4 moves host-server
+  command dispatch out of the kernel, but the shell binary still needs
+  this compatibility layer for in-kernel direct users and conformance tests.
 - **`host_extension_invoke` naming** — "extension" is a host-plugin
   abstraction, not a primitive like `pipe`/`spawn`. Marginal; not
   worth renaming until hostbridge lands.
@@ -811,7 +827,7 @@ sdk-server smoke tests, Python-SDK round-trip. Targeted test that
 spawns the shell and runs `ls /`, `find -name '*.txt'`, `echo *`
 (exercises any shell-specific glob path).
 
-### PR4 — Rewire all `ShellInstance` consumers; move bash-dispatch out
+### PR4 — Rewire host consumers; move bash-dispatch out
 
 This is the substantive PR; it does what (B) was always going to
 require.
@@ -838,8 +854,11 @@ require.
 - Move shell-legacy imports identified in PR3 (`host_stat`,
   `host_read_file`, `host_register_tool`, etc. — the full list in
   §Source-Tree Changes / Carve Out) out of kernel `host-imports/`
-  to the bash-host module(s). They get assembled into the boot
-  process's import object only when bash boots.
+  to the bash-host module(s) for SDK/MCP-created sandboxes. They get
+  assembled into the boot process's import object only when bash boots.
+  A resident-bash compatibility layer remains in orchestrator for direct
+  `Sandbox.create()` users, worker execution, and the bash conformance suite
+  until the Rust shell is ported to the generic WASI/fd/process channels.
 - Rewire `host_run_command`'s kernel-imports.ts handler to delegate
   to a host-registered callback (passed via `Sandbox.create` opts
   alongside `bootArgv`). Both `mcp-server` and `sdk-server` register
@@ -863,10 +882,12 @@ require.
     If any python-sdk client code calls them, it gets a clear RPC
     error; reintroducing history (via host-side bash-dispatch
     bookkeeping) is a follow-up only if there's demand.
-- Move the `bootArgv` default out of orchestrator and into each host
-  server. Kernel's `Sandbox.create` now **requires** `bootArgv`.
+- Move host-server `bootArgv` defaults into each host server. Direct
+  `Sandbox.create()` keeps its compatibility default until the resident-bash
+  compatibility layer is removed.
 - Delete `packages/orchestrator/src/shell/shell-instance.ts` and the
-  `shell/` directory.
+  `shell/` directory. `resident-bash-runner.ts` remains as the transition
+  wrapper around the current Rust shell ABI.
 
 **Risk:** high. Largest blast radius of the migration; touches every
 in-tree consumer.
@@ -895,6 +916,9 @@ in-tree consumer.
   completes without hanging — verifying the fresh-spawn policy
   side-steps PID 1's queue. Also assert that the fresh child is
   terminated on completion (no leaked resident processes).
+- Host-dispatch conformance canary passes for simple command/env continuity.
+  Command-substitution stdout remains an ignored canary until the Rust shell
+  writes that path through the generic fd buffers.
 
 **On splitting this PR.** PR4 carries 9 distinct changes
 (bash-dispatch wrappers, 5 internal rewires, shell-legacy import
