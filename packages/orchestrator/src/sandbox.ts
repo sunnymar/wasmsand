@@ -119,7 +119,10 @@ export interface SandboxSpawnOptions {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_FS_LIMIT = 256 * 1024 * 1024; // 256 MB
-const BOOTSTRAP_EXPORT_EXCLUDES = ['/bin/bash'];
+const BOOTSTRAP_EXPORT_EXCLUDES = [
+  '/bin/bash',
+  '/usr/share/misc/magic.mgc',
+];
 
 /** Internal config for the Sandbox constructor. Not part of the public API. */
 interface SandboxParts {

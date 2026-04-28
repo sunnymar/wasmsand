@@ -304,18 +304,20 @@ describe('Sandbox exportState / importState', () => {
     }
   });
 
-  it('does not serialize the bootstrap shell binary', async () => {
+  it('does not serialize deterministic bootstrap binaries', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     const blob = sandbox.exportState();
     const state = JSON.parse(dec(blob.subarray(12)));
     expect(state.files.some((f: any) => f.path === '/bin/bash')).toBe(false);
+    expect(state.files.some((f: any) => f.path === '/usr/share/misc/magic.mgc')).toBe(false);
 
     const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     try {
       sandbox2.importState(blob);
       expect(sandbox2.stat('/bin/bash').type).toBe('file');
       expect(sandbox2.readFile('/bin/bash').length).toBeGreaterThan(8);
+      expect(sandbox2.stat('/usr/share/misc/magic.mgc').type).toBe('file');
     } finally {
       sandbox2.destroy();
     }
