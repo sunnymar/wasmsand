@@ -14,6 +14,8 @@ import { Sandbox, SandboxPool } from '@codepod/sandbox';
 import type { ExtensionConfig, ExtensionInvokeArgs, ExtensionInvokeResult, StorageCallbacks } from '@codepod/sandbox';
 import { NodeAdapter } from '@codepod/sandbox/node';
 import { Dispatcher } from './dispatcher.js';
+import { makeRunCommandHandler } from './bash-dispatch.js';
+import { bashBootImports } from './bash-host-imports.js';
 
 interface JsonRpcRequest {
   jsonrpc: string;
@@ -226,6 +228,8 @@ async function main(): Promise<void> {
           pythonPath,
           extensions: extensionConfigs,
           storage: storageCallbacks,
+          bootImports: (api: Parameters<typeof bashBootImports>[0]) => bashBootImports(api),
+          runCommandHandler: makeRunCommandHandler(),
         };
 
         if (limits?.rpcBytes !== undefined) {

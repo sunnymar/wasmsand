@@ -9,6 +9,8 @@ import type { VfsLike } from './vfs/vfs-like.js';
 
 export interface KernelApiProcessManager {
   registerTool(name: string, impl: unknown): void;
+  registerAndLoadTool(name: string, path: string): Promise<void>;
+  registerNativeModule(name: string, wasmBytes: Uint8Array): Promise<void>;
   hasTool(name: string): boolean;
 }
 

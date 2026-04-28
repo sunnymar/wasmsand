@@ -21,6 +21,7 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Buffer } from 'node:buffer';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -28,6 +29,8 @@ import { Sandbox, SandboxPool } from '@codepod/sandbox';
 import type { NetworkPolicy } from '@codepod/sandbox';
 import { NodeAdapter, HostFsProvider } from '@codepod/sandbox/node';
 import { loadConfig } from './config.js';
+import { makeRunCommandHandler, runCommand } from './bash-dispatch.js';
+import { bashBootImports } from './bash-host-imports.js';
 
 const __dirname = resolve(fileURLToPath(import.meta.url), '..');
 
@@ -81,6 +84,8 @@ function buildSandboxOptions() {
     shellExecWasmPath: config.shellWasm,
     network,
     packages: config.packages,
+    bootImports: (api: Parameters<typeof bashBootImports>[0]) => bashBootImports(api),
+    runCommandHandler: makeRunCommandHandler(),
     security: {
       limits: {
         stdoutBytes: 1 * 1024 * 1024,
@@ -279,7 +284,7 @@ async function main(): Promise<void> {
     async ({ sandbox_id, command }) => {
       try {
         const sandbox = getSandbox(sandbox_id);
-        const result = await sandbox.run(command);
+        const result = await runCommand(sandbox, command);
         return jsonResult({
           exit_code: result.exitCode,
           stdout: result.stdout,

@@ -7,6 +7,7 @@
  */
 
 import { Buffer } from 'node:buffer';
+import { runCommand } from './bash-dispatch.js';
 
 /** Minimal interface for a sandbox, matching the methods we call. */
 export interface SandboxLike {
@@ -47,6 +48,7 @@ export interface SandboxLike {
   mount(path: string, filesOrProvider: Record<string, Uint8Array>): void;
   offload(): Promise<void>;
   rehydrate(): Promise<void>;
+  process(pid: number): unknown;
   readonly sessionId: string;
 }
 
@@ -215,7 +217,22 @@ export class Dispatcher {
       },
     } : undefined;
 
-    const result = await sb.run(command, callbacks);
+    if (callbacks) {
+      const result = await sb.run(command, callbacks);
+      const response: Record<string, unknown> = {
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        executionTimeMs: result.executionTimeMs,
+      };
+      if (result.truncated) response.truncated = result.truncated;
+      if (result.errorClass) response.errorClass = result.errorClass;
+      return response;
+    }
+
+    const result = typeof sb.process === 'function'
+      ? await runCommand(sb as Parameters<typeof runCommand>[0], command)
+      : await sb.run(command);
     const response: Record<string, unknown> = {
       exitCode: result.exitCode,
       stdout: result.stdout,

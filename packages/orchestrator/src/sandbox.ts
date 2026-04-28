@@ -120,6 +120,7 @@ export interface SandboxSpawnOptions {
   mode: ProcessMode;
   env?: Record<string, string>;
   cwd?: string;
+  bootImports?: SandboxOptions['bootImports'];
   /** Low-level import factory used by tests and later bash-host wiring. */
   extraCodepodImports?: LoadProcessOptions['extraCodepodImports'];
 }
@@ -270,6 +271,8 @@ export class Sandbox {
       vfs: this.vfs,
       processManager: {
         registerTool: (name, impl) => this.mgr.registerTool(name, String(impl)),
+        registerAndLoadTool: (name, path) => this.mgr.registerAndLoadTool(name, path),
+        registerNativeModule: (name, wasmBytes) => this.mgr.registerNativeModule(name, wasmBytes),
         hasTool: (name) => this.mgr.hasTool(name),
       },
       time: {
@@ -953,12 +956,15 @@ export class Sandbox {
 
   async spawn(argv: string[], opts: SandboxSpawnOptions): Promise<Process> {
     this.assertAlive();
+    const bootImports = opts.bootImports
+      ? this.buildUserlandImportFactory(opts.bootImports)
+      : undefined;
     return loadProcess(this.loaderContext(), {
       argv,
       mode: opts.mode,
       env: opts.env,
       cwd: opts.cwd,
-      extraCodepodImports: opts.extraCodepodImports,
+      extraCodepodImports: opts.extraCodepodImports ?? bootImports,
     });
   }
 
