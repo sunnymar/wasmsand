@@ -41,8 +41,6 @@ export type { PersistenceManagerOptions } from './persistence/manager.js';
 export { exportState, importState } from './persistence/serializer.js';
 // FsBackend not re-exported — imports node:fs which breaks browser bundlers.
 // Node consumers: import { FsBackend } from '@codepod/sandbox/node'
-export { CommandHistory } from './shell/history.js';
-export type { HistoryEntry } from './shell/history.js';
 export type { ExtensionConfig, ExtensionHandler, ExtensionInvokeArgs, ExtensionInvokeResult, PythonPackageSpec } from './extension/types.js';
 export { ExtensionRegistry } from './extension/registry.js';
 export { SandboxPool } from './pool/sandbox-pool.js';

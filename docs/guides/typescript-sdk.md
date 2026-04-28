@@ -480,15 +480,13 @@ Forked sandboxes inherit all host mounts from the parent (shared by reference â€
 await sandbox.run('echo hello');
 await sandbox.run('echo world');
 
-// Retrieve history
-const history = sandbox.getHistory();
-// [{ index: 0, command: 'echo hello' }, { index: 1, command: 'echo world' }]
+// Retrieve history through the shell builtin
+const history = await sandbox.run('history list');
+console.log(history.stdout);
 
-// Clear history
-sandbox.clearHistory();
+// Clear history through the shell builtin
+await sandbox.run('history clear');
 ```
-
-Also available as shell builtins: `history list` and `history clear`.
 
 ## PYTHONPATH
 
@@ -548,8 +546,6 @@ sandbox.destroy();
 | `mount(path, files)` | `void` | Mount files or a `VirtualProvider` |
 | `setEnv(name, value)` | `void` | Set environment variable |
 | `getEnv(name)` | `string \| undefined` | Get environment variable |
-| `getHistory()` | `HistoryEntry[]` | Get command history |
-| `clearHistory()` | `void` | Clear command history |
 | `snapshot()` | `string` | Create a VFS + env snapshot |
 | `restore(id)` | `void` | Restore a snapshot |
 | `exportState()` | `Uint8Array` | Serialize sandbox state |
