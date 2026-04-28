@@ -140,7 +140,6 @@ export class ShellInstance implements ShellLike {
           vfs: loaderCtx.vfs,
           mgr,
           memory,
-          syncSpawn: options?.syncSpawn,
         });
         const kernelImports = createKernelImports({
           memory,
@@ -150,6 +149,7 @@ export class ShellInstance implements ShellLike {
           extensionRegistry: options?.extensionRegistry,
           nativeModules: mgr.nativeModules,
           runCommand,
+          syncSpawn: options?.syncSpawn,
           spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => {
             if (options?.syncSpawn) {
               return spawnSyncProcess(req, fdTable, loaderCtx.kernel, options.syncSpawn, parentPid);
@@ -232,7 +232,6 @@ export class ShellInstance implements ShellLike {
       vfs,
       mgr,
       memory: memoryProxy,
-      syncSpawn: options?.syncSpawn,
     });
 
     // ── Process kernel for pipe/spawn/waitpid/close_fd ──
@@ -290,6 +289,7 @@ export class ShellInstance implements ShellLike {
       networkBridge: options?.networkBridge,
       nativeModules: mgr.nativeModules,
       runCommand,
+      syncSpawn: options?.syncSpawn,
       spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => {
         if (options?.syncSpawn) {
           return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn, parentPid);
