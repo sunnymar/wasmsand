@@ -67,7 +67,7 @@ jobs:
         # The canaries import codepod::host_dup2 (and host_run_command for the
         # system/popen variants) because libcodepod_guest_compat.a is
         # whole-archive'd into them — those imports are unsatisfiable under
-        # plain wasmtime, but the orchestrator sandbox supplies them by
+        # plain wasmtime, but the kernel sandbox supplies them by
         # definition, which is also what real consumers run against.
         run: deno run -A --no-check scripts/run-conformance-traces.ts --include-rust
 

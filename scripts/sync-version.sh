@@ -13,12 +13,12 @@ IFS='.' read -r MAJOR MINOR PATCH <<<"$VERSION"
 : "${MINOR:?VERSION missing minor component}"
 : "${PATCH:?VERSION missing patch component}"
 
-# packages/orchestrator/src/version.ts
-cat > packages/orchestrator/src/version.ts <<EOF
+# packages/kernel/src/version.ts
+cat > packages/kernel/src/version.ts <<EOF
 /** Codepod version. Updated by scripts/sync-version.sh from the root VERSION file. */
 export const CODEPOD_VERSION = '$VERSION';
 EOF
-echo "  updated packages/orchestrator/src/version.ts"
+echo "  updated packages/kernel/src/version.ts"
 
 # packages/guest-compat/include/codepod_compat.h — the four
 # CODEPOD_VERSION_* macros (string + numeric major/minor/patch).  The

@@ -34,7 +34,7 @@ export default defineConfig({
   plugins: [react(), nodeStubs()],
   resolve: {
     alias: {
-      '@codepod/sandbox': resolve(__dirname, '../../packages/orchestrator/src/index.ts'),
+      '@codepod/kernel': resolve(__dirname, '../../packages/kernel/src/index.ts'),
     },
   },
   server: {

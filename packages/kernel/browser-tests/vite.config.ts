@@ -33,7 +33,7 @@ export default defineConfig({
   publicDir: resolve(__dirname, '../src/platform/__tests__/fixtures'),
   resolve: {
     alias: {
-      '@codepod/sandbox': resolve(__dirname, '../src/index.ts'),
+      '@codepod/kernel': resolve(__dirname, '../src/index.ts'),
     },
   },
   server: {

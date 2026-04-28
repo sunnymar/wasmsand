@@ -2,7 +2,7 @@
  * Platform adapter interface for loading and instantiating WebAssembly modules.
  *
  * Abstracts the differences between Node.js (filesystem) and browser (fetch)
- * environments so the orchestrator can run in both without platform checks.
+ * environments so the kernel can run in both without platform checks.
  */
 
 export interface PlatformAdapter {

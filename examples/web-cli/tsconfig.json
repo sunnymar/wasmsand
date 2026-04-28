@@ -10,7 +10,7 @@
     "rootDir": "src",
     "baseUrl": ".",
     "paths": {
-      "@codepod/sandbox": ["../orchestrator/src/index.ts"]
+      "@codepod/kernel": ["../kernel/src/index.ts"]
     }
   },
   "include": ["src"]

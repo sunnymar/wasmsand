@@ -20,15 +20,15 @@
 import { resolve, join } from 'node:path';
 import { existsSync, readdirSync, statSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { Sandbox } from '../packages/orchestrator/src/sandbox.js';
-import { NodeAdapter } from '../packages/orchestrator/src/platform/node-adapter.js';
+import { Sandbox } from '../packages/kernel/src/sandbox.js';
+import { NodeAdapter } from '../packages/kernel/src/platform/node-adapter.js';
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
-const FIXTURES = resolve(REPO_ROOT, 'packages/orchestrator/src/platform/__tests__/fixtures');
+const FIXTURES = resolve(REPO_ROOT, 'packages/kernel/src/platform/__tests__/fixtures');
 const BUSYBOX_WASM = resolve(REPO_ROOT, 'packages/c-ports/busybox/build/busybox.wasm');
 const BUSYBOX_WASM_FIXTURE = resolve(FIXTURES, 'busybox.wasm');
 const TESTSUITE_DIR = resolve(REPO_ROOT, 'packages/c-ports/busybox/src/testsuite');
@@ -503,7 +503,7 @@ const doc = `# BusyBox Upstream Testsuite on Codepod — ${new Date().toISOStrin
 **Runner**: \`scripts/run-busybox-testsuite-in-sandbox.ts\`
 **Elapsed**: ${elapsedSec}s
 **BusyBox binary**: \`packages/c-ports/busybox/build/busybox.wasm\`
-**Sandbox fixtures**: \`packages/orchestrator/src/platform/__tests__/fixtures/\`
+**Sandbox fixtures**: \`packages/kernel/src/platform/__tests__/fixtures/\`
 
 ## Important Context: Minimal BusyBox Build
 

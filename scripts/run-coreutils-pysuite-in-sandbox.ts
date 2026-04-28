@@ -28,7 +28,7 @@ import { execSync } from 'node:child_process';
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
-const FIXTURES = resolve(REPO_ROOT, 'packages/orchestrator/src/platform/__tests__/fixtures');
+const FIXTURES = resolve(REPO_ROOT, 'packages/kernel/src/platform/__tests__/fixtures');
 const SECTION_RUNNER = resolve(import.meta.dirname, 'run-coreutils-section.ts');
 const FINDINGS_DIR = resolve(REPO_ROOT, 'docs/superpowers/findings');
 const FINDINGS_FILE = resolve(FINDINGS_DIR, '2026-04-22-coreutils-pysuite-on-codepod.md');
@@ -329,7 +329,7 @@ const doc = `# Coreutils test_coreutils.py on Codepod — ${new Date().toISOStri
 **Strategy**: Fresh Deno subprocess per section (${SECTIONS.length} sections × 1 sandbox each)
 **Total elapsed**: ${totalElapsedSec}s
 **Test script**: \`packages/coreutils/tests/test_coreutils.py\` (unmodified)
-**Sandbox fixtures**: \`packages/orchestrator/src/platform/__tests__/fixtures/\`
+**Sandbox fixtures**: \`packages/kernel/src/platform/__tests__/fixtures/\`
 
 ## Performance Context
 

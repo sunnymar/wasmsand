@@ -58,7 +58,7 @@ with Sandbox() as sb:
     sb.commands.run("pkg remove pdftotext")
 ```
 
-**Note:** Package policy is set at the TypeScript orchestrator level. The Python SDK inherits the policy (disabled by default).
+**Note:** Package policy is set at the TypeScript kernel level. The Python SDK inherits the policy (disabled by default).
 
 ### codepod-packages registry
 

@@ -418,7 +418,7 @@ export class Dispatcher {
     if (this.pool) {
       sb = await this.pool.checkout({ label });
     } else if (this.sandboxOptions) {
-      const { Sandbox } = await import('@codepod/sandbox');
+      const { Sandbox } = await import('@codepod/kernel');
       sb = await Sandbox.create(this.sandboxOptions as any);
     } else {
       throw this.rpcError(-32602, 'No pool or sandboxOptions configured for sandbox.create');

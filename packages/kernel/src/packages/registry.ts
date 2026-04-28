@@ -21,7 +21,7 @@ function collectPyFiles(dir: string, prefix: string): Record<string, string> {
   return files;
 }
 
-/** Root of the packages/ directory (two levels up from packages/orchestrator/src/packages/). */
+/** Root of the packages/ directory (two levels up from packages/kernel/src/packages/). */
 const PACKAGES_ROOT = resolve(import.meta.dirname!, '..', '..', '..');
 
 const PACKAGES: PackageMetadata[] = [

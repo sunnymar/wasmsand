@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+
 /**
  * IndexedDB-backed persistence backend for browser environments.
  *

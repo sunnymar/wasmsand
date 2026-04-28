@@ -15,6 +15,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 cp "$REPO_ROOT/target/wasm32-wasip1/release/python3.wasm" \
-   "$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures/python3.wasm"
+   "$REPO_ROOT/packages/kernel/src/platform/__tests__/fixtures/python3.wasm"
 
-echo "Built python3.wasm ($(du -h "$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures/python3.wasm" | cut -f1))"
+echo "Built python3.wasm ($(du -h "$REPO_ROOT/packages/kernel/src/platform/__tests__/fixtures/python3.wasm" | cut -f1))"

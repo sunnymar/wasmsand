@@ -1,5 +1,8 @@
 # codepod Kernel / Userland Separation
 
+Note: pre-PR5 references to `packages/orchestrator/` below describe the
+pre-rename tree; after PR5 that package is `packages/kernel/`.
+
 ## Status
 
 Implementation in progress across staged PRs. Replaces no existing spec;

@@ -1,4 +1,4 @@
-import type { KernelApi } from '@codepod/sandbox';
+import type { KernelApi } from '@codepod/kernel';
 
 const ERR_NOT_FOUND = -1;
 const ERR_IO = -3;

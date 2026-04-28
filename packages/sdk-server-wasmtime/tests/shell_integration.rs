@@ -6,7 +6,7 @@ use sdk_server_wasmtime::wasm::{ShellInstance, WasmEngine};
 
 static WASM_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm"
+    "/../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm"
 ));
 
 async fn make_instance() -> anyhow::Result<ShellInstance> {

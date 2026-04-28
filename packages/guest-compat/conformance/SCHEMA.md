@@ -79,8 +79,8 @@ with no embedded `\n`). Stderr is not part of the trace.
 
 ```
 <canary>                       # smoke mode: prints "<concept>-ok" on success (preserved
-                               # so the orchestrator E2E suite at
-                               # packages/orchestrator/src/__tests__/guest-compat.test.ts
+                               # so the kernel E2E suite at
+                               # packages/kernel/src/__tests__/guest-compat.test.ts
                                # keeps passing unchanged).
 <canary> --case <name>         # spec-driven mode: emits one JSONL trace line.
 <canary> --list-cases          # prints supported case names, one per line, on stdout.

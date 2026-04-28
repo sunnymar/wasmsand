@@ -1,4 +1,4 @@
-import { Sandbox, BrowserAdapter } from '@codepod/sandbox';
+import { Sandbox, BrowserAdapter } from '@codepod/kernel';
 
 declare global {
   interface Window {

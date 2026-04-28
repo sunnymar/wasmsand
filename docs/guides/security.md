@@ -19,7 +19,7 @@ codepod is designed to run untrusted LLM-generated code safely. This document de
               ┌─────────────────────┐           ┌─────────────────────┐
               │                     │           │                     │
               │  TypeScript         │  WASI P1  │  Shell parser       │
-              │  Orchestrator       │◄─────────►│  (Rust → WASM)      │
+              │  Kernel       │◄─────────►│  (Rust → WASM)      │
               │                     │  imports   │                     │
               │  - VFS (in-memory)  │           │  Coreutils           │
               │  - Process Manager  │           │  (Rust → WASM)      │
@@ -33,7 +33,7 @@ codepod is designed to run untrusted LLM-generated code safely. This document de
               └─────────────────────┘
 ```
 
-Everything inside the sandbox (shell, BusyBox userland, Python, custom WASM tools) runs as WebAssembly. Everything outside (orchestrator, extensions) runs on the host. The WASI P1 import boundary is the primary trust boundary.
+Everything inside the sandbox (shell, BusyBox userland, Python, custom WASM tools) runs as WebAssembly. Everything outside (kernel, extensions) runs on the host. The WASI P1 import boundary is the primary trust boundary.
 
 ## WASM isolation
 
@@ -142,7 +142,7 @@ Symlinks to tool files work naturally through VFS resolution — the flag is che
 
 ## Tool allowlist
 
-The orchestrator can restrict which commands are available:
+The kernel can restrict which commands are available:
 
 ```typescript
 const sb = await Sandbox.create({
@@ -258,12 +258,12 @@ The codebase includes dedicated security tests:
 | Process manager | Host | Trusted — spawns/kills WASM instances |
 | Network gateway | Host | Trusted — enforces network policy |
 | Extension handlers | Host | Trusted — full host access by design |
-| MCP server | Host | Trusted — wraps orchestrator for MCP clients |
+| MCP server | Host | Trusted — wraps kernel for MCP clients |
 | Persistence backends | Host | Trusted — serializes VFS to storage |
 
 ## Status
 
-The security model is defense-in-depth but **has not been formally audited or pen-tested against adversarial untrusted input in production**. The WASM sandbox provides strong isolation guarantees by construction, but the orchestrator and policy enforcement layers are conventional TypeScript code that could have bugs.
+The security model is defense-in-depth but **has not been formally audited or pen-tested against adversarial untrusted input in production**. The WASM sandbox provides strong isolation guarantees by construction, but the kernel and policy enforcement layers are conventional TypeScript code that could have bugs.
 
 For production use with untrusted input, consider:
 - Enabling `hardKill: true` for non-cooperative timeout enforcement

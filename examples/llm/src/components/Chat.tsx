@@ -4,7 +4,7 @@ import { ToolCall } from './ToolCall.js';
 import { runChat } from '../chat.js';
 import type { RunBlock } from '../chat.js';
 import type { CodeBlock } from '../parse.js';
-import type { Sandbox } from '@codepod/sandbox';
+import type { Sandbox } from '@codepod/kernel';
 import { runBash } from '../sandbox.js';
 import { MODELS } from '../models.js';
 

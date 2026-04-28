@@ -45,7 +45,7 @@ This will:
 7. Run a separate **host** build (`build/host/`) to produce
    `magic.mgc` using the system compiler, and copy it out.
 8. Copy `build/file.wasm` and `build/magic.mgc` to
-   `packages/orchestrator/src/platform/__tests__/fixtures/`.
+   `packages/kernel/src/platform/__tests__/fixtures/`.
 
 The sandbox auto-loads `magic.mgc` into the VFS at
 `/usr/share/misc/magic.mgc` on startup (see
@@ -85,4 +85,4 @@ where libmagic looks by default with our `--prefix=/usr` configure.
 - `magic.mgc` is currently the full 10 MB upstream database.
   Trimming `Magdir/` to a curated subset (drop database, gnumeric,
   office, images, …) would shrink it 5–10x; tracked separately.
-- Tests live in `packages/orchestrator/src/__tests__/file-conformance.test.ts`.
+- Tests live in `packages/kernel/src/__tests__/file-conformance.test.ts`.

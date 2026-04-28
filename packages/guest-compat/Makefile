@@ -8,11 +8,11 @@
 #   make lib          — build libcodepod_guest_compat.a
 #   make canaries     — build every conformance/c/*-canary.wasm
 #   make all          — lib + canaries
-#   make copy-fixtures — copy canary .wasm into the orchestrator fixtures dir
+#   make copy-fixtures — copy canary .wasm into the kernel fixtures dir
 #   make clean
 
 REPO_ROOT := $(shell cd ../.. && pwd)
-FIXTURES := $(REPO_ROOT)/packages/orchestrator/src/platform/__tests__/fixtures
+FIXTURES := $(REPO_ROOT)/packages/kernel/src/platform/__tests__/fixtures
 BUILD_DIR := build
 INCLUDE := $(abspath include)
 CANARY_DIR := conformance/c

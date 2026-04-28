@@ -1,7 +1,7 @@
 #![allow(dead_code)] // Free functions used by MemVfs methods; exported via pub API
 //! In-memory virtual filesystem.
 //!
-//! Mirrors `packages/orchestrator/src/vfs/vfs.ts`.
+//! Mirrors `packages/kernel/src/vfs/vfs.ts`.
 //!
 //! Design:
 //! - `Arc<Vec<u8>>` for file content → copy-on-write fork/snapshot semantics.

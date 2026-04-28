@@ -17,7 +17,7 @@ Included in this package:
 - a shared host-side toolchain (`cpcc`/`cpar`/`cpranlib`/`cpcheck`/`cpconf`)
   under `toolchain/cpcc/`, built as workspace release binaries
 - a Make-driven entrypoint that can build the archive, the canaries, and
-  copy canary fixtures into the orchestrator test directory
+  copy canary fixtures into the kernel test directory
 
 Later recipe tasks consume the same toolchain for larger C ports such as
 BusyBox (see `packages/c-ports/busybox/`). This package only validates the
@@ -37,14 +37,14 @@ Build the archive and all canaries:
 make -C packages/guest-compat all
 ```
 
-Copy the resulting artifacts into the orchestrator fixture directory:
+Copy the resulting artifacts into the kernel fixture directory:
 
 ```bash
 make -C packages/guest-compat copy-fixtures
 ```
 
 Or run the full conformance flow end-to-end (toolchain build, archive,
-canaries, signature checks, orchestrator behavioral suite):
+canaries, signature checks, kernel behavioral suite):
 
 ```bash
 ./target/release/cpconf

@@ -4,9 +4,8 @@ node_modules/
 dist/
 target/
 *.wasm
-!packages/orchestrator/assets/*.wasm
-!packages/orchestrator/src/platform/__tests__/fixtures/*.wasm
-!packages/orchestrator/src/shell/__tests__/fixtures/*.wasm
+!packages/kernel/assets/*.wasm
+!packages/kernel/src/platform/__tests__/fixtures/*.wasm
 
 # Python
 __pycache__/
@@ -17,8 +16,8 @@ __pycache__/
 
 # Build artifacts
 packages/python-sdk/src/wasmsand/_bundled/
-packages/orchestrator/wasm/
+packages/kernel/wasm/
 .build-venv/
 .DS_Store
-packages/orchestrator/browser-tests/test-results/
-packages/orchestrator/browser-tests/playwright-report/
+packages/kernel/browser-tests/test-results/
+packages/kernel/browser-tests/playwright-report/

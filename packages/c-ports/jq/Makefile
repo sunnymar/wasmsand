@@ -5,7 +5,7 @@
 # patches/*.patch and are applied to a worktree copy at configure time.
 
 REPO_ROOT := $(shell cd ../../.. && pwd)
-FIXTURES := $(REPO_ROOT)/packages/orchestrator/src/platform/__tests__/fixtures
+FIXTURES := $(REPO_ROOT)/packages/kernel/src/platform/__tests__/fixtures
 JQ_VERSION := 1.8.1
 UPSTREAM := upstream
 PATCHES_DIR := patches

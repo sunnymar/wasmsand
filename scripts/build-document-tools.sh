@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_DIR="$REPO_ROOT/target/wasm32-wasip1/release"
-FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
+FIXTURES_DIR="$REPO_ROOT/packages/kernel/src/platform/__tests__/fixtures"
 
 echo "Building document tools to wasm32-wasip1..."
 cargo build \

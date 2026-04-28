@@ -11,13 +11,13 @@
 
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { Sandbox } from '../packages/orchestrator/src/sandbox.js';
-import { NodeAdapter } from '../packages/orchestrator/src/platform/node-adapter.js';
+import { Sandbox } from '../packages/kernel/src/sandbox.js';
+import { NodeAdapter } from '../packages/kernel/src/platform/node-adapter.js';
 import { makeRunCommandHandler } from '../packages/sdk-server/src/bash-dispatch.ts';
 import { bashBootImports } from '../packages/sdk-server/src/bash-host-imports.ts';
 
 const REPO_ROOT = resolve(import.meta.dirname!, '..');
-const FIXTURES = resolve(REPO_ROOT, 'packages/orchestrator/src/platform/__tests__/fixtures');
+const FIXTURES = resolve(REPO_ROOT, 'packages/kernel/src/platform/__tests__/fixtures');
 const TEST_SCRIPT = resolve(REPO_ROOT, 'packages/coreutils/tests/test_coreutils.py');
 
 const section = Deno.args[0];

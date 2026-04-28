@@ -8,25 +8,25 @@ SERVER_SCRIPT = os.path.join(
     os.path.dirname(__file__), "..", "..", "sdk-server", "src", "server.ts"
 )
 WASM_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "orchestrator", "src", "platform", "__tests__", "fixtures"
+    os.path.dirname(__file__), "..", "..", "kernel", "src", "platform", "__tests__", "fixtures"
 )
 SHELL_WASM = os.path.join(
-    os.path.dirname(__file__), "..", "..", "orchestrator", "src", "platform", "__tests__", "fixtures", "codepod-shell-exec.wasm"
+    os.path.dirname(__file__), "..", "..", "kernel", "src", "platform", "__tests__", "fixtures", "codepod-shell-exec.wasm"
 )
-ORCHESTRATOR_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "orchestrator"
+KERNEL_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", "kernel"
 )
-ORCHESTRATOR_NODE_ADAPTER = os.path.join(
-    ORCHESTRATOR_DIR, "dist", "node-adapter.js"
+KERNEL_NODE_ADAPTER = os.path.join(
+    KERNEL_DIR, "dist", "node-adapter.js"
 )
 
 
-def _ensure_orchestrator_build() -> None:
-    if os.path.exists(ORCHESTRATOR_NODE_ADAPTER):
+def _ensure_kernel_build() -> None:
+    if os.path.exists(KERNEL_NODE_ADAPTER):
         return
     runtime = shutil.which("deno")
     assert runtime is not None, "Deno not found on PATH"
-    subprocess.run([runtime, "task", "build"], cwd=ORCHESTRATOR_DIR, check=True)
+    subprocess.run([runtime, "task", "build"], cwd=KERNEL_DIR, check=True)
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def client():
     """Start RPC client, create sandbox, yield client, kill on teardown."""
     runtime = shutil.which("deno")
     assert runtime is not None, "Deno not found on PATH"
-    _ensure_orchestrator_build()
+    _ensure_kernel_build()
     server_args = ["run", "-A", "--no-check", "--unstable-sloppy-imports", SERVER_SCRIPT]
     c = RpcClient(runtime, server_args)
     c.start()

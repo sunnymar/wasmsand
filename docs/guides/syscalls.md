@@ -112,7 +112,7 @@ All syscalls use a shared JSON-over-linear-memory protocol:
 2. **Output**: Host writes JSON response to caller's output buffer at `(out_ptr, out_cap)`. Returns bytes written.
 3. **Buffer too small**: If the response exceeds `out_cap`, the syscall returns the required size. Caller should retry with a larger buffer.
 
-The `call_with_outbuf` helper in Rust (and equivalent in the orchestrator) handles the retry loop automatically.
+The `call_with_outbuf` helper in Rust (and equivalent in the kernel) handles the retry loop automatically.
 
 ## Python access
 
