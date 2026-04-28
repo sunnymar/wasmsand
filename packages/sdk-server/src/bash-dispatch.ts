@@ -1,6 +1,8 @@
 import type { RunCommandHandler, RunResponse } from '../../orchestrator/src/run-command.ts';
 import { bashBootImports } from './bash-host-imports.js';
 
+const RUN_COMMAND_METADATA_CAP = 1024 * 1024;
+
 interface ProcessLike {
   readonly memory: WebAssembly.Memory;
   readonly exports: Record<string, (...args: number[]) => unknown>;
@@ -57,24 +59,20 @@ export async function callRunCommand(
   const cmdPtr = alloc(cmdBytes.length);
   new Uint8Array(memory.buffer, cmdPtr, cmdBytes.length).set(cmdBytes);
 
-  let outCap = 4096;
-  let outPtr = alloc(outCap);
-  let written: number;
+  const outCap = RUN_COMMAND_METADATA_CAP;
+  const outPtr = alloc(outCap);
+  let decoded = '';
   try {
-    written = await proc.callExport('__run_command', cmdPtr, cmdBytes.length, outPtr, outCap);
+    const written = await proc.callExport('__run_command', cmdPtr, cmdBytes.length, outPtr, outCap);
     if (written > outCap) {
-      dealloc(outPtr, outCap);
-      outCap = written;
-      outPtr = alloc(outCap);
-      written = await proc.callExport('__run_command', cmdPtr, cmdBytes.length, outPtr, outCap);
+      throw new Error(`__run_command metadata exceeded ${outCap} bytes`);
     }
+    decoded = new TextDecoder().decode(new Uint8Array(memory.buffer, outPtr, written));
   } finally {
     proc.setStdin?.(undefined);
+    dealloc(cmdPtr, cmdBytes.length);
+    dealloc(outPtr, outCap);
   }
-
-  const decoded = new TextDecoder().decode(new Uint8Array(memory.buffer, outPtr, written));
-  dealloc(cmdPtr, cmdBytes.length);
-  dealloc(outPtr, outCap);
 
   let parsed: { exit_code?: number; execution_time_ms?: number; env?: Record<string, string> };
   try {

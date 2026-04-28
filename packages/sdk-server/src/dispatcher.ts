@@ -7,7 +7,6 @@
  */
 
 import { Buffer } from 'node:buffer';
-import { runCommand } from './bash-dispatch.js';
 
 /** Minimal interface for a sandbox, matching the methods we call. */
 export interface SandboxLike {
@@ -224,9 +223,7 @@ export class Dispatcher {
       return response;
     }
 
-    const result = typeof sb.process === 'function'
-      ? await runCommand(sb as Parameters<typeof runCommand>[0], command)
-      : await sb.run(command);
+    const result = await sb.run(command);
     const response: Record<string, unknown> = {
       exitCode: result.exitCode,
       stdout: result.stdout,

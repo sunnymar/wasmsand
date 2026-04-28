@@ -56,6 +56,23 @@ Deno.test('runCommand syncs host-set env into PID 1', async () => {
   }
 });
 
+Deno.test('runCommand does not re-execute commands when env metadata is large', async () => {
+  const sb = await Sandbox.create({
+    wasmDir: WASM_DIR,
+    adapter: new NodeAdapter(),
+    bootImports: (api) => bashBootImports(api),
+    runCommandHandler: makeRunCommandHandler(),
+  } as Parameters<typeof Sandbox.create>[0] & Record<string, unknown>);
+  try {
+    sb.setEnv('BIG', 'x'.repeat(5000));
+    const result = await runCommand(sb, 'echo hi >> /tmp/side');
+    assertEquals(result.exitCode, 0);
+    assertEquals(new TextDecoder().decode(sb.readFile('/tmp/side')), 'hi\n');
+  } finally {
+    sb.destroy();
+  }
+});
+
 Deno.test('forked sandbox preserves bash boot imports and run command handler', async () => {
   const sb = await Sandbox.create({
     wasmDir: WASM_DIR,

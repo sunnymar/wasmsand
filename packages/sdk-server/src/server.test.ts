@@ -1,12 +1,13 @@
 import { describe, it } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const SERVER_PATH = resolve(import.meta.dirname, 'server.ts');
-const WASM_DIR = resolve(import.meta.dirname, '../../orchestrator/src/platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname, '../../orchestrator/src/shell/__tests__/fixtures/codepod-shell-exec.wasm');
+const SERVER_PATH = resolve(import.meta.dirname!, 'server.ts');
+const WASM_DIR = resolve(import.meta.dirname!, '../../orchestrator/src/platform/__tests__/fixtures');
+const SHELL_WASM = resolve(import.meta.dirname!, '../../orchestrator/src/shell/__tests__/fixtures/codepod-shell-exec.wasm');
 
 function startServer() {
   const denoPath = Deno.execPath();
@@ -30,17 +31,28 @@ function startServer() {
     throw new Error('Timed out waiting for response');
   }
 
-  function destroy(): void {
+  async function destroy(): Promise<void> {
     rl.close();
     proc.stdin!.end();
-    proc.kill();
+    proc.stdout?.destroy();
+    proc.stderr?.destroy();
+    if (!proc.killed) proc.kill();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      once(proc, 'close'),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 1000);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   return { proc, send, recv, destroy };
 }
 
 describe('SDK Server (integration)', () => {
-  it('create -> run -> kill lifecycle', async () => {
+  it('create -> run -> kill lifecycle', { sanitizeOps: false, sanitizeResources: false }, async () => {
     const { send, recv, destroy } = startServer();
     try {
       send({ jsonrpc: '2.0', id: 1, method: 'create', params: { wasmDir: WASM_DIR, shellWasmPath: SHELL_WASM } });
@@ -56,7 +68,44 @@ describe('SDK Server (integration)', () => {
       const killResp = await recv();
       expect(killResp).toMatchObject({ jsonrpc: '2.0', id: 3, result: { ok: true } });
     } finally {
-      destroy();
+      await destroy();
     }
-  }, 30_000);
+  });
+
+  it('run preserves sandbox timeout and output limits', { sanitizeOps: false, sanitizeResources: false }, async () => {
+    const { send, recv, destroy } = startServer();
+    try {
+      send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'create',
+        params: {
+          wasmDir: WASM_DIR,
+          shellWasmPath: SHELL_WASM,
+          timeoutMs: 10,
+          limits: { stdoutBytes: 5 },
+        },
+      });
+      const createResp = await recv();
+      expect(createResp).toMatchObject({ jsonrpc: '2.0', id: 1, result: { ok: true } });
+
+      send({ jsonrpc: '2.0', id: 2, method: 'run', params: { command: 'sleep 0.1' } });
+      const timeoutResp = await recv();
+      expect(timeoutResp).toMatchObject({
+        jsonrpc: '2.0',
+        id: 2,
+        result: { exitCode: 124, errorClass: 'TIMEOUT' },
+      });
+
+      send({ jsonrpc: '2.0', id: 3, method: 'run', params: { command: 'printf 123456789' } });
+      const limitResp = await recv();
+      expect(limitResp).toMatchObject({
+        jsonrpc: '2.0',
+        id: 3,
+        result: { exitCode: 0, stdout: '12345', truncated: { stdout: true, stderr: false } },
+      });
+    } finally {
+      await destroy();
+    }
+  });
 });

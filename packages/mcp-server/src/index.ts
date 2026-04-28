@@ -29,7 +29,7 @@ import { Sandbox, SandboxPool } from '@codepod/sandbox';
 import type { NetworkPolicy } from '@codepod/sandbox';
 import { NodeAdapter, HostFsProvider } from '@codepod/sandbox/node';
 import { loadConfig } from './config.js';
-import { makeRunCommandHandler, runCommand } from './bash-dispatch.js';
+import { makeRunCommandHandler } from './bash-dispatch.js';
 import { bashBootImports } from './bash-host-imports.js';
 
 const __dirname = resolve(fileURLToPath(import.meta.url), '..');
@@ -284,7 +284,7 @@ async function main(): Promise<void> {
     async ({ sandbox_id, command }) => {
       try {
         const sandbox = getSandbox(sandbox_id);
-        const result = await runCommand(sandbox, command);
+        const result = await sandbox.run(command);
         return jsonResult({
           exit_code: result.exitCode,
           stdout: result.stdout,

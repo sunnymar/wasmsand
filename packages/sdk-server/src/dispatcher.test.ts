@@ -37,6 +37,10 @@ function createMockSandbox(): SandboxLike {
     exportState: mock(() => new TextEncoder().encode('snapshot-blob')),
     importState: mock((_blob: Uint8Array) => {}),
     mount: mock((_path: string, _files: Record<string, Uint8Array>) => {}),
+    process: mock((_pid: number) => ({
+      memory: new WebAssembly.Memory({ initial: 1 }),
+      exports: {},
+    })),
   };
 }
 
