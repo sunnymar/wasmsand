@@ -8,7 +8,7 @@ import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 import { resolve } from 'node:path';
 
-const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
+const WASM_DIR = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
 
 
 describe('history builtin', () => {
@@ -67,26 +67,6 @@ describe('history builtin', () => {
     expect(result.stderr).toContain('unknown subcommand');
   });
 
-  it('getHistory() returns entries via Sandbox API', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
-    await sandbox.run('echo hello');
-    await sandbox.run('echo world');
-    const entries = sandbox.getHistory();
-    expect(entries.length).toBe(2);
-    expect(entries[0].command).toBe('echo hello');
-    expect(entries[0].index).toBe(1);
-    expect(entries[1].command).toBe('echo world');
-    expect(entries[1].index).toBe(2);
-    expect(entries[0].timestamp).toBeGreaterThan(0);
-  });
-
-  it('clearHistory() clears entries via Sandbox API', async () => {
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
-    await sandbox.run('echo hello');
-    expect(sandbox.getHistory().length).toBe(1);
-    sandbox.clearHistory();
-    expect(sandbox.getHistory().length).toBe(0);
-  });
 });
 
 describe('cross-feature integration', () => {
@@ -137,7 +117,7 @@ describe('cross-feature integration', () => {
     expect(uptime2).toBeGreaterThan(uptime1);
   });
 
-  it('history tracks commands across different features', async () => {
+  it('history builtin tracks commands across different features', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
 
     // Run a mix of builtins and WASM commands
@@ -145,10 +125,10 @@ describe('cross-feature integration', () => {
     await sandbox.run('cat /proc/version');
     await sandbox.run('pwd');
 
-    const entries = sandbox.getHistory();
-    expect(entries.length).toBe(3);
-    expect(entries[0].command).toBe('echo hello');
-    expect(entries[1].command).toBe('cat /proc/version');
-    expect(entries[2].command).toBe('pwd');
+    const result = await sandbox.run('history list');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('  1  echo hello');
+    expect(result.stdout).toContain('  2  cat /proc/version');
+    expect(result.stdout).toContain('  3  pwd');
   });
 });

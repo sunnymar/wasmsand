@@ -26,7 +26,6 @@ export interface StorageCallbacks {
   load: (sandboxId: string) => Promise<Uint8Array>;
 }
 import type { RunResult } from './shell/shell-types.js';
-import type { HistoryEntry } from './shell/history.js';
 import type { PlatformAdapter } from './platform/adapter.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
@@ -889,18 +888,6 @@ export class Sandbox {
   setEnvMap(env: Map<string, string>): void {
     this.assertAlive();
     this.runner.setEnvMap(env);
-  }
-
-  /** Return the command history entries. */
-  getHistory(): HistoryEntry[] {
-    this.assertAlive();
-    return this.runner.getHistory();
-  }
-
-  /** Clear the command history. */
-  clearHistory(): void {
-    this.assertAlive();
-    this.runner.clearHistory();
   }
 
   snapshot(): string {
