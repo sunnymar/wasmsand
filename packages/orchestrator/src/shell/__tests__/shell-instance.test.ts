@@ -2,17 +2,17 @@ import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 
-import { ShellInstance } from '../shell-instance.js';
+import { ResidentBashRunner } from '../../resident-bash-runner.js';
 import { ProcessManager } from '../../process/manager.js';
 import { VFS } from '../../vfs/vfs.js';
 import { NodeAdapter } from '../../platform/node-adapter.js';
 
 const SHELL_EXEC_WASM = resolve(
-  import.meta.dirname,
-  'fixtures/codepod-shell-exec.wasm',
+  import.meta.dirname!,
+  '../../platform/__tests__/fixtures/codepod-shell-exec.wasm',
 );
 
-describe('ShellInstance', () => {
+describe('ResidentBashRunner', () => {
   let vfs: VFS;
   let mgr: ProcessManager;
   let adapter: NodeAdapter;
@@ -24,7 +24,7 @@ describe('ShellInstance', () => {
   });
 
   it('runs a simple command and returns result', async () => {
-    const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    const shell = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd, args) => {
         if (cmd === 'echo-args') {
           return { exit_code: 0, stdout: args.join(' ') + '\n', stderr: '' };
@@ -40,7 +40,7 @@ describe('ShellInstance', () => {
   });
 
   it('returns non-zero exit code for unknown commands', async () => {
-    const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    const shell = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd) => {
         return { exit_code: 127, stdout: '', stderr: `${cmd}: not found\n` };
       },
@@ -52,7 +52,7 @@ describe('ShellInstance', () => {
   });
 
   it('preserves state between commands', async () => {
-    const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    const shell = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd) => {
         if (cmd === 'true-cmd') return { exit_code: 0, stdout: '', stderr: '' };
         if (cmd === 'false-cmd') return { exit_code: 1, stdout: '', stderr: '' };
@@ -68,7 +68,7 @@ describe('ShellInstance', () => {
   });
 
   it('syncSpawn errors appear in stderr', async () => {
-    const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    const shell = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd) => {
         // Simulate V8 >8MB sync instantiation error
         return {
@@ -85,7 +85,7 @@ describe('ShellInstance', () => {
   });
 
   it('handles commands with multiple arguments', async () => {
-    const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    const shell = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd, args) => {
         return {
           exit_code: 0,

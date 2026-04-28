@@ -1,5 +1,5 @@
 /**
- * Integration tests for real coreutils wasm binaries running through the ShellInstance.
+ * Integration tests for real coreutils wasm binaries running through the ResidentBashRunner.
  *
  * These tests exercise the full stack: shell WASM executor → ProcessManager → WASI host → coreutils wasm.
  */
@@ -7,13 +7,13 @@ import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 
-import { ShellInstance } from '../shell-instance.js';
+import { ResidentBashRunner } from '../../resident-bash-runner.js';
 import { ProcessManager } from '../../process/manager.js';
 import { VFS } from '../../vfs/vfs.js';
 import { NodeAdapter } from '../../platform/node-adapter.js';
 
-const FIXTURES = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
-const SHELL_EXEC_WASM = resolve(import.meta.dirname, 'fixtures/codepod-shell-exec.wasm');
+const FIXTURES = resolve(import.meta.dirname!, '../../platform/__tests__/fixtures');
+const SHELL_EXEC_WASM = resolve(import.meta.dirname!, '../../platform/__tests__/fixtures/codepod-shell-exec.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
@@ -47,7 +47,7 @@ function wasmName(tool: string): string {
 
 describe('Coreutils Integration', () => {
   let vfs: VFS;
-  let runner: ShellInstance;
+  let runner: ResidentBashRunner;
 
   beforeEach(async () => {
     vfs = new VFS();
@@ -60,7 +60,7 @@ describe('Coreutils Integration', () => {
     mgr.registerTool('python3', resolve(FIXTURES, 'python3.wasm'));
 
     await mgr.preloadModules();
-    runner = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    runner = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd, args, env, stdin, cwd) => mgr.spawnSync(cmd, args, env, stdin, cwd),
     });
   });
@@ -444,7 +444,7 @@ describe('Coreutils Integration', () => {
   });
 
   describe('cwd and path resolution', () => {
-    let cwdRunner: ShellInstance;
+    let cwdRunner: ResidentBashRunner;
 
     beforeEach(async () => {
       // Create a runner with PWD set to /home/user
@@ -455,7 +455,7 @@ describe('Coreutils Integration', () => {
       }
       mgr.registerTool('python3', resolve(FIXTURES, 'python3.wasm'));
       await mgr.preloadModules();
-      cwdRunner = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+      cwdRunner = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
         syncSpawn: (cmd, args, env, stdin, cwd) => mgr.spawnSync(cmd, args, env, stdin, cwd),
       });
       cwdRunner.setEnv('PWD', '/home/user');
@@ -817,7 +817,7 @@ describe('Coreutils Integration', () => {
         mgr.registerTool(tool, resolve(FIXTURES, wasmName(tool)));
       }
       await mgr.preloadModules();
-      const cwdGlobRunner = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+      const cwdGlobRunner = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
         syncSpawn: (cmd, args, env, stdin, cwd) => mgr.spawnSync(cmd, args, env, stdin, cwd),
       });
       cwdGlobRunner.setEnv('PWD', '/home/user');

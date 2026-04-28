@@ -5,13 +5,13 @@ import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 
-import { ShellInstance } from '../../shell-instance.js';
+import { ResidentBashRunner } from '../../../resident-bash-runner.js';
 import { ProcessManager } from '../../../process/manager.js';
 import { VFS } from '../../../vfs/vfs.js';
 import { NodeAdapter } from '../../../platform/node-adapter.js';
 
-const FIXTURES = resolve(import.meta.dirname, '../../../platform/__tests__/fixtures');
-const SHELL_EXEC_WASM = resolve(import.meta.dirname, '../fixtures/codepod-shell-exec.wasm');
+const FIXTURES = resolve(import.meta.dirname!, '../../../platform/__tests__/fixtures');
+const SHELL_EXEC_WASM = resolve(import.meta.dirname!, '../../../platform/__tests__/fixtures/codepod-shell-exec.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
@@ -43,7 +43,7 @@ function wasmName(tool: string): string {
 
 describe('grep conformance', () => {
   let vfs: VFS;
-  let runner: ShellInstance;
+  let runner: ResidentBashRunner;
 
   beforeEach(async () => {
     vfs = new VFS();
@@ -53,7 +53,7 @@ describe('grep conformance', () => {
       mgr.registerTool(tool, resolve(FIXTURES, wasmName(tool)));
     }
     await mgr.preloadModules();
-    runner = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
+    runner = await ResidentBashRunner.create(vfs, mgr, adapter, SHELL_EXEC_WASM, {
       syncSpawn: (cmd, args, env, stdin, cwd) => mgr.spawnSync(cmd, args, env, stdin, cwd),
     });
 
