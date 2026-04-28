@@ -15,7 +15,7 @@ import { VfsError } from '../vfs/inode.js';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
 
-const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
+const WASM_DIR = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
 
 
 describe('DevProvider (/dev)', () => {
@@ -206,7 +206,7 @@ describe('ProcProvider (/proc)', () => {
   // Per-PID /proc entries — populated from a callback so that newly-
   // spawned processes appear without a registration step.  These tests
   // wire a fake list directly on the VFS to keep them independent of
-  // ShellInstance / ProcessKernel; the integration is covered through
+  // the process runtime; the integration is covered through
   // Sandbox.run() in guest-compat.test.ts.
   // ──────────────────────────────────────────────────────────────────────
   describe('per-PID /proc entries', () => {

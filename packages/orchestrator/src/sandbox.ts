@@ -353,9 +353,8 @@ export class Sandbox {
     await mgr.preloadModules();
 
     // Install the shell wasm into the sandbox VFS at /bin/bash so it is
-    // reachable by path. Future PRs will pass `bootArgv: ["/bin/bash"]` to
-    // spawn it; today's ShellInstance still loads from shellExecWasmPath
-    // directly. Both reads see the same bytes (host filesystem source).
+    // reachable by path. PID 1 now boots from that VFS path; shellExecWasmPath
+    // remains the host-side source of the bytes.
     const shellWasmBytes = await adapter.readBytes(shellExecWasmPath);
     vfs.withWriteAccess(() => {
       vfs.mkdirp('/bin');
