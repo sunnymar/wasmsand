@@ -2,13 +2,12 @@
 set -euo pipefail
 
 FIXTURES="../../packages/orchestrator/src/platform/__tests__/fixtures"
-SHELL_FIXTURES="../../packages/orchestrator/src/shell/__tests__/fixtures"
 OUT="public/wasm"
 
 mkdir -p "$OUT"
 
 # Shell executor (Rust WASM)
-cp "$SHELL_FIXTURES/codepod-shell-exec.wasm" "$OUT/"
+cp "$FIXTURES/codepod-shell-exec.wasm" "$OUT/"
 
 # All coreutils + python
 cp "$FIXTURES"/*.wasm "$OUT/"

@@ -7,12 +7,11 @@ TARGET="${1:?Usage: copy-wasm.sh <target-dir>}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURES="$ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
-SHELL_FIXTURES="$ROOT/packages/orchestrator/src/shell/__tests__/fixtures"
 
 mkdir -p "$TARGET"
 
 # Shell executor
-cp "$SHELL_FIXTURES/codepod-shell-exec.wasm" "$TARGET/"
+cp "$FIXTURES/codepod-shell-exec.wasm" "$TARGET/"
 
 # All coreutils + python
 cp "$FIXTURES"/*.wasm "$TARGET/"
