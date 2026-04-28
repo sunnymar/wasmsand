@@ -513,11 +513,14 @@ export class WasiHost {
     // for the reader to run on the JS event loop — `yes | head -3`
     // would deadlock the moment the pipe filled up.
     //
-    // Returning Promise<number> here is fine on every scheduler
-    // path: under JSPI the Suspending-wrapped fd_write suspends the
-    // wasm stack until the Promise resolves; under Asyncify the
-    // bridge.wrapImport detects the Promise and triggers an unwind.
+    // Returning Promise<number> here is fine under JSPI: the
+    // Suspending-wrapped fd_write suspends the wasm stack until the
+    // Promise resolves. Without JSPI, many child tools are still plain
+    // wasm and cannot unwind here, so use the synchronous pipe path.
     if (target && target.type === 'pipe_write') {
+      if (typeof WebAssembly.Suspending !== 'function') {
+        return this.fdWritePipeSync(target, iovecs, bytes, nwrittenPtr);
+      }
       return this.fdWritePipe(target, iovecs, bytes, nwrittenPtr);
     }
 
@@ -621,6 +624,29 @@ export class WasiHost {
         totalWritten += n;
         chunk = chunk.subarray(n);
       }
+    }
+    const viewAfter = this.getView();
+    viewAfter.setUint32(nwrittenPtr, totalWritten, true);
+    return WASI_ESUCCESS;
+  }
+
+  private fdWritePipeSync(
+    target: Extract<import('./fd-target.js').FdTarget, { type: 'pipe_write' }>,
+    iovecs: Array<{ buf: number; len: number }>,
+    initialBytes: Uint8Array,
+    nwrittenPtr: number,
+  ): number {
+    let totalWritten = 0;
+    for (const iov of iovecs) {
+      const data = initialBytes.slice(iov.buf, iov.buf + iov.len);
+      const n = target.pipe.write(data);
+      if (n === -1) {
+        const viewAfter = this.getView();
+        viewAfter.setUint32(nwrittenPtr, totalWritten, true);
+        return WASI_EPIPE;
+      }
+      totalWritten += n;
+      if (n < data.byteLength) break;
     }
     const viewAfter = this.getView();
     viewAfter.setUint32(nwrittenPtr, totalWritten, true);

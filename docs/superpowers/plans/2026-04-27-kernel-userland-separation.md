@@ -81,7 +81,7 @@ This plan touches the following files. Each PR section below specifies which sub
 Create `packages/orchestrator/src/__tests__/bin-bash-install.test.ts`:
 
 ```ts
-import { assertEquals, assert } from 'jsr:@std/assert';
+import { assertEquals, assert } from 'jsr:@std/assert@^1.0.19';
 import { Sandbox } from '../sandbox.ts';
 
 // `wasmDir` is required by SandboxOptions today (sandbox.ts:55-126).
@@ -274,7 +274,7 @@ EOF
 Create `packages/orchestrator/src/process/__tests__/handle.test.ts`:
 
 ```ts
-import { assertEquals, assert, assertRejects } from 'jsr:@std/assert';
+import { assertEquals, assert, assertRejects } from 'jsr:@std/assert@^1.0.19';
 import { Process, type ProcessMode } from '../handle.ts';
 
 Deno.test('Process exposes pid, mode, and exitCode', () => {
@@ -536,29 +536,81 @@ git commit -m "test(kernel): assert Process.callExport FIFO serialization"
 Create `packages/orchestrator/src/process/__tests__/loader.test.ts`:
 
 ```ts
-import { assertEquals, assert } from 'jsr:@std/assert';
+import { assertEquals, assert } from 'jsr:@std/assert@^1.0.19';
+import { resolve } from 'node:path';
 import { loadProcess } from '../loader.ts';
-import { Sandbox } from '../../sandbox.ts';
+import { VFS } from '../../vfs/vfs.ts';
+import { NodeAdapter } from '../../platform/node-adapter.ts';
+import { ProcessKernel, NO_PARENT_PID } from '../kernel.ts';
+import { WasiHost } from '../../wasi/wasi-host.ts';
+import { createKernelImports } from '../../host-imports/kernel-imports.ts';
+import { createBufferTarget, createNullTarget, bufferToString, type FdTarget } from '../../wasi/fd-target.ts';
 
-Deno.test('loadProcess instantiates a wasm at a VFS path and returns a Process', async () => {
-  const sb = await Sandbox.create({ wasmDir: WASM_DIR });
-  try {
-    // /bin/bash exists post-PR1.
-    const proc = await loadProcess(sb, {
-      argv: ['/bin/bash'],
-      mode: 'resident',
-    });
-    assertEquals(proc.mode, 'resident');
-    assert(proc.pid > 0);
-    // Should expose __run_command on a resident bash.
-    assert(
-      typeof proc.callExport === 'function',
-      'callExport should be available',
-    );
-    await proc.terminate();
-  } finally {
-    await sb.destroy();
-  }
+const WASM_DIR = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
+
+async function makeLoaderContext() {
+  const vfs = new VFS();
+  const adapter = new NodeAdapter();
+  const kernel = new ProcessKernel();
+  const bytes = await adapter.readBytes(`${WASM_DIR}/true-cmd.wasm`);
+
+  vfs.withWriteAccess(() => {
+    vfs.mkdirp('/bin');
+    vfs.writeFile('/bin/true', bytes);
+    vfs.chmod('/bin/true', 0o755);
+  });
+
+  return {
+    vfs,
+    adapter,
+    kernel,
+    allocatePid: (argv: string[]) => kernel.allocPid(NO_PARENT_PID, argv[0]),
+    releasePid: (pid: number, exitCode: number) => kernel.releaseProcess(pid, exitCode),
+    buildWasiHost: (pid: number, argv: string[], env: Record<string, string>, cwd: string) => {
+      assertEquals(cwd, '/');
+      const ioFds = new Map<number, FdTarget>();
+      ioFds.set(0, kernel.getFdTarget(pid, 0)!);
+      ioFds.set(1, kernel.getFdTarget(pid, 1)!);
+      ioFds.set(2, kernel.getFdTarget(pid, 2)!);
+      return new WasiHost({
+        vfs,
+        args: argv,
+        env,
+        preopens: { '/': '/' },
+        ioFds,
+        pid,
+      });
+    },
+    buildKernelImports: (pid: number, memory: WebAssembly.Memory, wasiHost: WasiHost) =>
+      createKernelImports({
+        memory,
+        callerPid: pid,
+        kernel,
+        wasiHost,
+      }),
+    makeFdReadAndClear: (pid: number) => (fd: 1 | 2) => {
+      const target = kernel.getFdTarget(pid, fd);
+      if (!target || target.type !== 'buffer') return { data: '', truncated: false };
+      const data = bufferToString(target);
+      const truncated = !!target.truncated;
+      target.buf.length = 0;
+      target.total = 0;
+      target.truncated = false;
+      return { data, truncated };
+    },
+  };
+}
+
+Deno.test('loadProcess instantiates a CLI wasm at a VFS path and returns a Process', async () => {
+  const ctx = await makeLoaderContext();
+  const proc = await loadProcess(ctx, {
+    argv: ['/bin/true'],
+    mode: 'cli',
+  });
+
+  assertEquals(proc.mode, 'cli');
+  assert(proc.pid > 0);
+  assertEquals(proc.exitCode, 0);
 });
 ```
 
@@ -568,7 +620,7 @@ Deno.test('loadProcess instantiates a wasm at a VFS path and returns a Process',
 deno test -A --no-check packages/orchestrator/src/process/__tests__/loader.test.ts
 ```
 
-Expected: FAIL — `loader.ts` does not exist.
+Expected: FAIL — `loader.ts` does not exist. If it instead fails on `kernel.releaseProcess`, that is still the intended RED state: the loader task also adds that `ProcessKernel` lifecycle helper.
 
 - [ ] **Step 3: Implement `loader.ts`**
 
@@ -592,10 +644,9 @@ Create `packages/orchestrator/src/process/loader.ts`:
 import { Process, type ProcessMode } from './handle.ts';
 import type { PlatformAdapter } from '../platform/adapter.ts';
 import type { VfsLike } from '../vfs/vfs-like.ts';
-import type { ProcessManager } from './manager.ts';
 import type { ProcessKernel } from './kernel.ts';
 import { WasiHost } from '../wasi/wasi-host.ts';
-import { createNullTarget, createBufferTarget, bufferToString } from '../wasi/fd-target.ts';
+import { createNullTarget, createBufferTarget } from '../wasi/fd-target.ts';
 
 /**
  * Narrow context passed in by the Sandbox. The loader does not import
@@ -607,21 +658,24 @@ import { createNullTarget, createBufferTarget, bufferToString } from '../wasi/fd
 export interface LoaderContext {
   vfs: VfsLike;
   adapter: PlatformAdapter;
-  processManager: ProcessManager;
   /** Sandbox-owned ProcessKernel — fd-buffer registry shared across all
    *  processes in this sandbox. Loader uses it to initialize fd 0/1/2
    *  buffers for each new process and reads them for fdReadAndClear. */
   kernel: ProcessKernel;
-  /** Build a fresh WasiHost for this pid. Each process gets its own;
-   *  see today's pattern in ProcessManager.spawn (manager.ts:185) and
-   *  ShellInstance.create (shell-instance.ts:163). */
-  buildWasiHost(pid: number): WasiHost;
-  /** Build the kernel's standard codepod::host_* imports for this pid. */
-  buildKernelImports(pid: number): Record<string, WebAssembly.ImportValue>;
-  /** Bind the freshly-instantiated process's memory so import handlers
-   *  can read/write its linear memory. (Late-bound by the kernel's
-   *  memoryRef proxy used inside kernel-imports.) */
-  bindMemoryForProcess(pid: number, memory: WebAssembly.Memory): void;
+  /** Allocate a pid in the sandbox-owned ProcessKernel. */
+  allocatePid(argv: string[]): number;
+  /** Mark a process exited and close its fd table. */
+  releasePid(pid: number, exitCode: number): void;
+  /** Build a fresh WasiHost for this pid. Each process gets its own. */
+  buildWasiHost(pid: number, argv: string[], env: Record<string, string>, cwd: string): WasiHost;
+  /** Build the kernel's standard codepod::host_* imports for this pid.
+   *  The loader provides the process memory after instantiation by way of
+   *  a late-bound memory proxy, mirroring today's ShellInstance pattern. */
+  buildKernelImports(
+    pid: number,
+    memory: WebAssembly.Memory,
+    wasiHost: WasiHost,
+  ): Record<string, WebAssembly.ImportValue>;
   /** Build a read-and-clear closure over the kernel buffers for this pid's
    *  stdout/stderr. Called once per process; the returned function is
    *  bound to `Process.fdReadAndClear`. */
@@ -637,9 +691,14 @@ export interface LoadProcessOptions {
    * Additional codepod imports to merge alongside the kernel's standard set.
    * Used by host servers (post-PR4) to supply userland-specific imports
    * (e.g., bash-host's host_stat, host_register_tool). The kernel ignores
-   * the names; it just merges them into the import object.
+   * the names; it just merges them into the import object. The factory
+   * form is intentional: bash imports need the same late-bound memory proxy
+   * as kernel imports, so a static import bag is not enough.
    */
-  extraCodepodImports?: Record<string, WebAssembly.ImportValue>;
+  extraCodepodImports?: (
+    memory: WebAssembly.Memory,
+    wasiHost: WasiHost,
+  ) => Record<string, WebAssembly.ImportValue>;
 }
 
 export async function loadProcess(
@@ -656,12 +715,11 @@ export async function loadProcess(
     throw new Error(`loadProcess: ${path} is not a wasm binary`);
   }
 
-  const module = await ctx.adapter.compile(bytes);
+  const module = await WebAssembly.compile(bytes as BufferSource);
 
-  // Allocate a pid in the ProcessManager.
-  const pid = ctx.processManager.allocatePid({
-    argv, env: opts.env ?? {}, cwd: opts.cwd ?? '/',
-  });
+  const env = opts.env ?? {};
+  const cwd = opts.cwd ?? '/';
+  const pid = ctx.allocatePid(argv);
 
   // Initialize fd 0/1/2 in the sandbox's ProcessKernel so the new
   // process has stdin/stdout/stderr targets. Stdin is null by default
@@ -678,12 +736,22 @@ export async function loadProcess(
   // Build imports: WASI + standard kernel codepod imports + caller extras.
   // Each process gets its own WasiHost (matching today's per-process
   // construction pattern in ProcessManager.spawn).
-  const wasi = ctx.buildWasiHost(pid);
+  const wasi = ctx.buildWasiHost(pid, argv, env, cwd);
   const wasiImports = wasi.getImports().wasi_snapshot_preview1;
-  const kernelImports = ctx.buildKernelImports(pid);
+
+  let memoryRef: WebAssembly.Memory | null = null;
+  const memoryProxy = new Proxy({} as WebAssembly.Memory, {
+    get(_target, prop) {
+      if (!memoryRef) throw new Error('memory not initialized');
+      const val = (memoryRef as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof val === 'function' ? (val as Function).bind(memoryRef) : val;
+    },
+  });
+
+  const kernelImports = ctx.buildKernelImports(pid, memoryProxy, wasi);
   const codepodImports: Record<string, WebAssembly.ImportValue> = {
     ...kernelImports,
-    ...(opts.extraCodepodImports ?? {}),
+    ...(opts.extraCodepodImports?.(memoryProxy, wasi) ?? {}),
   };
 
   const imports: WebAssembly.Imports = {
@@ -696,8 +764,7 @@ export async function loadProcess(
   // Wire memory back into the imports so they can read/write the linear
   // memory of the freshly-instantiated process. Bind it on the Process
   // too so callers (bash-dispatch) can reach it via `proc.memory`.
-  const memoryRef = instance.exports.memory as WebAssembly.Memory;
-  ctx.bindMemoryForProcess(pid, memoryRef);
+  memoryRef = instance.exports.memory as WebAssembly.Memory;
   proc.__setMemory(memoryRef);
 
   // Bind the fd-read-and-clear helper. Stdout/stderr from __run_command
@@ -719,74 +786,84 @@ export async function loadProcess(
   }
   proc.__setExports({ exports: wrappedExports });
 
-  // Run _start. Resident mode catches proc_exit(0) as init-complete; CLI
-  // mode lets it propagate as terminal exit.
-  const start = instance.exports._start as (() => void) | undefined;
-  if (start) {
-    try {
-      start();
-    } catch (e: unknown) {
-      const isExit0 = e instanceof Error && e.message === 'proc_exit(0)';
-      if (mode === 'resident' && isExit0) {
-        // ok — init complete
-      } else if (mode === 'cli' && isExit0) {
-        proc.exitCode = 0;
-      } else {
-        throw e;
-      }
-    }
-  }
+  const exitCode = wasi.start(instance);
+  if (mode === 'cli') proc.exitCode = exitCode;
 
   // Wire termination. Resident: drop the instance + free pid. CLI: same
   // (since _start already returned, this is just bookkeeping).
   proc.__setTerminate(async () => {
-    ctx.processManager.releasePid(pid);
+    ctx.releasePid(pid, proc.exitCode ?? 0);
   });
 
   return proc;
 }
 ```
 
-- [ ] **Step 4: Add a private `loaderContext()` method on Sandbox**
+- [ ] **Step 4: Add `ProcessKernel.releaseProcess()` and a private `loaderContext()` method on Sandbox**
 
-Modify `packages/orchestrator/src/sandbox.ts` — keep `vfs`, `adapter`, `processManager`, `wasi` as **private** fields. Expose them only via a single private factory method that returns a `LoaderContext`:
+Modify `packages/orchestrator/src/process/kernel.ts`:
 
 ```ts
-// In Sandbox class — fields stay private:
-private readonly vfs: VFS;
-private readonly adapter: PlatformAdapter;
-private readonly processManager: ProcessManager;
-private readonly wasi: WasiHost;
+  /** Mark a process exited and close its fd table. Used by resident-process termination. */
+  releaseProcess(pid: number, exitCode: number = 0): void {
+    const entry = this.processTable.get(pid);
+    if (entry) {
+      entry.state = 'exited';
+      entry.exitCode = exitCode;
+      entry.promise = Promise.resolve();
+      entry.wasiHost = null;
+      this.cleanupFds(pid);
+      for (const waiter of entry.waiters) waiter(exitCode);
+      entry.waiters.length = 0;
+      return;
+    }
+    this.registerExited(pid, exitCode);
+  }
+```
 
-// Sandbox now owns one ProcessKernel for the whole sandbox lifetime
-// (initialized in the Sandbox constructor: `this.kernel = new ProcessKernel()`).
-// Initial fd-target setup for PID 1 happens in `bootPid1` before
-// `loadProcess` runs; spawned children get their fd targets initialized
-// inside loadProcess itself.
+Modify `packages/orchestrator/src/sandbox.ts` — keep `vfs`, `adapter`, `mgr`, and the new sandbox-owned `kernel` as **private** fields. Expose them only via a single private factory method that returns a `LoaderContext`:
+
+```ts
+import { ProcessKernel, NO_PARENT_PID } from './process/kernel.ts';
+import type { LoaderContext } from './process/loader.ts';
+import { WasiHost } from './wasi/wasi-host.ts';
+import { createKernelImports } from './host-imports/kernel-imports.ts';
+import { createBufferTarget, createNullTarget, bufferToString, type FdTarget } from './wasi/fd-target.ts';
+
+// In Sandbox class — fields stay private:
+private kernel: ProcessKernel;
 
 private loaderContext(): LoaderContext {
   return {
     vfs: this.vfs,
     adapter: this.adapter,
-    processManager: this.processManager,
     kernel: this.kernel,
-    buildWasiHost: (pid) => new WasiHost({
-      vfs: this.vfs,
+    allocatePid: (argv) => this.kernel.allocPid(NO_PARENT_PID, argv[0]),
+    releasePid: (pid, exitCode) => this.kernel.releaseProcess(pid, exitCode),
+    buildWasiHost: (pid, argv, env, cwd) => {
+      const ioFds = new Map<number, FdTarget>();
+      ioFds.set(0, this.kernel.getFdTarget(pid, 0) ?? createNullTarget());
+      ioFds.set(1, this.kernel.getFdTarget(pid, 1) ?? createBufferTarget());
+      ioFds.set(2, this.kernel.getFdTarget(pid, 2) ?? createBufferTarget());
+      return new WasiHost({
+        vfs: this.vfs,
+        args: argv,
+        env,
+        preopens: { [cwd]: cwd },
+        ioFds,
+        pid,
+      });
+    },
+    buildKernelImports: (pid, memory, wasiHost) => createKernelImports({
+      memory,
+      callerPid: pid,
       kernel: this.kernel,
-      pid,
+      networkBridge: this.bridge ?? undefined,
+      extensionRegistry: this.extensionRegistry ?? undefined,
+      nativeModules: this.mgr.nativeModules,
+      wasiHost,
+      // runCommand is added in PR4 Task 4.1; do not include it in PR2.
     }),
-    buildKernelImports: (pid) => createKernelImports({
-      vfs: this.vfs,
-      processManager: this.processManager,
-      kernel: this.kernel,
-      pid,
-      networkBridge: this.networkBridge,
-      extensionRegistry: this.extensionRegistry,
-      threadsBackend: this.threadsBackend,
-      // runCommandHandler is added in PR4 Task 4.1 — do not include in PR2.
-    }),
-    bindMemoryForProcess: (pid, memory) =>
-      this.processManager.setMemoryRef(pid, memory),
     makeFdReadAndClear: (pid) => (fd) => {
       // Stdout/stderr buffers live in the sandbox's ProcessKernel (the
       // existing class at packages/orchestrator/src/process/kernel.ts).
@@ -806,9 +883,7 @@ private loaderContext(): LoaderContext {
 }
 ```
 
-`Sandbox.create` and `Sandbox.fork` call `loadProcess(this.loaderContext(), opts)`. The loader sees only the narrow interface; the rest of `Sandbox` stays sealed.
-
-If `ProcessManager.allocatePid` / `releasePid` / `setMemoryRef` aren't already public, expose them on `ProcessManager` (it's a kernel-internal class — its own surface can grow without crossing the boundary). If they require additional work (e.g., the existing manager doesn't have an `allocatePid` separate from `spawn`), read `manager.ts` to identify the closest existing methods and adapt the loader to call them; the surface change should land on `ProcessManager`, not on `Sandbox`.
+`Sandbox.create` does not call `loadProcess` yet in Task 2.3; that happens atomically with the ShellInstance wrapper in Task 2.4. The loader sees only the narrow interface; the rest of `Sandbox` stays sealed.
 
 - [ ] **Step 5: Run the loader test to verify it passes**
 
@@ -816,7 +891,7 @@ If `ProcessManager.allocatePid` / `releasePid` / `setMemoryRef` aren't already p
 deno test -A --no-check packages/orchestrator/src/process/__tests__/loader.test.ts
 ```
 
-Expected: PASS — loader instantiates `/bin/bash`, returns a resident `Process` with `__run_command` available.
+Expected: PASS — loader instantiates `/bin/true` from VFS, runs CLI mode to completion, and returns a `Process` with `exitCode === 0`.
 
 - [ ] **Step 6: Run the full unit-test suite**
 
@@ -829,7 +904,7 @@ Expected: all green.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add packages/orchestrator/src/process/loader.ts packages/orchestrator/src/process/__tests__/loader.test.ts packages/orchestrator/src/sandbox.ts
+git add packages/orchestrator/src/process/loader.ts packages/orchestrator/src/process/__tests__/loader.test.ts packages/orchestrator/src/process/kernel.ts packages/orchestrator/src/sandbox.ts
 git commit -m "feat(kernel): add generic process loader (instantiate + JSPI + resident mode)"
 ```
 
@@ -847,11 +922,15 @@ git commit -m "feat(kernel): add generic process loader (instantiate + JSPI + re
 Create `packages/orchestrator/src/__tests__/sandbox-bootArgv.test.ts`:
 
 ```ts
-import { assertEquals, assert } from 'jsr:@std/assert';
+import { assertEquals, assert } from 'jsr:@std/assert@^1.0.19';
+import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.ts';
+import { NodeAdapter } from '../platform/node-adapter.ts';
+
+const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
 
 Deno.test('Sandbox.create accepts bootArgv and exposes sandbox.process(1)', async () => {
-  const sb = await Sandbox.create({ bootArgv: ['/bin/bash'] });
+  const sb = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), bootArgv: ['/bin/bash'] });
   try {
     const p = sb.process(1);
     assert(p, 'sandbox.process(1) should return a Process');
@@ -866,7 +945,7 @@ Deno.test('Sandbox.create accepts bootArgv and exposes sandbox.process(1)', asyn
 
 Deno.test('Sandbox.create defaults bootArgv to /bin/bash for compat', async () => {
   // No bootArgv supplied — should still work using the existing default.
-  const sb = await Sandbox.create({ wasmDir: WASM_DIR });
+  const sb = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
   try {
     const p = sb.process(1);
     assert(p, 'PID 1 should exist with default bootArgv');
@@ -880,7 +959,7 @@ Deno.test('Sandbox creates exactly one bash instance for PID 1', async () => {
   // generic loader produce a single Process. We check that
   // sb.process(1) and the underlying ShellInstance.process refer to the
   // same Process object identity.
-  const sb = await Sandbox.create({ bootArgv: ['/bin/bash'] });
+  const sb = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), bootArgv: ['/bin/bash'] });
   try {
     const procFromSandbox = sb.process(1)!;
     // Internal accessor exposed on the kernel package for test purposes:
@@ -926,9 +1005,9 @@ static async create(
   const proc = await loadProcess(loaderCtx, {
     argv: ['/bin/bash'],
     mode: 'resident',
-    extraCodepodImports: {
+    extraCodepodImports: () => ({
       host_run_command: shellHostRunCommand,
-    },
+    }),
   });
 
   return new ShellInstance(proc);
@@ -1061,13 +1140,15 @@ git commit -m "feat(kernel): ShellInstance uses generic loader; sandbox.process(
 Create `packages/orchestrator/src/__tests__/sandbox-spawn.test.ts`:
 
 ```ts
-import { assertEquals, assert } from 'jsr:@std/assert';
+import { assertEquals, assert } from 'jsr:@std/assert@^1.0.19';
+import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.ts';
+import { NodeAdapter } from '../platform/node-adapter.ts';
 
-const WASM_DIR = Deno.env.get('CODEPOD_TEST_WASM_DIR') ?? './dist';
+const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
 
 Deno.test('sandbox.spawn returns a Process with the requested mode', async () => {
-  const sb = await Sandbox.create({ wasmDir: WASM_DIR });
+  const sb = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
   try {
     const child = await sb.spawn(['/bin/bash'], { mode: 'resident' });
     assertEquals(child.mode, 'resident');
@@ -1079,7 +1160,7 @@ Deno.test('sandbox.spawn returns a Process with the requested mode', async () =>
 });
 
 Deno.test('sandbox.spawn with mode:cli runs _start to completion', async () => {
-  const sb = await Sandbox.create({ wasmDir: WASM_DIR });
+  const sb = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
   try {
     // /bin/bash's main() is a no-op (see packages/shell-exec/src/main.rs);
     // CLI mode therefore runs _start, treats proc_exit(0) as terminal exit,
@@ -1108,35 +1189,34 @@ In `packages/orchestrator/src/sandbox.ts`:
 ```ts
 import { loadProcess } from './process/loader.ts';
 import type { Process, ProcessMode } from './process/handle.ts';
+import type { LoadProcessOptions } from './process/loader.ts';
 
 export interface SandboxSpawnOptions {
   mode: ProcessMode;
   env?: Record<string, string>;
   cwd?: string;
-  /** Optional userland imports for the spawned process (same shape as
-   *  Sandbox.create's bootImports). Required when spawning a fresh bash
-   *  for host_run_command — the spawned bash needs host_stat /
-   *  host_register_tool / etc. Empty by default; non-bash userland
-   *  binaries (CPython, busybox) typically don't need any. */
-  bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
+  /** Optional low-level import factory for tests and PR4's bash-host wiring.
+   *  PR4 replaces host callers with the public bootImports/KernelApi shape;
+   *  PR2 only passes this through to the generic loader. */
+  extraCodepodImports?: LoadProcessOptions['extraCodepodImports'];
 }
 
 class Sandbox {
   // ... existing fields ...
 
   async spawn(argv: string[], opts: SandboxSpawnOptions): Promise<Process> {
-    const userland = opts.bootImports?.(this.buildKernelApi()) ?? {};
-    return loadProcess(this.loaderContext(userland), {
+    return loadProcess(this.loaderContext(), {
       argv,
       mode: opts.mode,
       env: opts.env,
       cwd: opts.cwd,
+      extraCodepodImports: opts.extraCodepodImports,
     });
   }
 }
 ```
 
-`loaderContext(userland)` accepts the userland-imports bag and merges it into the codepod imports for the spawned process (alongside the kernel primitives). When `opts.bootImports` is omitted, the bag is empty and the spawned process gets only kernel imports — fine for non-bash userland (CPython, busybox) but **not** for fresh bash. PR4's `makeRunCommandHandler` is the canonical caller that needs to pass `bootImports: bashBootImports` so the spawned bash receives `host_stat`, `host_register_tool`, etc.
+When `opts.extraCodepodImports` is omitted, the spawned process gets only kernel imports — fine for non-bash userland (CPython, busybox) but **not** for fresh bash. PR4's `makeRunCommandHandler` is the canonical caller that replaces this low-level hook with public `bootImports: bashBootImports`, so the spawned bash receives `host_stat`, `host_register_tool`, etc.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1199,7 +1279,7 @@ This task records the pre-PR3 baseline so subsequent merges can be checked for s
 Create `packages/orchestrator/src/host-imports/__tests__/imports-parity.test.ts`:
 
 ```ts
-import { assertEquals, assertArrayIncludes } from 'jsr:@std/assert';
+import { assertEquals, assertArrayIncludes } from 'jsr:@std/assert@^1.0.19';
 import { createKernelImports } from '../kernel-imports.ts';
 import { createShellImports } from '../shell-imports.ts';
 import { Sandbox } from '../../sandbox.ts';
@@ -1321,7 +1401,7 @@ git commit -m "test(kernel): pin pre-PR3 host-imports baseline (kernel + shell)"
 Create `packages/orchestrator/src/host-imports/__tests__/imports-shape.test.ts`:
 
 ```ts
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from 'jsr:@std/assert@^1.0.19';
 import { createKernelImports } from '../kernel-imports.ts';
 import { createShellImports } from '../shell-imports.ts';
 
@@ -1539,7 +1619,7 @@ This task lands the host-facing surface the rest of PR4 depends on (Tasks 4.1, 4
 Create `packages/orchestrator/src/__tests__/boot-imports.test.ts`:
 
 ```ts
-import { assertEquals, assert, assertThrows } from 'jsr:@std/assert';
+import { assertEquals, assert, assertThrows } from 'jsr:@std/assert@^1.0.19';
 import { Sandbox } from '../sandbox.ts';
 import type { KernelApi } from '../kernel-api.ts';
 
@@ -1735,38 +1815,30 @@ class Sandbox {
     shellExecWasmPath: string,
     opts: ShellCreateOptions,
   ): Promise<void> {
-    const userland = this.bootImportsFn?.(this.buildKernelApi()) ?? {};
+    const extraCodepodImports = this.buildUserlandImportFactory(this.bootImportsFn);
     const runner = await ShellInstance.create(
-      this.loaderContext(userland),
+      this.loaderContext(),
       shellExecWasmPath,
-      opts,
+      { ...opts, extraCodepodImports },
     );
     this.runner = runner;
   }
 }
 ```
 
-- [ ] **Step 5: Pass userland imports through `loaderContext` and `loadProcess`**
+- [ ] **Step 5: Pass userland imports through `loadProcess`**
 
-Modify `loaderContext()` to accept the userland-import bag and forward it via the existing `extraCodepodImports` mechanism. Inside `loadProcess`, after instantiation, set `memoryProxy.current = instance.exports.memory` so the late-bound proxy resolves before any import handler can run.
+Keep `loaderContext()` narrow and generic. Convert `bootImports(api)` into the loader's `extraCodepodImports` factory at the call sites that boot or spawn bash userland. The `KernelApi.memory` proxy remains late-bound: `bootImports(api)` may close over `api.memory`, but it must not synchronously dereference it during construction.
 
 ```ts
 // In Sandbox:
-private loaderContext(userlandImports: Record<string, WebAssembly.ImportValue>): LoaderContext {
-  return {
-    vfs: this.vfs,
-    adapter: this.adapter,
-    processManager: this.processManager,
-    wasi: this.wasi,
-    buildKernelImports: (pid) => ({
-      ...createKernelImports({ /* existing args */ }),
-      ...userlandImports,
-    }),
-    bindMemoryForProcess: (pid, memory) => {
-      this.processManager.setMemoryRef(pid, memory);
-      this.memoryProxy.current = memory; // late-bind the KernelApi memory
-    },
-  };
+private buildUserlandImportFactory(
+  bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>,
+): LoadProcessOptions['extraCodepodImports'] {
+  if (!bootImports) return undefined;
+  const api = this.buildKernelApi();
+  const imports = bootImports(api);
+  return () => imports;
 }
 ```
 
@@ -1797,7 +1869,7 @@ git commit -m "feat(kernel): add KernelApi + bootImports for userland-supplied h
 Create `packages/orchestrator/src/__tests__/run-command-handler.test.ts`:
 
 ```ts
-import { assertEquals, assert, assertRejects } from 'jsr:@std/assert';
+import { assertEquals, assert, assertRejects } from 'jsr:@std/assert@^1.0.19';
 import { Sandbox } from '../sandbox.ts';
 import type { Process } from '../process/handle.ts';
 
@@ -2015,7 +2087,7 @@ git commit -m "feat(kernel): host_run_command delegates to registered runCommand
 Create `packages/sdk-server/src/bash-dispatch.test.ts`:
 
 ```ts
-import { assertEquals, assert } from 'jsr:@std/assert';
+import { assertEquals, assert } from 'jsr:@std/assert@^1.0.19';
 import { Sandbox } from '@codepod/sandbox';
 import { runCommand, makeRunCommandHandler } from './bash-dispatch.ts';
 
@@ -2470,10 +2542,10 @@ async fork(): Promise<Sandbox> {
 }
 
 private async bootPid1(): Promise<void> {
-  this.pid1 = await loadProcess(this, {
+  this.pid1 = await loadProcess(this.loaderContext(), {
     argv: this.bootArgvField,
     mode: 'resident',
-    extraCodepodImports: this.bootImports?.(this.kernelApi()),
+    extraCodepodImports: this.buildUserlandImportFactory(this.bootImports),
   });
 }
 ```

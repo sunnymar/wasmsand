@@ -205,19 +205,28 @@ async function runOldStyleTest(dir: string, testCase: string): Promise<{
     setTimeout(() => reject(new Error('TEST_TIMEOUT')), PER_TEST_TIMEOUT_MS)
   );
   try {
-    await sb.run(`mkdir -p ${sandboxTestDir}`);
+    sandboxMkdirp(sb, sandboxTestDir);
     const result = await Promise.race([
       sb.run(
         `cd ${sandboxTestDir} && ${baseEnvStr} d=/tmp/testsuite ` +
-        `sh -x -e ${sandboxTestFile} >${sandboxTestDir}/out.txt 2>&1; ` +
-        `ec=$?; ` +
-        `if [ $ec -ne 0 ]; then echo "FAIL: ${testCase}"; cat ${sandboxTestDir}/out.txt; ` +
-        `else echo "PASS: ${testCase}"; fi`
+        `sh -x -e ${sandboxTestFile}`
       ),
       timeout,
     ]);
     sb.destroy();
-    return { stdout: result.stdout, stderr: result.stderr ?? '', exitCode: result.exitCode, timedOut: false };
+    if (result.exitCode === 0) {
+      return { stdout: `PASS: ${testCase}\n`, stderr: result.stderr ?? '', exitCode: 0, timedOut: false };
+    }
+    return {
+      stdout: [
+        `FAIL: ${testCase}`,
+        result.stdout,
+        result.stderr,
+      ].filter(Boolean).join('\n'),
+      stderr: result.stderr ?? '',
+      exitCode: result.exitCode,
+      timedOut: false,
+    };
   } catch (e: unknown) {
     try { sb.destroy(); } catch { }
     const msg = e instanceof Error ? e.message : String(e);

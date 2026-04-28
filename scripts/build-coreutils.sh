@@ -115,7 +115,7 @@ if [[ "$COPY_FIXTURES" -eq 1 ]]; then
       --enable-nontrapping-float-to-int \
       --enable-sign-ext \
       --enable-mutable-globals \
-      --pass-arg=asyncify-imports@codepod.host_waitpid,codepod.host_yield,codepod.host_network_fetch,codepod.host_register_tool,codepod.host_run_command,wasi_snapshot_preview1.fd_read,wasi_snapshot_preview1.poll_oneoff \
+      --pass-arg=asyncify-imports@codepod.host_waitpid,codepod.host_yield,codepod.host_network_fetch,codepod.host_register_tool,codepod.host_run_command,wasi_snapshot_preview1.fd_read,wasi_snapshot_preview1.fd_write,wasi_snapshot_preview1.poll_oneoff \
       -O1 \
       -o "$FIXTURES_DIR/codepod-shell-exec-asyncify.wasm"
     cp "$FIXTURES_DIR/codepod-shell-exec-asyncify.wasm" "$SHELL_FIXTURES_DIR/codepod-shell-exec-asyncify.wasm"

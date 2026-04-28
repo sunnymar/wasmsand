@@ -14,4 +14,18 @@ describe('BrowserAdapter', () => {
     expect(tools.get('xlsx2csv')).toBe('/wasm/xlsx2csv.wasm');
     expect(tools.get('csv2xlsx')).toBe('/wasm/csv2xlsx.wasm');
   });
+
+  it('treats HTML fallback responses as missing optional data files', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.resolve(new Response('<html></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    }))) as typeof fetch;
+    try {
+      const adapter = new BrowserAdapter();
+      expect(await adapter.readDataFile('/wasm', 'missing.manifest.json')).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

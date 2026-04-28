@@ -280,6 +280,23 @@ export class ProcessKernel {
     fdTable.clear();
   }
 
+  /** Mark a process exited and close its fd table. */
+  releaseProcess(pid: number, exitCode: number = 0): void {
+    const entry = this.processTable.get(pid);
+    if (!entry) {
+      this.registerExited(pid, exitCode);
+      return;
+    }
+
+    entry.state = 'exited';
+    entry.exitCode = exitCode;
+    entry.promise = Promise.resolve();
+    entry.wasiHost = null;
+    this.cleanupFds(pid);
+    for (const waiter of entry.waiters) waiter(exitCode);
+    entry.waiters.length = 0;
+  }
+
   initProcess(pid: number): void {
     if (!this.fdTables.has(pid)) {
       this.fdTables.set(pid, new Map());
