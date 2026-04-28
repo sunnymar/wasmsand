@@ -7,13 +7,13 @@ import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { resolve } from 'node:path';
 
-import { ResidentBashRunner } from '../../resident-bash-runner.js';
-import { ProcessManager } from '../../process/manager.js';
-import { VFS } from '../../vfs/vfs.js';
-import { NodeAdapter } from '../../platform/node-adapter.js';
+import { ResidentBashRunner } from '../resident-bash-runner.js';
+import { ProcessManager } from '../process/manager.js';
+import { VFS } from '../vfs/vfs.js';
+import { NodeAdapter } from '../platform/node-adapter.js';
 
-const FIXTURES = resolve(import.meta.dirname!, '../../platform/__tests__/fixtures');
-const SHELL_EXEC_WASM = resolve(import.meta.dirname!, '../../platform/__tests__/fixtures/codepod-shell-exec.wasm');
+const FIXTURES = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
+const SHELL_EXEC_WASM = resolve(import.meta.dirname!, '../platform/__tests__/fixtures/codepod-shell-exec.wasm');
 
 const TOOLS = [
   'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
