@@ -36,8 +36,6 @@ function createMockSandbox(): SandboxLike {
     fork: mock(async () => createMockSandbox()),
     exportState: mock(() => new TextEncoder().encode('snapshot-blob')),
     importState: mock((_blob: Uint8Array) => {}),
-    getHistory: mock(() => [{ index: 0, command: 'echo hi', timestamp: 1234 }]),
-    clearHistory: mock(() => {}),
     mount: mock((_path: string, _files: Record<string, Uint8Array>) => {}),
   };
 }
@@ -263,6 +261,22 @@ describe('Dispatcher', () => {
       ).rejects.toMatchObject({
         code: -32601,
         message: 'Method not found: nonexistent.method',
+      });
+    });
+
+    it('rejects removed shell history methods with code -32601', async () => {
+      await expect(
+        dispatcher.dispatch('shell.history.list', {}),
+      ).rejects.toMatchObject({
+        code: -32601,
+        message: 'Method not found: shell.history.list',
+      });
+
+      await expect(
+        dispatcher.dispatch('shell.history.clear', {}),
+      ).rejects.toMatchObject({
+        code: -32601,
+        message: 'Method not found: shell.history.clear',
       });
     });
 

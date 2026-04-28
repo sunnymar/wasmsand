@@ -712,8 +712,9 @@ async fn test_history() {
 }
 
 #[tokio::test]
-async fn test_history_list_handler() {
+async fn test_removed_history_rpc_handlers() {
     use sdk_server_wasmtime::dispatcher::Dispatcher;
+    use sdk_server_wasmtime::rpc::codes;
     use tokio::sync::mpsc;
 
     let (tx, _rx) = mpsc::channel::<String>(16);
@@ -728,61 +729,23 @@ async fn test_history_list_handler() {
         serde_json::json!({"shellWasmPath": wasm_path.to_str().unwrap()}),
     ).await;
 
-    // Run some commands to populate history
-    disp.dispatch(
-        Some(sdk_server_wasmtime::rpc::RequestId::Int(2)),
-        "run",
-        serde_json::json!({"command": "echo hello"}),
-    ).await;
-    disp.dispatch(
-        Some(sdk_server_wasmtime::rpc::RequestId::Int(3)),
-        "run",
-        serde_json::json!({"command": "echo world"}),
-    ).await;
-
-    // shell.history.list
     let (r, _) = disp.dispatch(
-        Some(sdk_server_wasmtime::rpc::RequestId::Int(4)),
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(2)),
         "shell.history.list",
         serde_json::json!({}),
     ).await;
-    assert!(r.error.is_none(), "shell.history.list failed: {:?}", r.error);
-    let entries = r.result.unwrap();
-    let arr = entries["entries"].as_array().unwrap();
-    assert!(!arr.is_empty(), "history entries should not be empty");
-    // commands should be present
-    let cmds: Vec<&str> = arr.iter()
-        .map(|e| e["command"].as_str().unwrap_or(""))
-        .collect();
-    assert!(cmds.iter().any(|c| c.contains("echo hello")), "missing 'echo hello' in {cmds:?}");
-    assert!(cmds.iter().any(|c| c.contains("echo world")), "missing 'echo world' in {cmds:?}");
+    let err = r.error.expect("shell.history.list should be removed");
+    assert_eq!(err.code, codes::METHOD_NOT_FOUND);
+    assert!(err.message.contains("shell.history.list"));
 
-    // shell.history.clear
     let (r, _) = disp.dispatch(
-        Some(sdk_server_wasmtime::rpc::RequestId::Int(5)),
+        Some(sdk_server_wasmtime::rpc::RequestId::Int(3)),
         "shell.history.clear",
         serde_json::json!({}),
     ).await;
-    assert!(r.error.is_none(), "shell.history.clear failed: {:?}", r.error);
-
-    // After clear, history should contain at most 1 entry (the `history` command
-    // run by shell.history.list itself gets added before the listing executes).
-    let (r, _) = disp.dispatch(
-        Some(sdk_server_wasmtime::rpc::RequestId::Int(6)),
-        "shell.history.list",
-        serde_json::json!({}),
-    ).await;
-    assert!(r.error.is_none());
-    let entries = r.result.unwrap();
-    let arr = entries["entries"].as_array().unwrap();
-    // Should not still contain the commands from before the clear
-    let cmds_after: Vec<&str> = arr.iter()
-        .map(|e| e["command"].as_str().unwrap_or(""))
-        .collect();
-    assert!(
-        !cmds_after.iter().any(|c| c.contains("echo hello") || c.contains("echo world")),
-        "history should not contain pre-clear commands, got {arr:?}"
-    );
+    let err = r.error.expect("shell.history.clear should be removed");
+    assert_eq!(err.code, codes::METHOD_NOT_FOUND);
+    assert!(err.message.contains("shell.history.clear"));
 }
 
 #[tokio::test]

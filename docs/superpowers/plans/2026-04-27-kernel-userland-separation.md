@@ -2452,8 +2452,9 @@ git commit -m "feat(mcp-server): add bash-dispatch + bash-host-imports modules; 
 
 **Files:**
 - Modify: `packages/sdk-server/src/dispatcher.ts`
+- Modify: `packages/sdk-server-wasmtime/src/dispatcher.rs` (audit drift: same RPC names existed in the wasmtime backend)
 
-- [ ] **Step 1: Update the `run` RPC handler**
+- [x] **Step 1: Update the `run` RPC handler**
 
 In `packages/sdk-server/src/dispatcher.ts:95` (the `case 'run':` block — verified against current source; the per-sandbox run method is named `'run'`, not `'sandbox.run'`), replace the `sb.run(cmd)` call with `runCommand(sb, cmd)`:
 
@@ -2467,7 +2468,7 @@ case 'run': {
 }
 ```
 
-- [ ] **Step 2: Wire bashBootImports + makeRunCommandHandler at sandbox creation**
+- [x] **Step 2: Wire bashBootImports + makeRunCommandHandler at sandbox creation**
 
 In whichever dispatcher method handles `sandbox.create` (around line 100-140), add:
 
@@ -2483,7 +2484,7 @@ case 'sandbox.create': {
 }
 ```
 
-- [ ] **Step 3: Remove `shell.history.list` and `shell.history.clear` cases**
+- [x] **Step 3: Remove `shell.history.list` and `shell.history.clear` cases**
 
 In `dispatcher.ts:135` and `:137` (the `case 'shell.history.list':` and `case 'shell.history.clear':` blocks), delete the cases entirely. The default case (or the explicit method-not-found path) will return a JSON-RPC error to any caller, which is the desired behavior.
 
@@ -2498,13 +2499,19 @@ case 'shell.history.clear':
 // After: lines deleted; default case returns method-not-found.
 ```
 
-- [ ] **Step 4: Run sdk-server tests**
+- [x] **Step 4: Run sdk-server tests**
 
 ```bash
 deno test -A --no-check packages/sdk-server/src/*.test.ts
 ```
 
 Expected: PASS — except any tests that explicitly exercise `shell.history.*`. Those tests must be removed or updated to assert the method-not-found response.
+
+Also run the wasmtime backend removal canary:
+
+```bash
+cargo test --manifest-path packages/sdk-server-wasmtime/Cargo.toml test_removed_history_rpc_handlers
+```
 
 - [ ] **Step 5: Commit**
 
