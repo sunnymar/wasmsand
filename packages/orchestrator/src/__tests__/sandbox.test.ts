@@ -87,6 +87,58 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
     expect(events.some((e) => e.type === 'limit.exceeded' && e.subtype === 'stderr')).toBe(true);
   });
 
+  it('executeCommand uses the supplied host executor even when worker execution is present', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    let workerCalled = 0;
+    (sandbox as unknown as { workerExecutor: { run: () => Promise<unknown>; kill: () => void; dispose: () => void } }).workerExecutor = {
+      run: async () => {
+        workerCalled++;
+        return {
+          exitCode: 99,
+          stdout: 'worker\n',
+          stderr: '',
+          executionTimeMs: 0,
+        };
+      },
+      kill: () => {},
+      dispose: () => {},
+    };
+
+    const result = await sandbox.executeCommand('host-side command', async () => ({
+      exitCode: 0,
+      stdout: 'host\n',
+      stderr: '',
+      executionTimeMs: 1,
+    }));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('host\n');
+    expect(workerCalled).toBe(0);
+  });
+
+  it('run still uses worker execution when present', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    let workerCalled = 0;
+    (sandbox as unknown as { workerExecutor: { run: () => Promise<unknown>; kill: () => void; dispose: () => void } }).workerExecutor = {
+      run: async () => {
+        workerCalled++;
+        return {
+          exitCode: 0,
+          stdout: 'worker\n',
+          stderr: '',
+          executionTimeMs: 1,
+        };
+      },
+      kill: () => {},
+      dispose: () => {},
+    };
+
+    const result = await sandbox.run('echo host');
+
+    expect(result.stdout).toBe('worker\n');
+    expect(workerCalled).toBe(1);
+  });
+
   it('writeFile and readFile', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const data = new TextEncoder().encode('test content');

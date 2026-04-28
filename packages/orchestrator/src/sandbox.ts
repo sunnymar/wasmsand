@@ -23,6 +23,10 @@ export interface StreamCallbacks {
 /** Host-side command executor used by `Sandbox.executeCommand`. */
 export type CommandExecutor = (command: string) => Promise<RunResult>;
 
+interface ExecuteCommandOptions {
+  allowWorkerExecutor?: boolean;
+}
+
 /** Callbacks for offloading sandbox state to external storage. */
 export interface StorageCallbacks {
   save: (sandboxId: string, state: Uint8Array) => Promise<void>;
@@ -790,6 +794,7 @@ export class Sandbox {
     command: string,
     executor: CommandExecutor,
     callbacks?: StreamCallbacks,
+    options?: ExecuteCommandOptions,
   ): Promise<RunResult> {
     this.assertAlive();
 
@@ -843,7 +848,7 @@ export class Sandbox {
     const startTime = performance.now();
     this.currentCommandDeadlineMs = Date.now() + effectiveTimeout;
 
-    if (this.workerExecutor) {
+    if (this.workerExecutor && options?.allowWorkerExecutor) {
       // Worker-based execution (Node) — hard kill on timeout via worker.terminate()
       if (callbacks?.onStdout || callbacks?.onStderr) {
         console.warn('[codepod] Streaming callbacks not supported with worker executor (security.hardKill). Output will be returned in result only.');
@@ -931,7 +936,9 @@ export class Sandbox {
   }
 
   async run(command: string, callbacks?: StreamCallbacks): Promise<RunResult> {
-    return this.executeCommand(command, (cmd) => this.runner.run(cmd), callbacks);
+    return this.executeCommand(command, (cmd) => this.runner.run(cmd), callbacks, {
+      allowWorkerExecutor: true,
+    });
   }
 
   private applyOutputLimits(result: RunResult): RunResult {
