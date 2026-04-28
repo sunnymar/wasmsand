@@ -875,6 +875,18 @@ export class Sandbox {
     return this.runner.getEnv(name);
   }
 
+  /** Return a copy of all environment variables. */
+  getEnvMap(): Map<string, string> {
+    this.assertAlive();
+    return this.runner.getEnvMap();
+  }
+
+  /** Replace all environment variables. */
+  setEnvMap(env: Map<string, string>): void {
+    this.assertAlive();
+    this.runner.setEnvMap(env);
+  }
+
   /** Return the command history entries. */
   getHistory(): HistoryEntry[] {
     this.assertAlive();

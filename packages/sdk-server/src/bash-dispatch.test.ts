@@ -39,6 +39,23 @@ Deno.test('runCommand threads stdin through PID 1 fd 0', async () => {
   }
 });
 
+Deno.test('runCommand syncs host-set env into PID 1', async () => {
+  const sb = await Sandbox.create({
+    wasmDir: WASM_DIR,
+    adapter: new NodeAdapter(),
+    bootImports: (api) => bashBootImports(api),
+    runCommandHandler: makeRunCommandHandler(),
+  } as Parameters<typeof Sandbox.create>[0] & Record<string, unknown>);
+  try {
+    sb.setEnv('HOST_SET_VALUE', 'from-host');
+    const result = await runCommand(sb, 'echo $HOST_SET_VALUE');
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, 'from-host\n');
+  } finally {
+    sb.destroy();
+  }
+});
+
 Deno.test('makeRunCommandHandler uses a fresh resident bash for nested subprocess calls', async () => {
   const sb = await Sandbox.create({
     wasmDir: WASM_DIR,

@@ -12,6 +12,8 @@ interface ProcessLike {
 
 interface SandboxLike {
   process(pid: number): ProcessLike | undefined;
+  getEnvMap?(): Map<string, string>;
+  setEnvMap?(env: Map<string, string>): void;
   spawn(argv: string[], opts: {
     mode: 'resident' | 'cli';
     bootImports?: (api: Parameters<typeof bashBootImports>[0]) => Record<string, WebAssembly.ImportValue>;
@@ -27,6 +29,7 @@ export interface BashRunResult {
   stdout: string;
   stderr: string;
   executionTimeMs: number;
+  env?: Record<string, string>;
   truncated?: { stdout: boolean; stderr: boolean };
   errorClass?: 'TIMEOUT' | 'CANCELLED' | 'CAPABILITY_DENIED' | 'LIMIT_EXCEEDED';
 }
@@ -73,7 +76,7 @@ export async function callRunCommand(
   dealloc(cmdPtr, cmdBytes.length);
   dealloc(outPtr, outCap);
 
-  let parsed: { exit_code?: number; execution_time_ms?: number };
+  let parsed: { exit_code?: number; execution_time_ms?: number; env?: Record<string, string> };
   try {
     parsed = JSON.parse(decoded);
   } catch {
@@ -91,18 +94,34 @@ export async function callRunCommand(
     stdout: stdout.data,
     stderr: stderr.data,
     executionTimeMs: parsed.execution_time_ms ?? 0,
+    ...(parsed.env ? { env: parsed.env } : {}),
     ...(truncated ? { truncated } : {}),
   };
 }
 
 export async function runCommand(
-  sandbox: Pick<SandboxLike, 'process'>,
+  sandbox: Pick<SandboxLike, 'process' | 'getEnvMap' | 'setEnvMap'>,
   cmd: string,
   opts?: BashRunOptions,
 ): Promise<BashRunResult> {
   const proc = sandbox.process(1) as ProcessLike | undefined;
   if (!proc) throw new Error('PID 1 is not running');
-  return callRunCommand(proc, cmd, opts);
+  const envPrefix = buildEnvPrefix(sandbox.getEnvMap?.());
+  const result = await callRunCommand(proc, envPrefix ? `${envPrefix}; ${cmd}` : cmd, opts);
+  if (result.env && sandbox.setEnvMap) {
+    sandbox.setEnvMap(new Map(Object.entries(result.env)));
+  }
+  return result;
+}
+
+function buildEnvPrefix(env: Map<string, string> | undefined): string {
+  if (!env || env.size === 0) return '';
+  const exports: string[] = [];
+  for (const [name, value] of env) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    exports.push(`export ${name}='${value.replace(/'/g, "'\\''")}'`);
+  }
+  return exports.join('; ');
 }
 
 export function makeRunCommandHandler(): RunCommandHandler {
