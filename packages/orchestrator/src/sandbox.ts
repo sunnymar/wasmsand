@@ -1,5 +1,5 @@
 /**
- * Sandbox: high-level facade wrapping VFS + ProcessManager + ShellInstance.
+ * Sandbox: high-level facade wrapping VFS, ProcessManager, and PID 1.
  *
  * Provides a simple API for creating an isolated sandbox, running shell
  * commands, and interacting with the in-memory filesystem.

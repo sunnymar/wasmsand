@@ -70,7 +70,7 @@ export class VFS {
   private onChangeCallback: (() => void) | null = null;
   /**
    * Source for /proc/<pid>/* entries.  The VFS itself doesn't own
-   * a process kernel — the ShellInstance does — so this is a
+   * a process kernel — the sandbox process runtime does — so this is a
    * callback set externally after the kernel is wired up.  Falls
    * back to an empty list if unset (e.g., during construction or
    * for raw VFS instances used in unit tests).
@@ -214,7 +214,7 @@ export class VFS {
 
   /**
    * Wire the source of /proc/<pid>/* entries.  Called by the
-   * ShellInstance once its ProcessKernel exists; the ProcProvider
+   * sandbox once its ProcessKernel exists; the ProcProvider
    * built at VFS-construction time queries through this on every
    * read so newly-spawned processes appear without re-registration.
    */

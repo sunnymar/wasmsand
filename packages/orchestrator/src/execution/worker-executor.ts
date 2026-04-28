@@ -34,7 +34,7 @@ export interface WorkerConfig {
 }
 
 export interface WorkerRunResult extends RunResult {
-  /** Environment updates from the worker, for syncing back to ShellInstance. */
+  /** Environment updates from the worker, for syncing back to the main runner. */
   env?: [string, string][];
 }
 
