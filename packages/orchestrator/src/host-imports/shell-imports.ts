@@ -1,12 +1,9 @@
 /**
- * Host import implementations for the shell WASM module.
+ * Shell-legacy convenience host imports.
  *
- * createShellImports() returns a record of functions that form the `codepod`
- * import namespace. Each function reads arguments from WASM linear memory,
- * performs the operation via VFS / ProcessManager, and writes results back.
- *
- * Note: host_spawn supports a syncSpawn callback for synchronous testing.
- * The real async-to-sync bridging (using SAB + Atomics) will be wired up later.
+ * These are the shell-specific `codepod` imports that remain after generic
+ * process/network/native primitives moved to kernel-imports.ts. PR4 moves
+ * this userland bucket out of the orchestrator package.
  */
 
 import type { VfsLike } from '../vfs/vfs-like.js';
@@ -135,58 +132,12 @@ export interface ShellImportsOptions {
   vfs: VfsLike;
   mgr: ProcessManager;
   memory: WebAssembly.Memory;
-  /** Synchronous spawn handler. If provided, host_spawn calls this instead of mgr.spawn(). */
-  syncSpawn?: (cmd: string, args: string[], env: Record<string, string>, stdin: Uint8Array, cwd: string) => { exit_code: number; stdout: string; stderr: string };
 }
 
 export function createShellImports(opts: ShellImportsOptions): Record<string, WebAssembly.ImportValue> {
   const { vfs, mgr, memory } = opts;
 
   return {
-    // ── Process lifecycle ──
-
-    // Rust signature: host_spawn(req_ptr: *const u8, req_len: u32, out_ptr: *mut u8, out_cap: u32) -> i32
-    // The request is a JSON-encoded SpawnRequest with fields: program, args, env, cwd, stdin
-    host_spawn(
-      reqPtr: number, reqLen: number,
-      outPtr: number, outCap: number,
-    ): number {
-      const reqJson = readString(memory, reqPtr, reqLen);
-
-      let req: { program?: string; args?: string[]; env?: [string, string][]; cwd?: string; stdin?: string };
-      try { req = JSON.parse(reqJson); } catch { req = {}; }
-
-      const cmd = req.program ?? '';
-      const args = req.args?.map(String) ?? [];
-      const env: Record<string, string> = {};
-      if (req.env) for (const [k, v] of req.env) env[k] = v;
-      const cwd = req.cwd ?? '/';
-      const stdinStr = req.stdin ?? '';
-      const stdin = new TextEncoder().encode(stdinStr);
-
-      if (opts.syncSpawn) {
-        try {
-          const result = opts.syncSpawn(cmd, args, env, stdin, cwd);
-          return writeJson(memory, outPtr, outCap, result);
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          return writeJson(memory, outPtr, outCap, {
-            exit_code: 127,
-            stdout: '',
-            stderr: `${cmd}: ${msg}\n`,
-          });
-        }
-      }
-
-      // syncSpawn not provided — production uses spawn_async (host_spawn_async)
-      // via the kernel imports, so this path should not be reached.
-      return writeJson(memory, outPtr, outCap, {
-        exit_code: 127,
-        stdout: '',
-        stderr: `${cmd}: sync spawn not available\n`,
-      });
-    },
-
     host_has_tool(namePtr: number, nameLen: number): number {
       const name = readString(memory, namePtr, nameLen);
       return mgr.hasTool(name) ? 1 : 0;

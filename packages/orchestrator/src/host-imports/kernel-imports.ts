@@ -55,6 +55,19 @@ export interface KernelImportsOptions {
   /** Run a shell command and collect output. Used by Python _codepod.spawn(). */
   runCommand?: (cmd: string, stdin: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
+  /**
+   * Legacy synchronous spawn handler for the shell's 4-argument host_spawn ABI.
+   * The generic process ABI is host_spawn(req_ptr, req_len) -> pid. The shell
+   * test/legacy ABI is host_spawn(req_ptr, req_len, out_ptr, out_cap) -> bytes.
+   */
+  syncSpawn?: (
+    cmd: string,
+    args: string[],
+    env: Record<string, string>,
+    stdin: Uint8Array,
+    cwd: string,
+  ) => { exit_code: number; stdout: string; stderr: string };
+
   /** Called by host_spawn to actually create and start a WASM process.
    *  `parentPid` is the PID of the in-sandbox process making the spawn
    *  call — set on the child as ppid so getppid() inside the child
@@ -94,8 +107,45 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_spawn(req_ptr, req_len) -> i32 (pid or -1 on error)
     // Spawns a child WASM process. The request is a JSON SpawnRequest.
-    host_spawn(reqPtr: number, reqLen: number): number {
+    //
+    // Compatibility: shell-exec also imports a legacy synchronous
+    // host_spawn(req_ptr, req_len, out_ptr, out_cap) ABI for tests. Keep
+    // that branch here so shell-imports.ts remains shell-specific.
+    host_spawn(reqPtr: number, reqLen: number, outPtr?: number, outCap?: number): number {
       const reqJson = readString(memory, reqPtr, reqLen);
+      if (typeof outPtr === 'number' && typeof outCap === 'number') {
+        let req: { program?: string; args?: string[]; env?: [string, string][]; cwd?: string; stdin?: string };
+        try { req = JSON.parse(reqJson); } catch { req = {}; }
+
+        const cmd = req.program ?? '';
+        const args = req.args?.map(String) ?? [];
+        const env: Record<string, string> = {};
+        if (req.env) for (const [k, v] of req.env) env[k] = v;
+        const cwd = req.cwd ?? '/';
+        const stdinStr = req.stdin ?? '';
+        const stdin = new TextEncoder().encode(stdinStr);
+
+        if (opts.syncSpawn) {
+          try {
+            const result = opts.syncSpawn(cmd, args, env, stdin, cwd);
+            return writeJson(memory, outPtr, outCap, result);
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            return writeJson(memory, outPtr, outCap, {
+              exit_code: 127,
+              stdout: '',
+              stderr: `${cmd}: ${msg}\n`,
+            });
+          }
+        }
+
+        return writeJson(memory, outPtr, outCap, {
+          exit_code: 127,
+          stdout: '',
+          stderr: `${cmd}: sync spawn not available\n`,
+        });
+      }
+
       const req = JSON.parse(reqJson) as SpawnRequest;
       if (opts.spawnProcess && opts.kernel) {
         const fdTable = opts.kernel.buildFdTableForSpawn(callerPid, req);
