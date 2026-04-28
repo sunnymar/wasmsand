@@ -127,10 +127,25 @@ class AsyncifyAsyncBridge implements AsyncBridge {
     dataAddr: number;
   } | null = null;
 
+  // The guest's linear memory — needed to read/write the asyncify
+  // save-state buffer when implementing setjmp's capture and
+  // longjmp's restore.  Stored alongside the asyncify exports.
+  private memory: WebAssembly.Memory | null = null;
+
   // Single pending slot — only one async import can be in-flight at a time
   // (WASM is single-threaded; imports don't interleave).
   private pendingPromise: Promise<void> | null = null;
   private pendingResult: number = 0;
+
+  // setjmp/longjmp state.  pendingSetjmp holds the env pointer of an
+  // in-flight setjmp save (cleared after wrapExport copies the
+  // unwound buffer into jmpBufStates).  pendingLongjmp holds the
+  // env+val of an in-flight longjmp; cleared by hostSetjmp on rewind
+  // after it returns the longjmp value.  jmpBufStates is the lookup
+  // table from env pointer to the saved buffer contents.
+  private pendingSetjmp: number | null = null;
+  private pendingLongjmp: { envPtr: number; val: number } | null = null;
+  private jmpBufStates: Map<number, { savedHigh: number; savedData: Uint8Array }> = new Map();
 
   /**
    * Call once after instantiation.
@@ -150,6 +165,105 @@ class AsyncifyAsyncBridge implements AsyncBridge {
       getState:    exp.asyncify_get_state    as () => number,
       dataAddr,
     };
+    this.memory = exp.memory as WebAssembly.Memory;
+  }
+
+  /**
+   * host_setjmp(envPtr) — POSIX setjmp implemented over Asyncify.
+   *
+   * First call (state=NORMAL): record the env pointer and trigger an
+   * unwind so the asyncify buffer is populated with the current C
+   * call stack.  wrapExport's driver loop copies the unwound buffer
+   * into jmpBufStates[envPtr] then immediately rewinds — when the
+   * rewind reaches this very call site, host_setjmp is re-entered
+   * with state=REWINDING and returns 0 (the standard setjmp first
+   * return).
+   *
+   * Rewind under longjmp (state=REWINDING + pendingLongjmp set):
+   * stopRewind, return the longjmp value, clear pendingLongjmp.
+   * The wasm side sees setjmp return val.
+   */
+  hostSetjmp = (envPtr: number): number => {
+    if (!this.exports) {
+      // Bridge not yet initialized (setjmp called during early init).
+      // Best-effort: return 0 — caller gets "first-call zero return"
+      // semantics but won't be able to longjmp back.
+      return 0;
+    }
+    const exps = this.exports;
+    if (exps.getState() === 2 /* REWINDING */) {
+      exps.stopRewind();
+      if (this.pendingLongjmp) {
+        const val = this.pendingLongjmp.val;
+        this.pendingLongjmp = null;
+        return val;
+      }
+      // First-time rewind (post-setjmp-capture): the standard
+      // setjmp return value is 0.
+      return 0;
+    }
+    // Normal first call: record env, trigger unwind.  wrapExport
+    // sees the unwind, captures the buffer into jmpBufStates, and
+    // rewinds back here.
+    this.pendingSetjmp = envPtr;
+    exps.startUnwind(exps.dataAddr);
+    return 0;  // ignored during unwind
+  };
+
+  /**
+   * host_longjmp(envPtr, val) — POSIX longjmp over Asyncify.
+   *
+   * Trigger an unwind; wrapExport's driver loop will detect
+   * pendingLongjmp, replace the asyncify buffer with the saved
+   * snapshot (taken at setjmp time), and rewind.  The rewind walks
+   * back into setjmp's import call, which returns val.
+   *
+   * From the C program's perspective the call doesn't return —
+   * codepod_setjmp.c follows the host_longjmp invocation with
+   * __builtin_unreachable, and asyncify intercepts before that
+   * instruction is ever reached.
+   */
+  hostLongjmp = (envPtr: number, val: number): void => {
+    if (!this.exports) {
+      throw new Error('longjmp: bridge not initialized (no matching setjmp)');
+    }
+    if (!this.jmpBufStates.has(envPtr)) {
+      throw new Error(`longjmp: unknown jmp_buf @0x${envPtr.toString(16)}`);
+    }
+    this.pendingLongjmp = { envPtr, val };
+    this.exports.startUnwind(this.exports.dataAddr);
+  };
+
+  /** Drop a recorded setjmp save-state.  Optional cleanup hook for
+   *  callers that know a jmp_buf has gone out of scope. */
+  forgetJmpBuf(envPtr: number): void {
+    this.jmpBufStates.delete(envPtr);
+  }
+
+  /** Read [dataAddr+0]..[start_offset] of the asyncify buffer into
+   *  jmpBufStates[envPtr].  Called by the driver loop after a
+   *  setjmp-triggered unwind has populated the buffer. */
+  private captureBuffer(envPtr: number): void {
+    if (!this.exports || !this.memory) return;
+    const view = new DataView(this.memory.buffer);
+    const high = view.getUint32(this.exports.dataAddr, true);
+    const bufStart = this.exports.dataAddr + 8;
+    const dataLen = high - bufStart;
+    const savedData = new Uint8Array(this.memory.buffer, bufStart, dataLen).slice();
+    this.jmpBufStates.set(envPtr, { savedHigh: high, savedData });
+  }
+
+  /** Write jmpBufStates[envPtr]'s saved bytes back into the asyncify
+   *  buffer and reset the start offset to the saved high-water mark.
+   *  Called before triggering a longjmp rewind. */
+  private restoreBuffer(envPtr: number): void {
+    if (!this.exports || !this.memory) return;
+    const state = this.jmpBufStates.get(envPtr);
+    if (!state) return;
+    const view = new DataView(this.memory.buffer);
+    new Uint8Array(this.memory.buffer, this.exports.dataAddr + 8, state.savedData.length)
+      .set(state.savedData);
+    view.setUint32(this.exports.dataAddr, state.savedHigh, true);
   }
 
   /**
@@ -186,20 +300,84 @@ class AsyncifyAsyncBridge implements AsyncBridge {
   }
 
   /**
-   * Wrap the __run_command export.  Drives the unwind/await/rewind loop
-   * until WASM returns from __run_command without suspending.
+   * Wrap a WASM export so the host can drive the unwind/rewind loop.
+   *
+   * This is the asyncify-scheduler variant: async imports also use
+   * Asyncify (via wrapImport, which suspends on Promise returns by
+   * triggering an unwind), so the loop has to handle three reasons
+   * for unwinding:
+   *   - pendingSetjmp     : host_setjmp was called; capture the
+   *                         unwound buffer into jmpBufStates and
+   *                         rewind back to the setjmp call site.
+   *   - pendingLongjmp    : host_longjmp was called; restore the
+   *                         buffer saved at setjmp time and rewind
+   *                         (the rewind walks back into host_setjmp,
+   *                         which returns the longjmp value).
+   *   - pendingPromise    : an async host import returned a Promise;
+   *                         await it, then rewind so the import sees
+   *                         state=REWINDING and returns the result.
+   *
+   * Used when JSPI (the preferred scheduler) is unavailable on the
+   * host — see wrapExportJspi for the JSPI-scheduler variant.
    */
   wrapExport(fn: (...args: number[]) => number): (...args: number[]) => Promise<number> {
     return async (...args: number[]): Promise<number> => {
       const exps = this.exports!;
       let result = fn(...args);
       while (exps.getState() === 1) {
-        // WASM unwound because an async import was called.
         exps.stopUnwind();
-        await this.pendingPromise!;
+        if (this.pendingSetjmp !== null) {
+          const envPtr = this.pendingSetjmp;
+          this.pendingSetjmp = null;
+          this.captureBuffer(envPtr);
+          exps.startRewind(exps.dataAddr);
+          result = fn(...args);
+        } else if (this.pendingLongjmp !== null) {
+          this.restoreBuffer(this.pendingLongjmp.envPtr);
+          exps.startRewind(exps.dataAddr);
+          result = fn(...args);
+          // pendingLongjmp is consumed inside hostSetjmp on rewind.
+        } else {
+          // Async-import unwind — the original asyncify use case.
+          await this.pendingPromise!;
+          exps.startRewind(exps.dataAddr);
+          result = fn(...args);
+          // asyncify_stop_rewind happens inside wrapImport when state===2.
+        }
+      }
+      return result;
+    };
+  }
+
+  /**
+   * JSPI-scheduler variant of wrapExport.  fn is the WebAssembly
+   * .promising-wrapped export, so async-import suspends propagate
+   * naturally as Promise resolutions through fn's return.  We only
+   * have to catch Asyncify unwinds (setjmp/longjmp) — pendingPromise
+   * is never set in this path because async imports don't go through
+   * bridge.wrapImport when JSPI handles them.
+   */
+  wrapExportJspi(fn: (...args: number[]) => Promise<number>): (...args: number[]) => Promise<number> {
+    return async (...args: number[]): Promise<number> => {
+      const exps = this.exports!;
+      let result = await fn(...args);
+      while (exps.getState() === 1) {
+        exps.stopUnwind();
+        if (this.pendingSetjmp !== null) {
+          const envPtr = this.pendingSetjmp;
+          this.pendingSetjmp = null;
+          this.captureBuffer(envPtr);
+        } else if (this.pendingLongjmp !== null) {
+          this.restoreBuffer(this.pendingLongjmp.envPtr);
+          // pendingLongjmp is consumed inside hostSetjmp on rewind.
+        } else {
+          throw new Error(
+            'asyncify unwound without a setjmp/longjmp pending; ' +
+            'async-import suspensions should go through JSPI on this path'
+          );
+        }
         exps.startRewind(exps.dataAddr);
-        result = fn(...args);
-        // asyncify_stop_rewind is called inside wrapImport when state===2.
+        result = await fn(...args);
       }
       return result;
     };

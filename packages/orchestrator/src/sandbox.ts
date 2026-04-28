@@ -10,6 +10,7 @@ import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
 import { ShellInstance } from './shell/shell-instance.js';
 import type { ShellLike } from './shell/shell-like.js';
+
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
 export interface StreamCallbacks {
   onStdout?: (chunk: string) => void;
@@ -44,6 +45,7 @@ import { CODEPOD_EXT_SOURCE, generateCommandShim } from './extension/codepod-ext
 import { SUBPROCESS_PY_SOURCE } from './process/subprocess-shim.js';
 import { PackageRegistry } from './packages/registry.js';
 import { ToolRegistry } from './packages/tool-registry.js';
+import { applyManifest, loadManifest } from './packages/manifest.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -503,10 +505,25 @@ export class Sandbox {
     if (!tools.has('python3')) {
       mgr.registerTool('python3', `${wasmDir}/python3.wasm`);
     }
+
+    // Per-tool manifest pass: each .wasm may ship a sibling
+    // `<name>.manifest.json` produced by its host build (cpcc-level
+    // Makefile in packages/c-ports/<port>/) that declares sidecar
+    // data files to install into the VFS, multicall dispatch
+    // (busybox-style applets), and any extra symlinks.  Tools
+    // without a manifest are pure WASI binaries with no install
+    // side-effects (e.g. the Rust coreutils standalones).
+    const ctx = { mgr, vfs, adapter, wasmDir };
+    for (const [name, path] of tools) {
+      const manifest = await loadManifest(adapter, wasmDir, name);
+      if (manifest) await applyManifest(manifest, ctx, path);
+    }
+
     // Standard aliases via symlinks — these resolve naturally through the VFS
     vfs.withWriteAccess(() => {
       try { vfs.symlink('/usr/bin/python3', '/usr/bin/python'); } catch { /* already exists */ }
     });
+
     return tools;
   }
 

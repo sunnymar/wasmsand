@@ -63,4 +63,13 @@ export class NodeAdapter implements PlatformAdapter {
     }
     return tools;
   }
+
+  async readDataFile(wasmDir: string, name: string): Promise<Uint8Array | null> {
+    try {
+      const buf = await readFile(resolve(wasmDir, name));
+      return new Uint8Array(buf);
+    } catch {
+      return null;
+    }
+  }
 }

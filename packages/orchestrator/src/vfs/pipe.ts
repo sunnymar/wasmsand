@@ -321,6 +321,14 @@ export function createAsyncPipe(
     },
 
     async writeAsync(data: Uint8Array): Promise<number> {
+      // Contract: writeAsync(data) where data.length > 0 always
+      // resolves with either -1 (EPIPE) or a value ≥ 1.  It never
+      // returns 0, since 0 from a non-empty write would loop the
+      // wasi-host caller forever.  fdWritePipe in wasi-host.ts
+      // depends on this — if you change the resolve sites below,
+      // keep them honest with the asserts.  Zero-length writes
+      // legitimately resolve with 0 ("wrote all of nothing"); the
+      // wasi-host caller guards against passing those.
       if (shared.readClosed) return -1;
       if (shared.writeClosed) return -1;
       if (shared.pendingWriter) {
@@ -328,7 +336,12 @@ export function createAsyncPipe(
       }
       const spaceAvailable = shared.capacity - shared.totalBytes;
       if (spaceAvailable >= data.length) {
-        return this.write(data);
+        const n = this.write(data);
+        // Forward-progress invariant: n>0 whenever data.length>0.
+        if (data.length > 0 && n === 0) {
+          throw new Error('writeAsync: write() returned 0 for a non-empty buffer');
+        }
+        return n;
       }
       // Partially fill what we can, then block for the remainder.
       let written = 0;
@@ -338,7 +351,16 @@ export function createAsyncPipe(
         data = data.subarray(spaceAvailable);
       }
       return new Promise<number>((resolve) => {
-        shared.pendingWriter = (n: number) => resolve(n === -1 ? -1 : written + n);
+        shared.pendingWriter = (n: number) => {
+          // Resolve with EPIPE, or written + the most recent flush
+          // chunk (which tryFlushPendingWriter guarantees is ≥ 1).
+          // Net result must be ≥ 1 for non-empty inputs.
+          const result = n === -1 ? -1 : written + n;
+          if (result === 0) {
+            throw new Error('writeAsync: pending resolve produced 0 for a non-empty buffer');
+          }
+          resolve(result);
+        };
         shared.pendingWriterData = data;
       });
     },

@@ -36,6 +36,20 @@ fn run() -> i32 {
         }
     }
 
+    // POSIX/GNU/BusyBox: tsort takes pairs of tokens. An odd count means
+    // the last token has no partner, which is an input error (not a
+    // singleton — that interpretation predates the standard and BusyBox
+    // explicitly rejects it; see tsort.tests "odd"/"odd2" cases).
+    if tokens.len() % 2 != 0 {
+        let source = if args.len() > 1 && args[1] != "-" {
+            args[1].as_str()
+        } else {
+            "-"
+        };
+        eprintln!("tsort: {source}: input contains an odd number of tokens");
+        return 1;
+    }
+
     // Build adjacency list and in-degree map
     // Nodes appear in insertion order
     let mut adj: HashMap<String, Vec<String>> = HashMap::new();

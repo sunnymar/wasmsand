@@ -1,0 +1,8 @@
+# Cargo invokes the runner as `<runner> <wasm> [test-harness-args...]`.
+# Our script post-link-rewrites the wasm to call codepod-wasi-shims
+# replacements for stdlib fns that panic on wasip1, then runs wasmtime.
+[target.wasm32-wasip1]
+runner = ["./run-wasi-test.sh"]
+
+[build]
+target = "wasm32-wasip1"

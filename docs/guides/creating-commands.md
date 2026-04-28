@@ -1,6 +1,8 @@
 # Creating Executables
 
-This guide explains how to create new executables that run inside the codepod sandbox. Executables are Rust binaries compiled to WebAssembly (WASI P1) and spawned as isolated processes by the sandbox's process kernel.
+This guide explains how to create new executables that run inside the codepod sandbox. Executables are WASM binaries (WASI P1) spawned as isolated processes by the sandbox's process kernel.
+
+**The default userland is BusyBox 1.37.0** — one multicall binary providing ~96 standard POSIX utilities (`cat`, `ls`, `awk`, `sed`, `find`, `tar`, …). Adding a *new* command means writing a custom executable in Rust or C; you only need this guide if BusyBox doesn't already cover what you want, or if you want different semantics from BusyBox's applet.
 
 ## How it works
 
@@ -26,9 +28,9 @@ Your code links against standard Rust libraries. The WASI layer maps them to the
 
 You don't need to know about WASI, pipes, or the kernel. Write normal Rust.
 
-## Quick Start: Add to Coreutils
+## Quick Start: Add a Rust executable
 
-All standard executables live in `packages/coreutils/` as binary targets in a single Cargo workspace crate.
+Standard utilities not provided by BusyBox (currently `column`, `csplit`, `file`, `fmt`, `iconv`, `join`, `jq`, `numfmt`, `rg`, `sha224sum`, `sha384sum`, `zip`) live in `packages/coreutils/` as binary targets in a single Cargo workspace crate. New custom commands typically belong here too.
 
 ### 1. Create the source file
 
@@ -143,6 +145,83 @@ To create a command alias, use a VFS symlink. For example, `python` is a built-i
 
 The resolver follows symlinks through the VFS, reads the target tool file, and verifies the `S_TOOL` flag. This means standard `ln -s` semantics apply — no special aliasing API needed.
 
+## Building C executables
+
+For C programs, use `cpcc` — the clang wrapper shipped by the codepod guest
+compatibility runtime (see
+[`docs/superpowers/specs/2026-04-19-guest-compat-runtime-design.md`](../superpowers/specs/2026-04-19-guest-compat-runtime-design.md)).
+`cpcc` and its companions (`cpar`, `cpranlib`, `cpcheck`, `cpconf`) live
+under `packages/guest-compat/toolchain/cpcc/` and build as workspace
+release binaries.
+
+- `cpcc` wraps `clang` from `wasi-sdk`; codepod does not provide an
+  in-sandbox compiler.  Default standard is `-std=gnu23` (C23 + GNU
+  extensions); ports can override via their own `-std=` flag.
+- Plain file/stdio programs can target `wasm32-wasip1` directly.
+- The compat runtime supplies broad POSIX surface that WASI lacks
+  (full inventory in [syscalls.md](./syscalls.md#headers--symbols-provided)):
+  - **Process**: `posix_spawn`/`posix_spawnp` family with file_actions
+    + attrs, `wait`/`waitpid` (blocking via async host_waitpid),
+    `getpid`/`getppid`/`kill`, `popen`/`pclose`.
+  - **Files**: `pipe`/`pipe2`, `dup`/`dup2`/`dup3`, `link` (real
+    hardlinks via `path_link`), `chown`/`fchdir` family,
+    `mkstemp`/`mkostemp`/`mkdtemp`.
+  - **Signals**: `setjmp`/`longjmp` (Asyncify-driven), `signal`/
+    `sigaction`/`raise`/`alarm`, full POSIX signal numbers
+    (NSIG=32, gnulib-compatible).
+  - **Resources**: `getrlimit`/`setrlimit` (sandbox defaults),
+    `getpriority`/`setpriority`/`getrusage`.
+  - **Identity**: `uname` (returns `codepod`/`wasm32`),
+    `getpwuid`/`getgrgid` synthesized records, `tzset`/`tzname`
+    (UTC).
+  - **Networking**: `gethostbyname`/`getservbyname`/`getaddrinfo`
+    routed through `host_socket_connect`.
+  - **Stdio threading**: `flockfile`/`funlockfile`/`ftrylockfile`
+    no-ops (single-threaded sandbox).
+- Symbols ship as **real exports** in `libcodepod_guest_compat.a`
+  (statically `--whole-archive` linked by cpcc), so autoconf's link
+  probes detect them and ports built via gnulib don't compile
+  redundant replacements that would otherwise collide.
+- Shared libraries and full POSIX thread/process semantics are out of scope.
+
+To produce the `cp*` binaries once, from the repo root:
+
+```bash
+cargo build --release -p cpcc-toolchain
+```
+
+Small ports can call `cpcc` directly — set `CPCC_INCLUDE` to pick up the
+Tier 1 compat headers and, for link steps, `CPCC_ARCHIVE` to auto-link
+`libcodepod_guest_compat.a` with `--whole-archive` framing:
+
+```bash
+CPCC_INCLUDE=packages/guest-compat/include \
+./target/release/cpcc \
+  packages/guest-compat/conformance/c/stdio-canary.c \
+  -o /tmp/stdio-canary.wasm
+```
+
+Recipe-style ports (autoconf, CMake, upstream `make`) consume the
+companion wrappers as `CC` / `AR` / `RANLIB`:
+
+```bash
+make CC=./target/release/cpcc \
+     AR=./target/release/cpar \
+     RANLIB=./target/release/cpranlib
+```
+
+Because each companion is a Rust binary that forwards to the right
+`wasi-sdk` tool, they remain consistent when an upstream recipe spawns
+child compiler processes in another directory.
+
+Multi-call ports such as BusyBox (`packages/c-ports/busybox/`) already
+follow this pattern and are a good working reference. BusyBox itself is
+built this way: a single `busybox.wasm` is dispatched by `argv[0]`, and
+the orchestrator's `ProcessManager.registerMulticallTool('busybox', …,
+applets)` creates one VFS symlink under `/usr/bin/<applet>` per applet,
+each pointing back at `/usr/bin/busybox`. Other multicall ports can use
+the same registration helper.
+
 ## What Your Executable Can Do
 
 ### File I/O
@@ -220,10 +299,10 @@ std::process::exit(1);
 | Capability | Status | Reason |
 |-----------|--------|--------|
 | Network access | Via `codepod` imports | Use `host_network_fetch` or `host_socket_*` syscalls (see [syscalls.md](./syscalls.md)) |
-| Spawn subprocesses | Not yet | Process management syscalls are shell-only (for now) |
-| Multithreading | No | `wasm32-wasip1` is single-threaded |
-| Host filesystem access | No | All I/O goes through the sandboxed VFS |
-| Signals (SIGINT, etc.) | No | No signal delivery mechanism |
+| Spawn subprocesses | Via `codepod` imports | `host_spawn` + `host_waitpid` are exposed to applets (BusyBox `xargs`, `find -exec`, the shell itself); see [syscalls.md](./syscalls.md) |
+| Multithreading | No | `wasm32-wasip1` is single-threaded; cooperative scheduling via JSPI/wasi-2 is host-side, not pthreads |
+| Host filesystem access | Only through `HostMount` | Mounted host directories are visible in the VFS; no escape outside mounts |
+| Signals (full semantics) | Partial | `host_kill` cancels a target process (used by `kill`, `kill -9`); arbitrary signal handlers and queued signals are not implemented |
 
 ## Build Configuration
 
@@ -263,9 +342,12 @@ Use `default-features = false` to minimize binary size. Avoid dependencies that 
 
 | Path | Purpose |
 |------|---------|
-| `packages/coreutils/Cargo.toml` | Coreutils crate — add `[[bin]]` entries here |
-| `packages/coreutils/src/bin/` | One `.rs` file per executable |
+| `packages/c-ports/busybox/` | BusyBox build (`busybox.config`, build script) — produces `busybox.wasm`, the default userland |
+| `packages/guest-compat/` | libc shims and `cpcc` toolchain — what BusyBox and other C ports link against |
+| `packages/coreutils/Cargo.toml` | Rust standalones for utilities BusyBox doesn't cover — add `[[bin]]` entries here |
+| `packages/coreutils/src/bin/` | One `.rs` file per Rust executable |
 | `Cargo.toml` (root) | Workspace config — add standalone crates to `members` |
 | `target/wasm32-wasip1/release/` | Build output — `.wasm` binaries |
 | `packages/orchestrator/src/platform/__tests__/fixtures/` | Test fixtures — drop `.wasm` files here |
+| `packages/c-ports/busybox/manifest.json` | Multicall applets list — controls which symlinks resolve to `busybox.wasm` |
 | `scripts/copy-wasm.sh` | Copies fixtures to packaging directory |

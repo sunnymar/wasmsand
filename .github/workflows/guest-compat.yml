@@ -1,0 +1,136 @@
+name: guest-compat-conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install wasmtime
+        run: |
+          curl -sSf https://wasmtime.dev/install.sh | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+
+      - name: Install wasm-opt (binaryen)
+        run: |
+          BINARYEN_VER=119
+          curl -sSL -o /tmp/binaryen.tar.gz \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VER}/binaryen-version_${BINARYEN_VER}-x86_64-linux.tar.gz"
+          mkdir -p "$HOME/.binaryen"
+          tar -xzf /tmp/binaryen.tar.gz -C "$HOME/.binaryen" --strip-components=1
+          echo "$HOME/.binaryen/bin" >> $GITHUB_PATH
+
+      - name: Install wasi-sdk
+        env:
+          WASI_SDK_VER: "30.0"
+        run: |
+          curl -sSL -o /tmp/wasi-sdk.tar.gz \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VER%%.*}/wasi-sdk-${WASI_SDK_VER}-x86_64-linux.tar.gz"
+          mkdir -p $HOME/.local/share
+          tar -xzf /tmp/wasi-sdk.tar.gz -C $HOME/.local/share
+          mv $HOME/.local/share/wasi-sdk-${WASI_SDK_VER}* $HOME/.local/share/wasi-sdk
+          echo "WASI_SDK_PATH=$HOME/.local/share/wasi-sdk" >> $GITHUB_ENV
+
+      - name: Install Deno
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+      - name: Build cpcc toolchain
+        run: cargo build --release -p cpcc-toolchain
+
+      - name: Build C canaries + libcodepod_guest_compat.a
+        run: make -C packages/guest-compat all copy-fixtures
+
+      - name: Build Rust canaries
+        run: make -C packages/guest-compat rust-canaries
+
+      - name: Signature-check C and Rust canaries
+        run: ./target/release/cpconf --skip-toolchain-build --skip-spec-traces --skip-behavioral --include-rust --skip-rust-canaries-build
+
+      - name: Run conformance spec traces (C + Rust, in sandbox)
+        # The canaries import codepod::host_dup2 (and host_run_command for the
+        # system/popen variants) because libcodepod_guest_compat.a is
+        # whole-archive'd into them — those imports are unsatisfiable under
+        # plain wasmtime, but the orchestrator sandbox supplies them by
+        # definition, which is also what real consumers run against.
+        run: deno run -A --no-check scripts/run-conformance-traces.ts --include-rust
+
+      - name: Install c-port host build deps
+        # bison 3.x for coreutils' parse-datetime.y (macOS' system bison
+        # is 2.3 for licensing reasons; Ubuntu CI has 3.x by default but
+        # we install explicitly for clarity).
+        # autopoint, autoconf, automake, gperf, texinfo are required
+        # by coreutils' bootstrap.
+        # libtoolize / libtool for jq + file autotools chains.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bison gperf texinfo \
+            autopoint autoconf automake libtool rsync
+
+      - name: Build BusyBox via cpcc
+        run: make -C packages/c-ports/busybox all
+
+      - name: Signature-check BusyBox (§Verifying Precedence)
+        run: ./packages/c-ports/busybox/scripts/signature-check.sh
+
+      - name: Build jq via cpcc
+        run: make -C packages/c-ports/jq copy-fixtures
+
+      - name: Build file/libmagic via cpcc
+        run: make -C packages/c-ports/file copy-fixtures
+
+      - name: Build GNU coreutils 6-tool batch via cpcc
+        run: make -C packages/c-ports/coreutils copy-fixtures
+
+      - name: Build coreutils via cargo-codepod
+        run: ./scripts/build-coreutils.sh --engine=cargo-codepod --copy-fixtures
+
+      - name: Signature-check every coreutils binary (§Verifying Precedence)
+        run: ./scripts/guest-compat-check-coreutils.sh
+
+      - name: Build grex via cargo-codepod
+        run: ./packages/rust-ports/grex.build.sh
+
+      # Smoke-running the cargo-codepod-built grex via plain wasmtime is
+      # impossible — libcodepod_guest_compat.a is whole-archive'd into the
+      # binary, so it imports codepod::host_dup2.  The grex-wasi-tests
+      # step below builds a separate test binary (without the compat
+      # archive) that postlink-rewrites stdlib panics and runs under
+      # wasmtime; that is the real coverage gate for grex behaviour.
+      - name: Build codepod-wasi-postlink
+        run: cargo build --release -p codepod-wasi-postlink
+
+      - name: Run grex upstream test suite on wasm32-wasip1
+        # Upstream grex's tests were gated out of wasm by `#![cfg(not(target_family = "wasm"))]`.
+        # Our build.rs strips that gate, and the runner script
+        # (`run-wasi-test.sh`) post-link rewrites panicky stdlib fns
+        # (env::temp_dir etc.) to codepod-wasi-shims replacements before
+        # wasmtime. LTO must be off so stdlib panicking fns keep their
+        # real sret ABI — see run-wasi-test.sh's header for rationale.
+        working-directory: packages/rust-ports/grex-wasi-tests
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "off"
+        run: cargo test --release
+
+      - name: Run BusyBox upstream testsuite in sandbox
+        run: deno run -A --no-check scripts/run-busybox-testsuite-in-sandbox.ts
+
+      - name: Run coreutils test_coreutils.py in sandbox
+        run: deno run -A --no-check scripts/run-coreutils-pysuite-in-sandbox.ts

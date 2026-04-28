@@ -40,7 +40,7 @@ The server exposes 4 tools over stdio:
 
 | Tool | Description |
 |------|-------------|
-| `run_command` | Execute a shell command (95+ coreutils, pipes, redirects, variables) |
+| `run_command` | Execute a shell command (BusyBox userland — ~96 POSIX utilities — plus pipes, redirects, variables) |
 | `read_file` | Read a file from the sandbox filesystem |
 | `write_file` | Write a file to the sandbox filesystem |
 | `list_directory` | List files and directories |

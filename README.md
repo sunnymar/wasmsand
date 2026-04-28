@@ -1,15 +1,15 @@
 # codepod
 
-A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, 100+ commands, and a Python runtime — no containers, no kernel, no hardware emulation. Ships with an [MCP server](docs/guides/mcp-server.md) so Claude can use it directly as a tool.
+A portable WebAssembly sandbox that gives LLMs access to a POSIX shell, the **BusyBox userland** (~96 standard utilities), and a Python runtime — no containers, no kernel, no hardware emulation. Ships with an [MCP server](docs/guides/mcp-server.md) so Claude can use it directly as a tool.
 
 **[Try it in your browser](https://codepod-sandbox.github.io/codepod/)**
 
-LLMs are trained on enormous amounts of shell and Python usage. Rather than inventing a new API for code execution, codepod speaks the language they already know: bash, coreutils, and Python 3.
+LLMs are trained on enormous amounts of shell and Python usage. Rather than inventing a new API for code execution, codepod speaks the language they already know: bash, the GNU/BusyBox utilities, and Python 3.
 
 ## What it does
 
 - **Shell execution** — pipes, redirects, variables, globbing, control flow, functions, subshells, background jobs (`&`), aliases, arrays, process substitution
-- **100+ commands** — cat, grep, sed, awk, find, sort, jq, tar, curl, sqlite3, `pdfinfo`, `pdftotext`, `pdfunite`, `pdfseparate`, `xlsx2csv`, `csv2xlsx`, and more
+- **POSIX userland** — BusyBox 1.37.0 compiled to WASI provides `cat`, `ls`, `grep`, `sed`, `awk`, `find`, `sort`, `tar`, `xargs`, and ~90 other standard utilities. Plus upstream C ports (`jq` from jqlang/jq, `file`/libmagic from file/file) and Rust standalones (`rg`, `fmt`, `column`, `numfmt`, `csplit`, `join`, document tools `pdfinfo`/`pdftotext`/`pdfunite`/`pdfseparate`/`xlsx2csv`/`csv2xlsx`/`sqlite3`).
 - **Native document tools** — inspect and transform PDFs and spreadsheets with familiar real-world CLI names
 - **Python 3** via RustPython compiled to WASI, with **numpy** support (native Rust implementation)
 - **Virtual filesystem** — in-memory POSIX VFS with optional persistence
@@ -170,7 +170,7 @@ codepod occupies a specific point in the design space: a lightweight WASM-based 
 | **Cost per sandbox** | ~64KB initial memory | Container overhead (~10-50MB) |
 | **Filesystem** | In-memory VFS with host mounts | Full Linux FS with bind mounts, volumes |
 | **Python** | RustPython + native numpy | Full CPython + pip install anything |
-| **Shell** | POSIX shell, 95+ commands, aliases, arrays, process substitution, background jobs | Full Linux (bash, zsh, everything) |
+| **Shell** | POSIX shell + BusyBox userland (~96 utilities), aliases, arrays, process substitution, background jobs | Full Linux (bash, zsh, everything) |
 | **Networking** | Opt-in domain allowlist | Full network stack (configurable) |
 | **Persistence** | Snapshot/restore/fork/export | Volumes, bind mounts, image layers |
 | **Embeddable** | Yes (library, runs in-process) | No (requires daemon) |
@@ -194,7 +194,7 @@ codepod takes a fundamentally different approach — no VMs, no containers, no k
 | **10 concurrent sandboxes** | ~1x compiled code + 10x heap | 10x full VMs |
 | **Filesystem** | In-memory VFS with host mounts and virtual FS | Ephemeral VM disk (no host mount or virtual FS support) |
 | **Python** | RustPython + native numpy | Full CPython + pip install anything |
-| **Shell** | POSIX shell, 95+ commands, aliases, arrays, process substitution, background jobs | Full Linux (bash, apt, everything) |
+| **Shell** | POSIX shell + BusyBox userland (~96 utilities), aliases, arrays, process substitution, background jobs | Full Linux (bash, apt, everything) |
 | **Networking** | Opt-in domain allowlist | Full network stack |
 | **Persistence** | Snapshot/restore/fork/export (in-memory) | VM snapshots |
 | **Open source** | Yes (BSD 3-Clause) | Yes (Apache 2.0) |
@@ -213,11 +213,11 @@ E2B is the right choice when you need full Linux compatibility — C extensions,
 | **Runs in browser** | Yes | No |
 | **Open source** | Yes | No |
 | **Python** | RustPython + numpy | Full CPython |
-| **Shell** | POSIX shell, 95+ commands, aliases, arrays, process substitution, background jobs | Full Linux |
+| **Shell** | POSIX shell + BusyBox userland (~96 utilities), aliases, arrays, process substitution, background jobs | Full Linux |
 
 ### vs. RustPython
 
-[RustPython](https://github.com/RustPython/RustPython) (21k+ stars) is a Python 3 interpreter written in Rust. codepod uses RustPython compiled to WASI as its Python runtime — it runs as a standard WASI binary through the same process manager as coreutils, sharing the virtual filesystem and I/O plumbing with no special-case integration.
+[RustPython](https://github.com/RustPython/RustPython) (21k+ stars) is a Python 3 interpreter written in Rust. codepod uses RustPython compiled to WASI as its Python runtime — it runs as a standard WASI binary through the same process manager as the BusyBox userland, sharing the virtual filesystem and I/O plumbing with no special-case integration.
 
 RustPython gives codepod near-complete Python 3 coverage (classes, generators, decorators, context managers, and stdlib modules like `json`, `re`, `math`, `collections`) in a single WASM binary. The tradeoff is startup latency (hundreds of milliseconds for the first invocation, cached after) and no C extension support. codepod works around this for key packages by providing native Rust implementations compiled directly into the WASM binary — numpy is supported this way via [numpy-rust](https://github.com/codepod-sandbox/numpy-rust) (400+ operations, 8 dtypes, linalg, FFT, random). Additional packages (pillow, matplotlib) follow the same pattern.
 
@@ -229,7 +229,7 @@ codepod initially used Monty but switched to RustPython because Monty's Python s
 
 ### vs. lifo
 
-[lifo](https://github.com/lifo-sh/lifo) is a browser-native Unix environment — 60+ commands, a bash-like shell, a virtual filesystem with IndexedDB persistence. It implements commands in JavaScript against browser APIs, while codepod compiles real Rust coreutils and a Rust shell parser to WebAssembly running under WASI.
+[lifo](https://github.com/lifo-sh/lifo) is a browser-native Unix environment — 60+ commands, a bash-like shell, a virtual filesystem with IndexedDB persistence. It implements commands in JavaScript against browser APIs, while codepod runs the real BusyBox 1.37.0 multicall binary (plus a Rust shell parser) compiled to WebAssembly under WASI.
 
 | | codepod | lifo |
 |---|---|---|
@@ -242,7 +242,7 @@ codepod initially used Monty but switched to RustPython because Monty's Python s
 
 ## Origin
 
-This project was written entirely by Claude (Anthropic's AI assistant) as an experiment in AI-driven software engineering. Every line of code — the Rust shell parser, the TypeScript orchestrator, the Python SDK, the WASM coreutils integration, and the build tooling — was generated by Claude across a series of collaborative sessions with a human directing the design.
+This project was written entirely by Claude (Anthropic's AI assistant) as an experiment in AI-driven software engineering. Every line of code — the Rust shell parser, the TypeScript orchestrator, the Python SDK, the BusyBox/WASM toolchain integration, and the build tooling — was generated by Claude across a series of collaborative sessions with a human directing the design.
 
 ## License
 

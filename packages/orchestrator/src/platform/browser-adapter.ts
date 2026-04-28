@@ -25,6 +25,7 @@ const BROWSER_TOOLS = [
   'split', 'strings', 'od', 'cksum', 'truncate',
   'tree', 'patch', 'file', 'column', 'cmp', 'timeout', 'numfmt', 'csplit', 'zip', 'unzip',
   'rg',
+  'busybox',
 ];
 
 function toolToWasmFile(name: string): string {
@@ -67,5 +68,20 @@ export class BrowserAdapter implements PlatformAdapter {
       tools.set(name, `${wasmBase}/${toolToWasmFile(name)}`);
     }
     return tools;
+  }
+
+  async readDataFile(wasmBase: string, name: string): Promise<Uint8Array | null> {
+    // Mirror NodeAdapter.readDataFile via fetch.  Used by the
+    // manifest pass to fetch <name>.manifest.json and any sidecar
+    // data files declared by it (e.g. magic.mgc for file/libmagic).
+    // Returns null on 404 so callers treat the asset as optional.
+    try {
+      const response = await fetch(`${wasmBase}/${name}`);
+      if (!response.ok) return null;
+      const ab = await response.arrayBuffer();
+      return new Uint8Array(ab);
+    } catch {
+      return null;
+    }
   }
 }

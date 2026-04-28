@@ -1,0 +1,5 @@
+column
+iconv
+rg
+sudo
+zip

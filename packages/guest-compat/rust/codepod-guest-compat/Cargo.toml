@@ -1,0 +1,15 @@
+[package]
+name = "codepod-guest-compat"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Safe Rust wrappers over the codepod guest compatibility runtime Tier 1 ABI."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+codepod-guest-compat-sys = { path = "../codepod-guest-compat-sys" }
+libc = "0.2"
+
+[dev-dependencies]

@@ -12,10 +12,22 @@ export interface SpawnRequest {
   stdout_fd: number;
   stderr_fd: number;
   stdin_data?: string;
+  /**
+   * Optional argv[0] override. When present, the child sees this as argv[0]
+   * instead of `prog`. Required for multicall binaries (e.g. BusyBox) where
+   * a symlink `grep -> busybox` must run the busybox wasm with `argv[0] =
+   * "grep"` so the applet dispatcher selects grep.
+   */
+  argv0?: string;
 }
 
 export interface ProcessEntry {
   pid: number;
+  /** Parent PID — the PID of the in-sandbox process that spawned this one.
+   *  ppid == 0 means "no in-sandbox parent" (the codepod runtime itself),
+   *  which is what the first process to start sees from getppid() — exactly
+   *  how Linux treats init's parent. */
+  ppid: number;
   promise: Promise<void> | null;
   exitCode: number;
   state: 'running' | 'exited';
@@ -24,16 +36,54 @@ export interface ProcessEntry {
   command?: string;
 }
 
+/** Synthetic ppid for processes with no in-sandbox parent (the first
+ *  process to start, typically the shell, sees this from getppid).
+ *  Mirrors Linux: getppid() inside init returns 0. */
+export const NO_PARENT_PID = 0;
+
 export class ProcessKernel {
   private processTable = new Map<number, ProcessEntry>();
+  /** PIDs are allocated sequentially starting at 1.  The shell isn't
+   *  special — it's just whichever process was first to call allocPid()
+   *  (and that does happen to be the shell in every current entry path,
+   *  so it gets PID 1, matching Unix convention).  When Python or another
+   *  tool spawns a fresh shell as a child, that child gets the next free
+   *  PID and `ppid` set to whoever called allocPid on its behalf. */
   private nextPid = 1;
   private fdTables = new Map<number, Map<number, FdTarget>>();
   private nextFds = new Map<number, number>();
 
-  constructor() {
-    // Process 0 (shell) gets a default fd table
-    this.fdTables.set(0, new Map());
-    this.nextFds.set(0, 3);
+  /** Allocate a new PID and pre-register a process entry for it.
+   *  Pass `ppid = 0` for the first/topmost process (no in-sandbox parent),
+   *  or the spawning caller's PID for any subsequent process. */
+  allocPid(ppid: number = NO_PARENT_PID, command?: string): number {
+    const pid = this.nextPid++;
+    this.processTable.set(pid, {
+      pid, ppid, promise: null, exitCode: -1, state: 'running',
+      wasiHost: null, waiters: [], command,
+    });
+    if (!this.fdTables.has(pid)) {
+      this.fdTables.set(pid, new Map());
+      this.nextFds.set(pid, 3);
+    }
+    return pid;
+  }
+
+  /** Look up the parent PID of a process, or 0 if unknown. */
+  getPpid(pid: number): number {
+    return this.processTable.get(pid)?.ppid ?? 0;
+  }
+
+  /** Best-effort signal delivery.  Today: cancel the target's WASI host
+   *  (which throws WasiExitError, surfacing as exit 124).  This is enough
+   *  for `kill -TERM <pid>` and `kill -9 <pid>` style termination; finer
+   *  signal semantics (queued signals, sigaction handlers) are tracked
+   *  via the guest-compat signal layer for in-process self-signalling. */
+  killProcess(pid: number, _sig: number): boolean {
+    const entry = this.processTable.get(pid);
+    if (!entry || entry.state === 'exited') return false;
+    entry.wasiHost?.cancelExecution();
+    return true;
   }
 
   createPipe(callerPid: number): { readFd: number; writeFd: number } {
@@ -85,12 +135,16 @@ export class ProcessKernel {
   }
 
   /** Pre-register a process entry so waitpid can find it before async instantiation completes. */
-  registerPending(pid: number, command?: string): void {
+  registerPending(pid: number, command?: string, ppid: number = NO_PARENT_PID): void {
     if (!this.processTable.has(pid)) {
       this.processTable.set(pid, {
-        pid, promise: null, exitCode: -1, state: 'running', wasiHost: null, waiters: [],
+        pid, ppid, promise: null, exitCode: -1, state: 'running', wasiHost: null, waiters: [],
         command,
       });
+    } else {
+      const e = this.processTable.get(pid)!;
+      if (command !== undefined) e.command = command;
+      e.ppid = ppid;
     }
   }
 
@@ -111,9 +165,9 @@ export class ProcessKernel {
     promise.then(onExit, onExit);
   }
 
-  registerProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost): void {
+  registerProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost, ppid: number = NO_PARENT_PID): void {
     this.processTable.set(pid, {
-      pid, promise, exitCode: -1, state: 'running', wasiHost, waiters: [],
+      pid, ppid, promise, exitCode: -1, state: 'running', wasiHost, waiters: [],
     });
     const onExit = () => {
       const entry = this.processTable.get(pid);
@@ -127,10 +181,8 @@ export class ProcessKernel {
     promise.then(onExit, onExit);
   }
 
-  allocPid(): number { return this.nextPid++; }
-
   /** Register a process as already exited (used for synchronous spawn). */
-  registerExited(pid: number, exitCode: number): void {
+  registerExited(pid: number, exitCode: number, ppid: number = NO_PARENT_PID): void {
     const existing = this.processTable.get(pid);
     if (existing) {
       existing.state = 'exited';
@@ -140,7 +192,7 @@ export class ProcessKernel {
       existing.waiters.length = 0;
     } else {
       this.processTable.set(pid, {
-        pid, promise: Promise.resolve(), exitCode, state: 'exited', wasiHost: null, waiters: [],
+        pid, ppid, promise: Promise.resolve(), exitCode, state: 'exited', wasiHost: null, waiters: [],
       });
     }
   }
@@ -159,11 +211,12 @@ export class ProcessKernel {
     return -1;
   }
 
-  listProcesses(): { pid: number; state: string; exit_code: number; command: string }[] {
-    const result: { pid: number; state: string; exit_code: number; command: string }[] = [];
+  listProcesses(): { pid: number; ppid: number; state: string; exit_code: number; command: string }[] {
+    const result: { pid: number; ppid: number; state: string; exit_code: number; command: string }[] = [];
     for (const [pid, entry] of this.processTable) {
       result.push({
         pid,
+        ppid: entry.ppid,
         state: entry.state,
         exit_code: entry.exitCode,
         command: entry.command ?? '',

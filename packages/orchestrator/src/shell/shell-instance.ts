@@ -21,7 +21,7 @@ import type { ShellLike, StreamCallbacks } from './shell-like.js';
 import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import { createShellImports } from '../host-imports/shell-imports.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
-import { ProcessKernel, type SpawnRequest } from '../process/kernel.js';
+import { ProcessKernel, NO_PARENT_PID, type SpawnRequest } from '../process/kernel.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import { createBufferTarget, createNullTarget, createStaticTarget, bufferToString, type FdTarget } from '../wasi/fd-target.js';
 
@@ -88,6 +88,13 @@ export class ShellInstance implements ShellLike {
   // Needed to extract buffer-captured output from spawned pipeline stages.
   private kernel: ProcessKernel | undefined;
 
+  // The shell's own PID in `kernel`, returned by allocPid() at create time.
+  // Used to look up the shell's stdin/stdout/stderr fd targets and to install
+  // stdinData overrides.  Was hardcoded to 0 before the dynamic-PID refactor;
+  // kept on the instance now because allocPid() returns the next free PID
+  // (1 for the topmost shell, 2+ for nested shells inside spawned tools).
+  private pid: number = 0;
+
   private constructor(instance: WebAssembly.Instance) {
     this.instance = instance;
     this.memory = instance.exports.memory as WebAssembly.Memory;
@@ -136,10 +143,34 @@ export class ShellInstance implements ShellLike {
 
     // ── Process kernel for pipe/spawn/waitpid/close_fd ──
     const kernel = new ProcessKernel();
-    // Set the shell's fd targets in the kernel (pid 0)
-    kernel.setFdTarget(0, 0, createNullTarget());    // stdin: no terminal input
-    kernel.setFdTarget(0, 1, createBufferTarget());   // stdout: captured (no limit on kernel fd)
-    kernel.setFdTarget(0, 2, createBufferTarget());   // stderr: captured (no limit on kernel fd)
+
+    // Wire /proc/<pid>/* entries.  The ProcProvider (built when the
+    // VFS was constructed) reads through this callback live, so
+    // newly-spawned processes show up in /proc as soon as
+    // kernel.allocPid records them.  Only the main-thread VFS
+    // exposes setProcessListProvider — VfsProxy in worker mode
+    // doesn't (yet), so /proc/<pid>/* won't render there until the
+    // proxy protocol grows a process-list op; the rest of /proc
+    // continues to work via the existing storage/mount callbacks.
+    const setProc = (vfs as { setProcessListProvider?: (fn: () => unknown) => void }).setProcessListProvider;
+    if (typeof setProc === 'function') {
+      setProc.call(vfs, () => kernel.listProcesses());
+    }
+    // The shell isn't special — it just happens to be the first process
+    // to call allocPid on this kernel, so it gets PID 1 (Unix init by
+    // convention).  When a Python script or another tool spawns a fresh
+    // shell as a child later, that nested shell calls allocPid on its
+    // own kernel (because each ShellInstance owns one) and is similarly
+    // PID 1 inside its own container.
+    // The shell process records itself as `/bin/bash` — codepod-shell-
+    // exec.wasm implements bash-equivalent semantics, and that's the
+    // path POSIX tools (ps, /proc/<pid>/comm, /proc/<pid>/cmdline)
+    // expect to see.  procComm() in proc-provider.ts takes the
+    // basename, so /proc/1/comm renders as "bash".
+    const shellPid = kernel.allocPid(NO_PARENT_PID, '/bin/bash');
+    kernel.setFdTarget(shellPid, 0, createNullTarget());    // stdin: no terminal input
+    kernel.setFdTarget(shellPid, 1, createBufferTarget());   // stdout: captured (no limit on kernel fd)
+    kernel.setFdTarget(shellPid, 2, createBufferTarget());   // stderr: captured (no limit on kernel fd)
 
     // Build runCommand callback for Python _codepod.spawn() / subprocess support.
     // Each call creates a fresh ShellInstance so we don't re-enter the busy one.
@@ -159,16 +190,16 @@ export class ShellInstance implements ShellLike {
     // Kernel imports provide codepod-namespace syscalls (network, process mgmt)
     const kernelImports = createKernelImports({
       memory: memoryProxy,
-      callerPid: 0,
+      callerPid: shellPid,
       kernel,
       networkBridge: options?.networkBridge,
       nativeModules: mgr.nativeModules,
       runCommand,
-      spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>) => {
+      spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => {
         if (options?.syncSpawn) {
-          return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn);
+          return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn, parentPid);
         }
-        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes, options?.networkBridge, options?.extensionRegistry, runCommand);
+        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes, options?.networkBridge, options?.extensionRegistry, runCommand, parentPid);
       },
     });
 
@@ -244,7 +275,7 @@ export class ShellInstance implements ShellLike {
         const mem = getMemory();
         const view = new DataView(mem.buffer);
         const bytes = new Uint8Array(mem.buffer);
-        const target = kernel.getFdTarget(0, fd);
+        const target = kernel.getFdTarget(shellPid, fd);
         if (!target) {
           // Unknown fd — return 0 bytes written (backward-compat for fds 0-2)
           view.setUint32(nwrittenPtr, 0, true);
@@ -297,7 +328,7 @@ export class ShellInstance implements ShellLike {
       fd_read: async (fd: number, iovPtr: number, iovLen: number, nreadPtr: number): Promise<number> => {
         const mem = getMemory();
         const view = new DataView(mem.buffer);
-        const target = kernel.getFdTarget(0, fd);
+        const target = kernel.getFdTarget(shellPid, fd);
         if (!target) {
           view.setUint32(nreadPtr, 0, true);
           return 0;
@@ -510,6 +541,7 @@ export class ShellInstance implements ShellLike {
     const shell = new ShellInstance(instance);
     shell.runCommandFn = wrappedRunCommand;
     shell.kernel = kernel;
+    shell.pid = shellPid;
     shellRef = shell;
 
     // Populate /bin/ in VFS with entries for registered tools so that
@@ -630,7 +662,7 @@ export class ShellInstance implements ShellLike {
     // After the run, restore the null target so the shell's stdin is clean again.
     const hadStdinData = options?.stdinData && options.stdinData.byteLength > 0;
     if (hadStdinData && this.kernel) {
-      this.kernel.setFdTarget(0, 0, createStaticTarget(options!.stdinData!));
+      this.kernel.setFdTarget(this.pid, 0, createStaticTarget(options!.stdinData!));
     }
 
     // Sync env changes to the WASM module by prepending export statements
@@ -737,8 +769,8 @@ export class ShellInstance implements ShellLike {
     let stdout = '';
     let stderr = '';
     if (this.kernel) {
-      const stdoutTarget = this.kernel.getFdTarget(0, 1);
-      const stderrTarget = this.kernel.getFdTarget(0, 2);
+      const stdoutTarget = this.kernel.getFdTarget(this.pid, 1);
+      const stderrTarget = this.kernel.getFdTarget(this.pid, 2);
       if (stdoutTarget?.type === 'buffer' && stdoutTarget.buf.length > 0) {
         stdout = bufferToString(stdoutTarget);
       }
@@ -784,7 +816,7 @@ export class ShellInstance implements ShellLike {
 
     // Restore null stdin target after run (if we temporarily installed stdinData)
     if (hadStdinData && this.kernel) {
-      this.kernel.setFdTarget(0, 0, createNullTarget());
+      this.kernel.setFdTarget(this.pid, 0, createNullTarget());
     }
 
     return {
@@ -797,11 +829,11 @@ export class ShellInstance implements ShellLike {
     };
   }
 
-  /** Set or clear streaming callbacks on pid 0 stdout/stderr buffer targets. */
+  /** Set or clear streaming callbacks on the shell's stdout/stderr buffer targets. */
   setOutputCallbacks(callbacks: StreamCallbacks | null): void {
     if (!this.kernel) return;
-    const stdoutTarget = this.kernel.getFdTarget(0, 1);
-    const stderrTarget = this.kernel.getFdTarget(0, 2);
+    const stdoutTarget = this.kernel.getFdTarget(this.pid, 1);
+    const stderrTarget = this.kernel.getFdTarget(this.pid, 2);
     if (stdoutTarget?.type === 'buffer') stdoutTarget.onChunk = callbacks?.onStdout ?? undefined;
     if (stderrTarget?.type === 'buffer') stderrTarget.onChunk = callbacks?.onStderr ?? undefined;
   }
@@ -813,6 +845,90 @@ export class ShellInstance implements ShellLike {
 }
 
 // ── Async process spawning ──
+
+/**
+ * Set up the child wasm's _start invocation.
+ *
+ * Four cases from the (scheduler × asyncified) cross product:
+ *
+ *   JSPI scheduler / asyncified binary
+ *     → WebAssembly.promising(_start) handles async-import suspends
+ *       via JSPI; bridge.wrapExportJspi wraps that to also catch
+ *       Asyncify unwinds from setjmp/longjmp.
+ *
+ *   JSPI scheduler / non-asyncified binary
+ *     → WebAssembly.promising(_start).  No setjmp support in the
+ *       binary anyway (no asyncify state machine), so no driver
+ *       layer is needed on top.
+ *
+ *   Asyncify scheduler / asyncified binary
+ *     → bridge.wrapExport(_start) drives a unified loop that
+ *       handles both async-import unwinds (Promise from
+ *       wrapImport) and setjmp/longjmp unwinds.
+ *
+ *   Asyncify scheduler / non-asyncified binary
+ *     → bare _start.  Async imports' Promise returns get coerced
+ *       to 0; the binary effectively can't do async work or
+ *       setjmp.  Same behavior as old non-JSPI hosts pre-this work.
+ *
+ * Returns a no-arg function the caller invokes to actually start
+ * the process; the kernel-side promise wiring is identical across
+ * all four branches.
+ */
+function wireChildStart(
+  instance: WebAssembly.Instance,
+  bridge: AsyncifyAsyncBridge,
+  hostScheduler: 'jspi' | 'asyncify',
+): () => Promise<unknown> {
+  const exp = instance.exports;
+  const hasAsyncifyState =
+    typeof exp.asyncify_start_unwind === 'function' &&
+    typeof exp.asyncify_stop_unwind === 'function' &&
+    typeof exp.asyncify_start_rewind === 'function' &&
+    typeof exp.asyncify_stop_rewind === 'function' &&
+    typeof exp.asyncify_get_state === 'function';
+  const hasAsyncifyBuf =
+    typeof exp.codepod_asyncify_buf_addr === 'function';
+  const childIsAsyncified = hasAsyncifyState && hasAsyncifyBuf;
+
+  if (childIsAsyncified) {
+    // Init the static save-state buffer header (bytes 0..3 = current
+    // write/read offset starting past the 8-byte header, bytes 4..7
+    // = end-of-buffer pointer).  Then hand the bridge the exports.
+    const memory = exp.memory as WebAssembly.Memory;
+    const bufAddr = (exp.codepod_asyncify_buf_addr as () => number)();
+    const bufSize = typeof exp.codepod_asyncify_buf_size === 'function'
+      ? (exp.codepod_asyncify_buf_size as () => number)()
+      : 16384;
+    const view = new DataView(memory.buffer);
+    view.setUint32(bufAddr,     bufAddr + 8,        true);
+    view.setUint32(bufAddr + 4, bufAddr + bufSize,  true);
+
+    bridge.initFromInstance(instance, bufAddr);
+
+    // The bridge already has its hostSetjmp / hostLongjmp methods
+    // wired into imports.codepod (done pre-instantiation by the
+    // caller).  Once the wasm starts running and hits a setjmp,
+    // bridge captures the state via wrapExport's unwind handling.
+    if (hostScheduler === 'jspi') {
+      const promising = (WebAssembly as unknown as { promising: (fn: Function) => Function })
+        .promising(exp._start as Function) as (...args: number[]) => Promise<number>;
+      const wrapped = bridge.wrapExportJspi(promising);
+      return () => wrapped();
+    }
+    const wrapped = bridge.wrapExport(exp._start as (...args: number[]) => number);
+    return () => wrapped();
+  }
+
+  // Non-asyncified binary: no setjmp/longjmp support possible (no
+  // asyncify state machine).  Pure scheduler choice.
+  if (hostScheduler === 'jspi') {
+    const promising = (WebAssembly as unknown as { promising: (fn: Function) => Function })
+      .promising(exp._start as Function);
+    return () => Promise.resolve((promising as () => unknown)());
+  }
+  return () => Promise.resolve((exp._start as () => unknown)());
+}
 
 /**
  * Spawn a child WASM process asynchronously.
@@ -836,24 +952,22 @@ function spawnAsyncProcess(
   networkBridge?: NetworkBridgeLike,
   extensionRegistry?: ExtensionRegistry,
   runCommand?: (cmd: string, stdin: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
+  parentPid: number = NO_PARENT_PID,
 ): number {
   // Tool allowlist check
   if (!mgr.isToolAllowed(req.prog)) {
-    const pid = kernel.allocPid();
-    kernel.initProcess(pid);
+    const pid = kernel.allocPid(parentPid, req.prog);
     for (const [fd, target] of fdTable) kernel.setFdTarget(pid, fd, target);
     const errMsg = new TextEncoder().encode(`${req.prog}: tool not allowed by security policy\n`);
     const stderrTarget = fdTable.get(2);
     if (stderrTarget?.type === 'buffer') { stderrTarget.buf.push(errMsg); stderrTarget.total += errMsg.byteLength; }
     else if (stderrTarget?.type === 'pipe_write') stderrTarget.pipe.write(errMsg);
     for (const [fd] of fdTable) kernel.closeFd(pid, fd);
-    kernel.registerExited(pid, 126);
+    kernel.registerExited(pid, 126, parentPid);
     return pid;
   }
 
-  const pid = kernel.allocPid();
-  kernel.initProcess(pid);
-  kernel.registerPending(pid, `${req.prog} ${req.args.join(' ')}`);
+  const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(' ')}`);
 
   // Check for host commands (TypeScript handlers) first
   const hostCmdEntry = mgr.getHostCommand(req.prog);
@@ -920,13 +1034,18 @@ function spawnAsyncProcess(
     kernel.setFdTarget(pid, fd, target);
   }
 
+  // argv[0] defaults to the tool name, but callers (e.g. the shell executor
+  // dispatching a BusyBox applet symlink) may override it so multicall
+  // binaries see the user-facing command name.
+  const argv0 = req.argv0 ?? req.prog;
   const host = new WasiHost({
     vfs: mgr.getVfs(),
-    args: [req.prog, ...req.args],
+    args: [argv0, ...req.args],
     env: Object.fromEntries(req.env),
     preopens: { '/': '/' },
     ioFds: fdTable,
     deadlineMs,
+    pid,
   });
 
   const imports = host.getImports() as WebAssembly.Imports & Record<string, Record<string, unknown>>;
@@ -944,15 +1063,65 @@ function spawnAsyncProcess(
     }
   }
 
-  // JSPI-wrap fd_read/fd_write for pipe suspension in the child process.
-  if (typeof WebAssembly.Suspending === 'function') {
-    imports.wasi_snapshot_preview1.fd_read = new WebAssembly.Suspending(
-      imports.wasi_snapshot_preview1.fd_read as (...args: number[]) => number,
-    ) as unknown as WebAssembly.ImportValue;
-    imports.wasi_snapshot_preview1.fd_write = new WebAssembly.Suspending(
-      imports.wasi_snapshot_preview1.fd_write as (...args: number[]) => number,
-    ) as unknown as WebAssembly.ImportValue;
-  }
+  // Two orthogonal decisions:
+  //
+  // 1. Scheduler — host-wide, picks the mechanism that catches
+  //    async-import Promises and resumes the wasm.  Priority:
+  //      a. wasi-preview2 / wasmtime preemptive multitasking
+  //         (real OS threads) — TODO when we add a wasmtime backend
+  //         to this code path; currently relevant only to the Rust
+  //         codepod-server, not the Deno orchestrator.
+  //      b. JSPI (WebAssembly.Suspending / promising) — cooperative
+  //         scheduling on the JS event loop, available on Deno 2.4+,
+  //         Node 25+, modern Chromium.  This is the preferred path
+  //         in this orchestrator.
+  //      c. Asyncify — Binaryen unwind/rewind kludge.  Works
+  //         everywhere (Safari, older Node, etc.) but adds binary
+  //         size and a per-call overhead.
+  //
+  // 2. setjmp/longjmp — always Asyncify, regardless of scheduler.
+  //    The unwind/rewind state machine is the only mechanism we
+  //    have for arbitrary stack reconstruction, and it's orthogonal
+  //    to (1): asyncify_get_state stays NORMAL during JSPI
+  //    suspensions, so an asyncified binary on a JSPI-scheduled
+  //    host happily uses JSPI for async imports AND asyncify for
+  //    setjmp/longjmp without conflict.
+  //
+  // The two flags below — `hostScheduler` (host capability) and
+  // `childIsAsyncified` (binary capability) — drive the wiring
+  // independently from here on.
+
+  type HostScheduler = 'jspi' | 'asyncify';
+  const hostScheduler: HostScheduler =
+    typeof WebAssembly.Suspending === 'function' ? 'jspi' : 'asyncify';
+
+  // Per-child Asyncify bridge.  Created BEFORE instantiation so the
+  // host_setjmp / host_longjmp imports the wasm gets bound to point
+  // at the bridge's state machine — bindings are baked in at
+  // instantiate() time and can't be swapped afterward.  The bridge
+  // is dormant until initFromInstance is called (post-instantiate).
+  const childAsyncifyBridge = new AsyncifyAsyncBridge();
+
+  // Async-import wrapping.  Picked by the scheduler, not the
+  // binary: even an asyncified binary uses JSPI when JSPI is
+  // available (it's faster + doesn't need wrapExport's loop to
+  // mediate every async import).  The bridge.wrapImport fallback
+  // only kicks in when JSPI is unavailable.
+  const wrapAsyncImport = hostScheduler === 'jspi'
+    ? <T extends (...args: number[]) => Promise<number> | number>(fn: T) =>
+        new WebAssembly.Suspending(fn as (...args: number[]) => number) as unknown as WebAssembly.ImportValue
+    : <T extends (...args: number[]) => Promise<number> | number>(fn: T) =>
+        childAsyncifyBridge.wrapImport(fn) as unknown as WebAssembly.ImportValue;
+
+  // wasi_snapshot_preview1 fd_read / fd_write are async (return
+  // Promise<number> from the WasiHost) and need to suspend on
+  // pipe_read drains and pipe_write back-pressure.
+  imports.wasi_snapshot_preview1.fd_read = wrapAsyncImport(
+    imports.wasi_snapshot_preview1.fd_read as (...args: number[]) => Promise<number>,
+  );
+  imports.wasi_snapshot_preview1.fd_write = wrapAsyncImport(
+    imports.wasi_snapshot_preview1.fd_write as (...args: number[]) => Promise<number>,
+  );
 
   // Helper: check memory limit post-instantiation, write error and bail if exceeded.
   const checkMemLimit = (instance: WebAssembly.Instance): boolean => {
@@ -1005,37 +1174,52 @@ function spawnAsyncProcess(
       memory: childMemoryProxy,
       callerPid: pid,
       kernel,
+      wasiHost: host,
       networkBridge,
       extensionRegistry,
       nativeModules: mgr.nativeModules,
       runCommand,
-      spawnProcess: (req2, fdTable2) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry, runCommand),
+      // The child's spawn calls record the child's pid as the new
+      // grandchild's ppid — this is how getppid() resolves to the real
+      // parent at every level of the process tree.
+      spawnProcess: (req2, fdTable2, grandparentPid) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry, runCommand, grandparentPid),
     });
     imports.codepod = childKernelImports as unknown as Record<string, WebAssembly.ImportValue>;
 
     // Alias host_spawn_async for WASM compatibility
     imports.codepod.host_spawn_async = childKernelImports.host_spawn as WebAssembly.ImportValue;
 
-    // JSPI-wrap async syscalls in the child's codepod imports
-    if (typeof WebAssembly.Suspending === 'function') {
-      imports.codepod.host_waitpid = new WebAssembly.Suspending(
-        childKernelImports.host_waitpid as (...args: number[]) => Promise<number>,
-      ) as unknown as WebAssembly.ImportValue;
-      imports.codepod.host_yield = new WebAssembly.Suspending(
-        childKernelImports.host_yield as () => Promise<void>,
-      ) as unknown as WebAssembly.ImportValue;
-      imports.codepod.host_network_fetch = new WebAssembly.Suspending(
-        childKernelImports.host_network_fetch as (...args: number[]) => Promise<number>,
-      ) as unknown as WebAssembly.ImportValue;
-      // Python uses host_extension_invoke for _codepod.extension_call()
-      imports.codepod.host_extension_invoke = new WebAssembly.Suspending(
-        childKernelImports.host_extension_invoke as (...args: number[]) => Promise<number>,
-      ) as unknown as WebAssembly.ImportValue;
-      // Python uses host_run_command for _codepod.spawn() / subprocess support
-      imports.codepod.host_run_command = new WebAssembly.Suspending(
-        childKernelImports.host_run_command as (...args: number[]) => Promise<number>,
-      ) as unknown as WebAssembly.ImportValue;
-    }
+    // Wire setjmp/longjmp to the per-child Asyncify bridge that was
+    // created above.  The bindings are baked into the instance at
+    // instantiate() time, so they have to land here BEFORE that call
+    // happens.  The bridge stays dormant (its no-export branch
+    // returns 0 / throws) until wireChildStart calls initFromInstance
+    // post-instantiation; that's harmless for binaries that import
+    // the symbols but never invoke them on the non-asyncify path.
+    imports.codepod.host_setjmp = childAsyncifyBridge.hostSetjmp as unknown as WebAssembly.ImportValue;
+    imports.codepod.host_longjmp = childAsyncifyBridge.hostLongjmp as unknown as WebAssembly.ImportValue;
+
+    // Async codepod syscalls — same scheduler choice as the wasi
+    // imports above: JSPI Suspending when available, Asyncify
+    // bridge.wrapImport as the fallback.  Independent of whether
+    // the binary is asyncified.
+    imports.codepod.host_waitpid = wrapAsyncImport(
+      childKernelImports.host_waitpid as (...args: number[]) => Promise<number>,
+    );
+    imports.codepod.host_yield = wrapAsyncImport(
+      childKernelImports.host_yield as () => Promise<number>,
+    );
+    imports.codepod.host_network_fetch = wrapAsyncImport(
+      childKernelImports.host_network_fetch as (...args: number[]) => Promise<number>,
+    );
+    // Python uses host_extension_invoke for _codepod.extension_call()
+    imports.codepod.host_extension_invoke = wrapAsyncImport(
+      childKernelImports.host_extension_invoke as (...args: number[]) => Promise<number>,
+    );
+    // Python uses host_run_command for _codepod.spawn() / subprocess support
+    imports.codepod.host_run_command = wrapAsyncImport(
+      childKernelImports.host_run_command as (...args: number[]) => Promise<number>,
+    );
 
     // Start the process asynchronously
     adapter.instantiate(module, imports).then((instance) => {
@@ -1043,16 +1227,17 @@ function spawnAsyncProcess(
       childMemRef = instance.exports.memory as WebAssembly.Memory;
       host.setMemory(childMemRef);
 
-      let startFn = instance.exports._start as Function;
-      if (typeof (WebAssembly as any).promising === 'function') {
-        startFn = (WebAssembly as any).promising(startFn);
-      }
-
-      const promise = Promise.resolve().then(() => startFn()).catch(() => {});
+      const startFn = wireChildStart(instance, childAsyncifyBridge, hostScheduler);
+      const promise: Promise<void> = Promise.resolve().then(() => startFn()).then(() => undefined).catch(() => {});
       kernel.attachProcess(pid, promise, host);
     }).catch(handleInstantiationError);
   } else {
-    // Module doesn't need codepod imports — simpler path
+    // Module doesn't need codepod imports — simpler path.  No bridge
+    // wiring is possible without the codepod_asyncify_buf_addr export
+    // (which lives in libcodepod_guest_compat), so setjmp/longjmp
+    // aren't supported on this branch — but binaries that don't
+    // import the codepod namespace also can't use setjmp via our
+    // sjlj runtime, so the gap is consistent.
     adapter.instantiate(module, imports).then((instance) => {
       if (checkMemLimit(instance)) return;
       host.setMemory(instance.exports.memory as WebAssembly.Memory);
@@ -1083,9 +1268,9 @@ function spawnSyncProcess(
   fdTable: Map<number, FdTarget>,
   kernel: ProcessKernel,
   syncSpawn: NonNullable<ShellInstanceOptions['syncSpawn']>,
+  parentPid: number = NO_PARENT_PID,
 ): number {
-  const pid = kernel.allocPid();
-  kernel.initProcess(pid);
+  const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(' ')}`);
 
   // Store fd targets in the kernel for cleanup
   for (const [fd, target] of fdTable) {
