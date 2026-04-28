@@ -125,6 +125,7 @@ export class ShellInstance implements ShellLike {
         memoryBytes: options?.memoryBytes,
       });
       try {
+        sub.inheritDeadlineFrom(shellRef);
         const result = await sub.run(cmd, { stdinData: new TextEncoder().encode(stdin) });
         return { exitCode: result.exitCode ?? 0, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
       } finally {
@@ -273,6 +274,7 @@ export class ShellInstance implements ShellLike {
         extensionRegistry: options?.extensionRegistry,
       });
       try {
+        sub.inheritDeadlineFrom(shellRef);
         const result = await sub.run(cmd, { stdinData: new TextEncoder().encode(stdin) });
         return { exitCode: result.exitCode ?? 0, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
       } finally {
@@ -708,6 +710,12 @@ export class ShellInstance implements ShellLike {
   /** Return the current deadline (epoch ms, or Infinity if none). */
   getDeadlineMs(): number {
     return this.deadlineMs;
+  }
+
+  private inheritDeadlineFrom(parent: ShellInstance | null): void {
+    const deadline = parent?.getDeadlineMs();
+    if (deadline === undefined || deadline === Infinity) return;
+    this.resetCancel(Math.max(0, deadline - Date.now()));
   }
 
   // ── Output limits ──

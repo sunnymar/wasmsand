@@ -40,6 +40,7 @@ const testScriptBytes = new Uint8Array(readFileSync(TEST_SCRIPT));
 const sandbox = await Sandbox.create({
   wasmDir: FIXTURES,
   adapter: new NodeAdapter(),
+  timeoutMs: 2_000,
 });
 
 try {
