@@ -1,4 +1,4 @@
-import type { KernelApi } from '../../orchestrator/src/kernel-api.ts';
+import type { KernelApi } from '@codepod/sandbox';
 
 const ERR_NOT_FOUND = -1;
 const ERR_IO = -3;
