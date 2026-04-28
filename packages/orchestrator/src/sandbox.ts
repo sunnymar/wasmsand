@@ -8,6 +8,8 @@
 import { VFS } from './vfs/vfs.js';
 import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
+import { NO_PARENT_PID, ProcessKernel } from './process/kernel.js';
+import type { LoaderContext } from './process/loader.js';
 import { ShellInstance } from './shell/shell-instance.js';
 import type { ShellLike } from './shell/shell-like.js';
 
@@ -46,6 +48,14 @@ import { SUBPROCESS_PY_SOURCE } from './process/subprocess-shim.js';
 import { PackageRegistry } from './packages/registry.js';
 import { ToolRegistry } from './packages/tool-registry.js';
 import { applyManifest, loadManifest } from './packages/manifest.js';
+import { WasiHost } from './wasi/wasi-host.js';
+import { createKernelImports } from './host-imports/kernel-imports.js';
+import {
+  bufferToString,
+  createBufferTarget,
+  createNullTarget,
+  type FdTarget,
+} from './wasi/fd-target.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -128,6 +138,7 @@ export class Sandbox {
   private wasmDir: string;
   private shellExecWasmPath: string;
   private mgr: ProcessManager;
+  private kernel: ProcessKernel;
   private envSnapshots: Map<string, Map<string, string>> = new Map();
   private bridge: NetworkBridge | null = null;
   private networkPolicy: NetworkPolicy | undefined;
@@ -146,6 +157,7 @@ export class Sandbox {
     this.wasmDir = parts.wasmDir;
     this.shellExecWasmPath = parts.shellExecWasmPath;
     this.mgr = parts.mgr;
+    this.kernel = new ProcessKernel();
     this.bridge = parts.bridge ?? null;
     this.networkPolicy = parts.networkPolicy;
     this.security = parts.security;
@@ -166,6 +178,49 @@ export class Sandbox {
       timestamp: Date.now(),
       ...data,
     });
+  }
+
+  private loaderContext(): LoaderContext {
+    return {
+      vfs: this.vfs,
+      adapter: this.adapter,
+      kernel: this.kernel,
+      allocatePid: (argv) => this.kernel.allocPid(NO_PARENT_PID, argv[0]),
+      releasePid: (pid, exitCode) => this.kernel.releaseProcess(pid, exitCode),
+      buildWasiHost: (pid, argv, env, cwd) => {
+        const ioFds = new Map<number, FdTarget>();
+        ioFds.set(0, this.kernel.getFdTarget(pid, 0) ?? createNullTarget());
+        ioFds.set(1, this.kernel.getFdTarget(pid, 1) ?? createBufferTarget());
+        ioFds.set(2, this.kernel.getFdTarget(pid, 2) ?? createBufferTarget());
+        return new WasiHost({
+          vfs: this.vfs,
+          args: argv,
+          env,
+          preopens: { [cwd]: cwd },
+          ioFds,
+          pid,
+        });
+      },
+      buildKernelImports: (pid, memory, wasiHost) => createKernelImports({
+        memory,
+        callerPid: pid,
+        kernel: this.kernel,
+        networkBridge: this.bridge ?? undefined,
+        extensionRegistry: this.extensionRegistry ?? undefined,
+        nativeModules: this.mgr.nativeModules,
+        wasiHost,
+      }),
+      makeFdReadAndClear: (pid) => (fd) => {
+        const target = this.kernel.getFdTarget(pid, fd);
+        if (!target || target.type !== 'buffer') return { data: '', truncated: false };
+        const data = bufferToString(target);
+        const truncated = !!target.truncated;
+        target.buf.length = 0;
+        target.total = 0;
+        target.truncated = false;
+        return { data, truncated };
+      },
+    };
   }
 
   static async create(options: SandboxOptions): Promise<Sandbox> {
