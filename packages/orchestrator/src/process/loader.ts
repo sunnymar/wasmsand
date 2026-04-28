@@ -8,7 +8,7 @@ import type { PlatformAdapter } from "../platform/adapter.js";
 import type { VfsLike } from "../vfs/vfs-like.js";
 import type { ProcessKernel } from "./kernel.js";
 import { WasiHost } from "../wasi/wasi-host.js";
-import { createBufferTarget, createNullTarget } from "../wasi/fd-target.js";
+import { createBufferTarget, createNullTarget, createStaticTarget } from "../wasi/fd-target.js";
 import { AsyncifyAsyncBridge } from "../async-bridge.js";
 
 export interface LoaderContext {
@@ -92,6 +92,9 @@ export async function loadProcess(
     ...ctx.buildKernelImports(pid, memoryProxy, wasi),
     ...(opts.extraCodepodImports?.(memoryProxy, wasi) ?? {}),
   };
+  if (!codepodImports.host_spawn_async && codepodImports.host_spawn) {
+    codepodImports.host_spawn_async = codepodImports.host_spawn;
+  }
   if (asyncifyBridge) {
     codepodImports.host_setjmp = asyncifyBridge
       .hostSetjmp as unknown as WebAssembly.ImportValue;
@@ -104,6 +107,7 @@ export async function loadProcess(
     "host_network_fetch",
     "host_register_tool",
     "host_run_command",
+    "host_spawn_async",
   ], asyncifyBridge);
   wrapAsyncImports(
     wasiImports as Record<string, WebAssembly.ImportValue>,
@@ -119,6 +123,13 @@ export async function loadProcess(
   memoryRef = instance.exports.memory as WebAssembly.Memory;
   proc.__setMemory(memoryRef);
   proc.__setFdReadAndClear(ctx.makeFdReadAndClear(pid));
+  proc.__setStdin((data) => {
+    ctx.kernel.setFdTarget(
+      pid,
+      0,
+      data && data.byteLength > 0 ? createStaticTarget(data) : createNullTarget(),
+    );
+  });
 
   const exitCode = wasi.start(instance);
   if (mode === "cli") proc.exitCode = exitCode;

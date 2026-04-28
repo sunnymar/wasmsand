@@ -57,6 +57,9 @@ import {
   createNullTarget,
   type FdTarget,
 } from './wasi/fd-target.js';
+import type { KernelApi } from './kernel-api.js';
+import { MemoryProxy } from './kernel-api.js';
+import type { RunCommandHandler } from './run-command.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -81,6 +84,10 @@ export interface SandboxOptions {
   shellExecWasmPath?: string;
   /** argv for the boot process (PID 1). Defaults to ["/bin/bash"]. */
   bootArgv?: string[];
+  /** Host-supplied userland imports for the boot process. */
+  bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
+  /** Host-registered handler for guest-issued host_run_command. */
+  runCommandHandler?: RunCommandHandler;
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
   /** Security policy and limits. */
@@ -113,6 +120,7 @@ export interface SandboxSpawnOptions {
   mode: ProcessMode;
   env?: Record<string, string>;
   cwd?: string;
+  bootImports?: SandboxOptions['bootImports'];
   /** Low-level import factory used by tests and later bash-host wiring. */
   extraCodepodImports?: LoadProcessOptions['extraCodepodImports'];
 }
@@ -139,6 +147,9 @@ interface SandboxParts {
   workerExecutor?: WorkerExecutor;
   extensionRegistry?: ExtensionRegistry;
   storage?: StorageCallbacks;
+  bootImports?: SandboxOptions['bootImports'];
+  runCommandHandler?: RunCommandHandler;
+  bootArgv?: string[];
 }
 
 export class Sandbox {
@@ -163,6 +174,9 @@ export class Sandbox {
   private workerExecutor: WorkerExecutor | null = null;
   private persistenceManager: PersistenceManager | null = null;
   private extensionRegistry: ExtensionRegistry | null = null;
+  private readonly bootImports: SandboxOptions['bootImports'];
+  readonly runCommandHandler: RunCommandHandler | undefined;
+  private readonly bootArgv: string[];
 
   private constructor(parts: SandboxParts) {
     this.vfs = parts.vfs;
@@ -183,6 +197,9 @@ export class Sandbox {
     this.workerExecutor = parts.workerExecutor ?? null;
     this.extensionRegistry = parts.extensionRegistry ?? null;
     this.storage = parts.storage ?? null;
+    this.bootImports = parts.bootImports;
+    this.runCommandHandler = parts.runCommandHandler;
+    this.bootArgv = parts.bootArgv ?? ['/bin/bash'];
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -224,6 +241,8 @@ export class Sandbox {
         extensionRegistry: this.extensionRegistry ?? undefined,
         nativeModules: this.mgr.nativeModules,
         wasiHost,
+        runCommandHandler: this.runCommandHandler,
+        sandbox: this,
       }),
       makeFdReadAndClear: (pid) => (fd) => {
         const target = this.kernel.getFdTarget(pid, fd);
@@ -243,8 +262,40 @@ export class Sandbox {
       this.loaderContext(),
       this.mgr,
       this.shellExecWasmPath,
-      opts,
+      {
+        ...opts,
+        extraCodepodImports: this.buildUserlandImportFactory(this.bootImports),
+      },
     );
+  }
+
+  private buildKernelApi(memory: MemoryProxy): KernelApi {
+    return {
+      vfs: this.vfs,
+      processManager: {
+        registerTool: (name, impl) => this.mgr.registerTool(name, String(impl)),
+        registerAndLoadTool: (name, path) => this.mgr.registerAndLoadTool(name, path),
+        registerNativeModule: (name, wasmBytes) => this.mgr.registerNativeModule(name, wasmBytes),
+        hasTool: (name) => this.mgr.hasTool(name),
+      },
+      time: {
+        now: () => Date.now() / 1000,
+        monotonic: () => BigInt(Math.floor(performance.now() * 1_000_000)),
+      },
+      memory,
+    };
+  }
+
+  private buildUserlandImportFactory(
+    bootImports?: SandboxOptions['bootImports'],
+  ): LoadProcessOptions['extraCodepodImports'] {
+    if (!bootImports) return undefined;
+    const memory = new MemoryProxy();
+    const imports = bootImports(this.buildKernelApi(memory));
+    return (wasmMemory) => {
+      memory.current = wasmMemory;
+      return imports;
+    };
   }
 
   static async create(options: SandboxOptions): Promise<Sandbox> {
@@ -501,6 +552,9 @@ export class Sandbox {
       mgr, bridge, networkPolicy: options.network,
       security: options.security, workerExecutor,
       extensionRegistry, storage: options.storage,
+      bootImports: options.bootImports,
+      runCommandHandler: options.runCommandHandler,
+      bootArgv: options.bootArgv ?? ['/bin/bash'],
     });
 
     await sb.bootPid1({
@@ -508,7 +562,9 @@ export class Sandbox {
       extensionRegistry,
       toolAllowlist: options.security?.toolAllowlist,
       memoryBytes: secLimits?.memoryBytes,
-      bootArgv: options.bootArgv ?? ['/bin/bash'],
+      bootArgv: sb.bootArgv,
+      runCommandHandler: options.runCommandHandler,
+      sandbox: sb,
     });
 
     // Wire output limits
@@ -823,6 +879,18 @@ export class Sandbox {
     return this.runner.getEnv(name);
   }
 
+  /** Return a copy of all environment variables. */
+  getEnvMap(): Map<string, string> {
+    this.assertAlive();
+    return this.runner.getEnvMap();
+  }
+
+  /** Replace all environment variables. */
+  setEnvMap(env: Map<string, string>): void {
+    this.assertAlive();
+    this.runner.setEnvMap(env);
+  }
+
   /** Return the command history entries. */
   getHistory(): HistoryEntry[] {
     this.assertAlive();
@@ -904,12 +972,15 @@ export class Sandbox {
 
   async spawn(argv: string[], opts: SandboxSpawnOptions): Promise<Process> {
     this.assertAlive();
+    const bootImports = opts.bootImports
+      ? this.buildUserlandImportFactory(opts.bootImports)
+      : undefined;
     return loadProcess(this.loaderContext(), {
       argv,
       mode: opts.mode,
       env: opts.env,
       cwd: opts.cwd,
-      extraCodepodImports: opts.extraCodepodImports,
+      extraCodepodImports: opts.extraCodepodImports ?? bootImports,
     });
   }
 
@@ -968,38 +1039,40 @@ export class Sandbox {
 
     const secLimits = this.security?.limits;
 
-    // Fork as ShellInstance — create a fresh instance and copy env
-    const childRunner = await ShellInstance.create(childVfs, childMgr, this.adapter, this.shellExecWasmPath, {
-      networkBridge: bridge,
-      extensionRegistry: this.extensionRegistry ?? undefined,
-      toolAllowlist: this.security?.toolAllowlist,
-      memoryBytes: this.security?.limits?.memoryBytes,
-    });
-
-    // Wire output limits to forked runner
-    if (secLimits) {
-      childRunner.setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
-    }
-
-    // Copy env
-    const envMap = this.runner.getEnvMap();
-    for (const [k, v] of envMap) {
-      childRunner.setEnv(k, v);
-    }
-
     // Create WorkerExecutor for the child if parent uses hard-kill
     const childWorkerExecutor = await Sandbox.createWorkerExecutor(
       childVfs, this.wasmDir, this.shellExecWasmPath, tools, this.adapter,
       this.security, bridge, this.networkPolicy, this.extensionRegistry ?? undefined,
     );
 
-    return new Sandbox({
-      vfs: childVfs, runner: childRunner, timeoutMs: this.timeoutMs,
+    const child = new Sandbox({
+      vfs: childVfs, timeoutMs: this.timeoutMs,
       adapter: this.adapter, wasmDir: this.wasmDir, shellExecWasmPath: this.shellExecWasmPath,
       mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
       security: this.security, workerExecutor: childWorkerExecutor,
       extensionRegistry: this.extensionRegistry ?? undefined,
+      bootImports: this.bootImports,
+      runCommandHandler: this.runCommandHandler,
+      bootArgv: this.bootArgv,
     });
+
+    await child.bootPid1({
+      networkBridge: bridge,
+      extensionRegistry: this.extensionRegistry ?? undefined,
+      toolAllowlist: this.security?.toolAllowlist,
+      memoryBytes: this.security?.limits?.memoryBytes,
+      bootArgv: this.bootArgv,
+      runCommandHandler: this.runCommandHandler,
+      sandbox: child,
+    });
+
+    // Wire output limits and env to the forked runner
+    if (secLimits) {
+      (child.runner as ShellInstance).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
+    }
+    child.runner.setEnvMap(this.runner.getEnvMap());
+
+    return child;
   }
 
   /** Cancel the currently running command. */

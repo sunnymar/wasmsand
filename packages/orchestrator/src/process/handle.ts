@@ -21,6 +21,7 @@ export class Process {
   private exportsRef: ProcessExports | undefined;
   private memoryRef: WebAssembly.Memory | undefined;
   private fdReadAndClearImpl?: (fd: 1 | 2) => { data: string; truncated: boolean };
+  private setStdinImpl?: (data: Uint8Array | undefined) => void;
   private terminateImpl?: () => Promise<void>;
 
   private constructor(opts: { pid: number; mode: ProcessMode }) {
@@ -56,6 +57,15 @@ export class Process {
 
   __setFdReadAndClear(fn: (fd: 1 | 2) => { data: string; truncated: boolean }): void {
     this.fdReadAndClearImpl = fn;
+  }
+
+  __setStdin(fn: (data: Uint8Array | undefined) => void): void {
+    this.setStdinImpl = fn;
+  }
+
+  setStdin(data: Uint8Array | undefined): void {
+    if (!this.setStdinImpl) throw new Error(`Process ${this.pid} stdin not yet bound`);
+    this.setStdinImpl(data);
   }
 
   fdReadAndClear(fd: 1 | 2): { data: string; truncated: boolean } {

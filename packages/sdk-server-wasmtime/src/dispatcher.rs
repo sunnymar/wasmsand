@@ -35,8 +35,6 @@ const KNOWN_METHODS: &[&str] = &[
     "sandbox.create",
     "sandbox.list",
     "sandbox.remove",
-    "shell.history.list",
-    "shell.history.clear",
     "offload",
     "rehydrate",
     "sandbox.suspend",
@@ -268,8 +266,6 @@ impl Dispatcher {
             "sandbox.remove" => self.handle_sandbox_remove(id, &params),
             "sandbox.suspend" => self.handle_sandbox_suspend(id, &params),
             "sandbox.resume" => self.handle_sandbox_resume(id, &params),
-            "shell.history.list" => self.handle_history_list(id, &params, sid.as_deref()).await,
-            "shell.history.clear" => self.handle_history_clear(id, &params, sid.as_deref()).await,
             "offload" => self.handle_offload(id, &params, sid.as_deref()).await,
             "rehydrate" => self.handle_rehydrate(id, &params, sid.as_deref()).await,
             // remaining methods still not_implemented (done in later tasks)
@@ -768,60 +764,6 @@ impl Dispatcher {
         sb.paused.store(false, std::sync::atomic::Ordering::Release);
         sb.resume_notify.notify_waiters();
         Response::ok(id, json!({ "ok": true }))
-    }
-
-    // ── Shell history ─────────────────────────────────────────────────────────
-
-    async fn handle_history_list(
-        &mut self,
-        id: Option<RequestId>,
-        _params: &Value,
-        sid: Option<&str>,
-    ) -> Response {
-        let sb = match self.manager.resolve(sid) {
-            Ok(s) => s,
-            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
-        };
-        match sb.run("history").await {
-            Ok(result) => {
-                let stdout = result["stdout"].as_str().unwrap_or("").to_string();
-                // Parse lines like "  1  command"
-                let entries: Vec<_> = stdout
-                    .lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .enumerate()
-                    .map(|(i, line)| {
-                        // Strip leading digits + whitespace (e.g. "  1  cmd" → "cmd")
-                        let cmd = line
-                            .trim_start()
-                            .trim_start_matches(|c: char| c.is_ascii_digit())
-                            .trim_start();
-                        json!({"index": i + 1, "command": cmd, "timestamp": 0})
-                    })
-                    .collect();
-                Response::ok(id, json!({"entries": entries}))
-            }
-            Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
-        }
-    }
-
-    async fn handle_history_clear(
-        &mut self,
-        id: Option<RequestId>,
-        _params: &Value,
-        sid: Option<&str>,
-    ) -> Response {
-        let sb = match self.manager.resolve(sid) {
-            Ok(s) => s,
-            Err(e) => return Response::err(id, codes::INVALID_PARAMS, e.to_string()),
-        };
-        // NOTE: The codepod shell-exec builtin uses "clear" as a subcommand
-        // (first positional arg), not the POSIX -c flag. "history -c" would
-        // fall into the "unknown subcommand" branch and return exit code 1.
-        match sb.run("history clear").await {
-            Ok(_) => Response::ok(id, json!({"ok": true})),
-            Err(e) => Response::err(id, codes::INTERNAL_ERROR, e.to_string()),
-        }
     }
 
     // ── Callback protocol ─────────────────────────────────────────────────────

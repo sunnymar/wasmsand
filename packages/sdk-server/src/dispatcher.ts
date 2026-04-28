@@ -42,11 +42,10 @@ export interface SandboxLike {
   fork(): Promise<SandboxLike>;
   exportState(): Uint8Array;
   importState(blob: Uint8Array): void;
-  getHistory(): Array<{ index: number; command: string; timestamp: number }>;
-  clearHistory(): void;
   mount(path: string, filesOrProvider: Record<string, Uint8Array>): void;
   offload(): Promise<void>;
   rehydrate(): Promise<void>;
+  process(pid: number): unknown;
   readonly sessionId: string;
 }
 
@@ -132,10 +131,6 @@ export class Dispatcher {
           return this.persistenceImport(params);
         case 'mount':
           return this.mountFiles(params);
-        case 'shell.history.list':
-          return this.shellHistoryList(params);
-        case 'shell.history.clear':
-          return this.shellHistoryClear(params);
         case 'offload':
           return await this.offload(params);
         case 'rehydrate':
@@ -215,7 +210,20 @@ export class Dispatcher {
       },
     } : undefined;
 
-    const result = await sb.run(command, callbacks);
+    if (callbacks) {
+      const result = await sb.run(command, callbacks);
+      const response: Record<string, unknown> = {
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        executionTimeMs: result.executionTimeMs,
+      };
+      if (result.truncated) response.truncated = result.truncated;
+      if (result.errorClass) response.errorClass = result.errorClass;
+      return response;
+    }
+
+    const result = await sb.run(command);
     const response: Record<string, unknown> = {
       exitCode: result.exitCode,
       stdout: result.stdout,
@@ -435,18 +443,6 @@ export class Dispatcher {
       decoded[key] = new Uint8Array(Buffer.from(value, 'base64'));
     }
     sb.mount(path, decoded);
-    return { ok: true };
-  }
-
-  private shellHistoryList(params: Record<string, unknown>) {
-    const sb = this.resolveSandbox(params);
-    const entries = sb.getHistory();
-    return { entries };
-  }
-
-  private shellHistoryClear(params: Record<string, unknown>) {
-    const sb = this.resolveSandbox(params);
-    sb.clearHistory();
     return { ok: true };
   }
 
