@@ -29,8 +29,29 @@ import { Sandbox, SandboxPool } from '@codepod/sandbox';
 import type { NetworkPolicy } from '@codepod/sandbox';
 import { NodeAdapter, HostFsProvider } from '@codepod/sandbox/node';
 import { loadConfig } from './config.js';
-import { makeRunCommandHandler } from './bash-dispatch.js';
+import { makeRunCommandHandler, runCommand as runBashCommand } from './bash-dispatch.js';
 import { bashBootImports } from './bash-host-imports.js';
+
+type PolicyCommandRunner = {
+  executeCommand(
+    command: string,
+    executor: (command: string) => Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      executionTimeMs: number;
+      truncated?: { stdout: boolean; stderr: boolean };
+      errorClass?: 'TIMEOUT' | 'CANCELLED' | 'CAPABILITY_DENIED' | 'LIMIT_EXCEEDED';
+    }>,
+  ): Promise<{
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    executionTimeMs: number;
+    truncated?: { stdout: boolean; stderr: boolean };
+    errorClass?: 'TIMEOUT' | 'CANCELLED' | 'CAPABILITY_DENIED' | 'LIMIT_EXCEEDED';
+  }>;
+};
 
 const __dirname = resolve(fileURLToPath(import.meta.url), '..');
 
@@ -284,7 +305,10 @@ async function main(): Promise<void> {
     async ({ sandbox_id, command }) => {
       try {
         const sandbox = getSandbox(sandbox_id);
-        const result = await sandbox.run(command);
+        const result = await (sandbox as Sandbox & PolicyCommandRunner).executeCommand(
+          command,
+          (cmd: string) => runBashCommand(sandbox, cmd),
+        );
         return jsonResult({
           exit_code: result.exitCode,
           stdout: result.stdout,

@@ -6,6 +6,12 @@ import type { SandboxLike } from './dispatcher.js';
 
 function createMockSandbox(): SandboxLike {
   return {
+    executeCommand: mock(async (_cmd: string, _executor: unknown) => ({
+      exitCode: 0,
+      stdout: 'hello\n',
+      stderr: '',
+      executionTimeMs: 5,
+    })),
     run: mock(async (_cmd: string) => ({
       exitCode: 0,
       stdout: 'hello\n',
@@ -54,9 +60,14 @@ describe('Dispatcher', () => {
   });
 
   describe('run', () => {
-    it('calls sandbox.run() and returns the result', async () => {
+    it('calls sandbox.executeCommand() and returns the result', async () => {
       const result = await dispatcher.dispatch('run', { command: 'echo hello' });
-      expect(sandbox.run).toHaveBeenCalledWith('echo hello');
+      expect(sandbox.executeCommand).toHaveBeenCalledWith(
+        'echo hello',
+        expect.any(Function),
+        undefined,
+      );
+      expect(sandbox.run).not.toHaveBeenCalled();
       expect(result).toEqual({
         exitCode: 0,
         stdout: 'hello\n',
@@ -300,7 +311,7 @@ describe('Dispatcher', () => {
     });
 
     it('wraps sandbox errors from async methods with code 1', async () => {
-      (sandbox.run as ReturnType<typeof mock>).mockRejectedValue(
+      (sandbox.executeCommand as ReturnType<typeof mock>).mockRejectedValue(
         new Error('something went wrong'),
       );
 
@@ -387,7 +398,11 @@ describe('Dispatcher', () => {
       const forkResult = await dispatcher.dispatch('sandbox.fork', {}) as { sandboxId: string };
       await dispatcher.dispatch('run', { command: 'echo hello', sandboxId: forkResult.sandboxId });
       const forkedSandbox = await (sandbox.fork as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
-      expect(forkedSandbox.run).toHaveBeenCalledWith('echo hello');
+      expect(forkedSandbox.executeCommand).toHaveBeenCalledWith(
+        'echo hello',
+        expect.any(Function),
+        undefined,
+      );
     });
 
     it('routes files.read to forked sandbox via sandboxId', async () => {
@@ -399,7 +414,11 @@ describe('Dispatcher', () => {
 
     it('routes to root sandbox when no sandboxId', async () => {
       await dispatcher.dispatch('run', { command: 'echo hello' });
-      expect(sandbox.run).toHaveBeenCalledWith('echo hello');
+      expect(sandbox.executeCommand).toHaveBeenCalledWith(
+        'echo hello',
+        expect.any(Function),
+        undefined,
+      );
     });
 
     it('rejects unknown sandboxId', async () => {
@@ -447,7 +466,7 @@ describe('Dispatcher', () => {
   });
 
   it('passes through truncated and errorClass fields', async () => {
-    (sandbox.run as ReturnType<typeof mock>).mockImplementation(async () => ({
+    (sandbox.executeCommand as ReturnType<typeof mock>).mockImplementation(async () => ({
       exitCode: 124,
       stdout: 'trunc',
       stderr: '',
@@ -536,7 +555,11 @@ describe('Dispatcher', () => {
       const { sandboxId } = await poolDispatcher.dispatch('sandbox.create', {}) as { sandboxId: string };
       await poolDispatcher.dispatch('run', { command: 'echo test', sandboxId });
       const createdSb = await (pool.checkout as ReturnType<typeof mock>).mock.results[0].value as SandboxLike;
-      expect(createdSb.run).toHaveBeenCalledWith('echo test');
+      expect(createdSb.executeCommand).toHaveBeenCalledWith(
+        'echo test',
+        expect.any(Function),
+        undefined,
+      );
     });
 
     it('routes files.read to a created sandbox via sandboxId', async () => {

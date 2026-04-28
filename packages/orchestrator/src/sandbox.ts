@@ -20,6 +20,9 @@ export interface StreamCallbacks {
   onStderr?: (chunk: string) => void;
 }
 
+/** Host-side command executor used by `Sandbox.executeCommand`. */
+export type CommandExecutor = (command: string) => Promise<RunResult>;
+
 /** Callbacks for offloading sandbox state to external storage. */
 export interface StorageCallbacks {
   save: (sandboxId: string, state: Uint8Array) => Promise<void>;
@@ -703,7 +706,11 @@ export class Sandbox {
     });
   }
 
-  async run(command: string, callbacks?: StreamCallbacks): Promise<RunResult> {
+  async executeCommand(
+    command: string,
+    executor: CommandExecutor,
+    callbacks?: StreamCallbacks,
+  ): Promise<RunResult> {
     this.assertAlive();
 
     // Check command size limit
@@ -734,6 +741,9 @@ export class Sandbox {
       this.audit('package.install.start', { url: pkgMatch[1], host: pkgHost });
     }
 
+    let result: RunResult;
+    let callbacksInstalled = false;
+
     // Set up streaming callbacks on pid 0 stdout/stderr buffer targets
     if (callbacks?.onStdout || callbacks?.onStderr) {
       const stdoutDecoder = callbacks.onStdout ? new TextDecoder() : null;
@@ -746,31 +756,36 @@ export class Sandbox {
           callbacks.onStderr!(stderrDecoder!.decode(data, { stream: true }));
         } : undefined,
       });
+      callbacksInstalled = true;
     }
 
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
     const startTime = performance.now();
-
-    let result: RunResult;
 
     if (this.workerExecutor) {
       // Worker-based execution (Node) — hard kill on timeout via worker.terminate()
       if (callbacks?.onStdout || callbacks?.onStderr) {
         console.warn('[codepod] Streaming callbacks not supported with worker executor (security.hardKill). Output will be returned in result only.');
       }
-      const workerResult = await this.workerExecutor.run(command, this.runner.getEnvMap(), effectiveTimeout);
+      try {
+        const workerResult = await this.workerExecutor.run(command, this.runner.getEnvMap(), effectiveTimeout);
 
-      // Sync env changes from Worker back to main-thread runner
-      if (workerResult.env) {
-        this.runner.setEnvMap(new Map(workerResult.env));
+        // Sync env changes from Worker back to main-thread runner
+        if (workerResult.env) {
+          this.runner.setEnvMap(new Map(workerResult.env));
+        }
+
+        result = workerResult;
+      } finally {
+        if (callbacksInstalled) {
+          this.runner.setOutputCallbacks?.(null);
+        }
       }
-
-      result = workerResult;
     } else {
       // Fallback: in-process execution (browser, or hardKill=false)
       this.runner.resetCancel(effectiveTimeout);
       try {
-        result = await this.runner.run(command);
+        result = await executor(command);
       } catch (e) {
         if (e instanceof CancelledError) {
           const executionTimeMs = performance.now() - startTime;
@@ -784,15 +799,22 @@ export class Sandbox {
         } else {
           throw e;
         }
+      } finally {
+        if (callbacksInstalled) {
+          this.runner.setOutputCallbacks?.(null);
+        }
       }
     }
 
-    // Clear streaming callbacks
-    if (callbacks?.onStdout || callbacks?.onStderr) {
-      this.runner.setOutputCallbacks?.(null);
-    }
-
     const executionTimeMs = performance.now() - startTime;
+    result = this.applyOutputLimits(result);
+    if (!result.errorClass && executionTimeMs > effectiveTimeout) {
+      result = {
+        ...result,
+        exitCode: 124,
+        errorClass: 'TIMEOUT',
+      };
+    }
 
     // Post-execution audit
     if (result.errorClass === 'TIMEOUT') {
@@ -824,6 +846,39 @@ export class Sandbox {
     } finally {
       this.running = false;
     }
+  }
+
+  async run(command: string, callbacks?: StreamCallbacks): Promise<RunResult> {
+    return this.executeCommand(command, (cmd) => this.runner.run(cmd), callbacks);
+  }
+
+  private applyOutputLimits(result: RunResult): RunResult {
+    const stdoutLimit = this.security?.limits?.stdoutBytes;
+    const stderrLimit = this.security?.limits?.stderrBytes;
+    if (stdoutLimit === undefined && stderrLimit === undefined) return result;
+
+    const enc = new TextEncoder();
+    let stdout = result.stdout;
+    let stderr = result.stderr;
+    let truncated = result.truncated;
+
+    if (stdoutLimit !== undefined && !truncated?.stdout) {
+      const bytes = enc.encode(stdout);
+      if (bytes.byteLength > stdoutLimit) {
+        stdout = new TextDecoder().decode(bytes.slice(0, stdoutLimit));
+        truncated = { stdout: true, stderr: truncated?.stderr ?? false };
+      }
+    }
+
+    if (stderrLimit !== undefined && !truncated?.stderr) {
+      const bytes = enc.encode(stderr);
+      if (bytes.byteLength > stderrLimit) {
+        stderr = new TextDecoder().decode(bytes.slice(0, stderrLimit));
+        truncated = { stdout: truncated?.stdout ?? false, stderr: true };
+      }
+    }
+
+    return truncated ? { ...result, stdout, stderr, truncated } : result;
   }
 
   readFile(path: string): Uint8Array {

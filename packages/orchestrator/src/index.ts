@@ -4,7 +4,7 @@ export type { VfsOptions } from './vfs/vfs.js';
 export { ProcessManager } from './process/manager.js';
 export { PythonRunner } from './python/python-runner.js';
 export { Sandbox } from './sandbox.js';
-export type { SandboxOptions, MountConfig, StorageCallbacks } from './sandbox.js';
+export type { SandboxOptions, MountConfig, StorageCallbacks, CommandExecutor } from './sandbox.js';
 export type { KernelApi, KernelApiMemory, KernelApiProcessManager, KernelApiTime } from './kernel-api.js';
 export type { RunCommandContext, RunCommandHandler, RunRequest, RunResponse } from './run-command.js';
 export { BrowserAdapter } from './platform/browser-adapter.js';
