@@ -31,17 +31,17 @@ Deno.test('runCommandHandler is invoked when a guest calls host_run_command', as
   }
 });
 
-Deno.test('host_run_command falls back to legacy fresh shell when no runCommandHandler is registered', async () => {
+Deno.test('host_run_command returns an error when no runCommandHandler is registered', async () => {
   const sb = await Sandbox.create({
     wasmDir: WASM_DIR,
     adapter: new NodeAdapter(),
   });
   try {
     const result = await sb.run(
-      'python3 -c "import _codepod; print(_codepod.spawn(\'echo hi\')[\'stdout\'], end=\'\')"',
+      'python3 -c "import _codepod; print(_codepod.spawn(\'echo hi\')[\'stderr\'], end=\'\')"',
     );
     assertEquals(result.exitCode, 0);
-    assert(result.stdout.includes('hi'));
+    assert(result.stdout.includes('subprocess not available'));
   } finally {
     sb.destroy();
   }

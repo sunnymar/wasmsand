@@ -8,7 +8,7 @@
 import { VFS } from './vfs/vfs.js';
 import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
-import { NO_PARENT_PID, ProcessKernel } from './process/kernel.js';
+import { NO_PARENT_PID, ProcessKernel, type SpawnRequest } from './process/kernel.js';
 import { loadProcess, type LoaderContext, type LoadProcessOptions } from './process/loader.js';
 import type { Process, ProcessMode } from './process/handle.js';
 import type { CommandRunner, ResidentCommandRunner } from './command-runner.js';
@@ -176,6 +176,7 @@ export class Sandbox {
   private workerExecutor: WorkerExecutor | null = null;
   private persistenceManager: PersistenceManager | null = null;
   private extensionRegistry: ExtensionRegistry | null = null;
+  private currentCommandDeadlineMs: number | undefined;
   private readonly bootImports: SandboxOptions['bootImports'];
   readonly runCommandHandler: RunCommandHandler | undefined;
   private readonly bootArgv: string[];
@@ -243,6 +244,13 @@ export class Sandbox {
         extensionRegistry: this.extensionRegistry ?? undefined,
         nativeModules: this.mgr.nativeModules,
         wasiHost,
+        syncSpawn: (cmd, args, env, stdin, cwd) =>
+          this.mgr.spawnSync(cmd, args, env, stdin, cwd, {
+            deadlineMs: this.currentCommandDeadlineMs,
+            memoryBytes: this.security?.limits?.memoryBytes,
+          }),
+        spawnProcess: (req, fdTable, parentPid) =>
+          this.spawnManagedProcess(req, fdTable, parentPid),
         runCommandHandler: this.runCommandHandler,
         sandbox: this,
       }),
@@ -269,6 +277,78 @@ export class Sandbox {
         extraCodepodImports: this.buildUserlandImportFactory(this.bootImports),
       },
     );
+  }
+
+  private spawnManagedProcess(
+    req: SpawnRequest,
+    fdTable: Map<number, FdTarget>,
+    parentPid: number,
+  ): number {
+    if (!this.mgr.isToolAllowed(req.prog)) {
+      const pid = this.kernel.allocPid(parentPid, req.prog);
+      for (const [fd, target] of fdTable) this.kernel.setFdTarget(pid, fd, target);
+      this.writeFdTarget(fdTable.get(2), `${req.prog}: tool not allowed by security policy\n`);
+      for (const [fd] of fdTable) this.kernel.closeFd(pid, fd);
+      this.kernel.registerExited(pid, 126, parentPid);
+      return pid;
+    }
+
+    const pid = this.kernel.allocPid(parentPid, `${req.prog} ${req.args.join(' ')}`);
+    for (const [fd, target] of fdTable) this.kernel.setFdTarget(pid, fd, target);
+
+    const promise = (async () => {
+      const stdinData = req.stdin_data !== undefined
+        ? new TextEncoder().encode(req.stdin_data)
+        : this.readFdTarget(fdTable.get(0));
+      try {
+        const result = await this.mgr.spawn(req.argv0 ?? req.prog, {
+          args: req.args,
+          env: Object.fromEntries(req.env),
+          cwd: req.cwd,
+          stdinData,
+          deadlineMs: this.currentCommandDeadlineMs,
+          memoryBytes: this.security?.limits?.memoryBytes,
+        });
+        this.writeFdTarget(fdTable.get(1), result.stdout);
+        this.writeFdTarget(fdTable.get(2), result.stderr);
+        this.kernel.registerExited(pid, result.exitCode, parentPid);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.writeFdTarget(fdTable.get(2), `${req.prog}: ${msg}\n`);
+        this.kernel.registerExited(pid, 127, parentPid);
+      } finally {
+        for (const [fd] of fdTable) this.kernel.closeFd(pid, fd);
+      }
+    })();
+    promise.catch(() => {});
+    return pid;
+  }
+
+  private readFdTarget(target: FdTarget | undefined): Uint8Array | undefined {
+    if (!target) return undefined;
+    if (target.type === 'static') return target.data.slice(target.offset);
+    if (target.type === 'pipe_read') return target.pipe.drainSync();
+    if (target.type === 'buffer') return new TextEncoder().encode(bufferToString(target));
+    return undefined;
+  }
+
+  private writeFdTarget(target: FdTarget | undefined, text: string): void {
+    if (!target || !text) return;
+    const data = new TextEncoder().encode(text);
+    if (target.type === 'buffer') {
+      if (target.total < target.limit) {
+        const remaining = target.limit - target.total;
+        const slice = data.byteLength <= remaining ? data : data.slice(0, remaining);
+        target.buf.push(slice);
+        target.onChunk?.(slice);
+        if (data.byteLength > remaining) target.truncated = true;
+      } else {
+        target.truncated = true;
+      }
+      target.total += data.byteLength;
+    } else if (target.type === 'pipe_write') {
+      target.pipe.write(data);
+    }
   }
 
   private buildKernelApi(memory: MemoryProxy): KernelApi {
@@ -761,6 +841,7 @@ export class Sandbox {
 
     const effectiveTimeout = this.security?.limits?.timeoutMs ?? this.timeoutMs;
     const startTime = performance.now();
+    this.currentCommandDeadlineMs = Date.now() + effectiveTimeout;
 
     if (this.workerExecutor) {
       // Worker-based execution (Node) — hard kill on timeout via worker.terminate()
@@ -844,6 +925,7 @@ export class Sandbox {
 
     return result;
     } finally {
+      this.currentCommandDeadlineMs = undefined;
       this.running = false;
     }
   }

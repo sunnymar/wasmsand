@@ -13,8 +13,10 @@ import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { Sandbox } from '../packages/orchestrator/src/sandbox.js';
 import { NodeAdapter } from '../packages/orchestrator/src/platform/node-adapter.js';
+import { makeRunCommandHandler } from '../packages/sdk-server/src/bash-dispatch.ts';
+import { bashBootImports } from '../packages/sdk-server/src/bash-host-imports.ts';
 
-const REPO_ROOT = resolve(import.meta.dirname, '..');
+const REPO_ROOT = resolve(import.meta.dirname!, '..');
 const FIXTURES = resolve(REPO_ROOT, 'packages/orchestrator/src/platform/__tests__/fixtures');
 const TEST_SCRIPT = resolve(REPO_ROOT, 'packages/coreutils/tests/test_coreutils.py');
 
@@ -41,6 +43,8 @@ const sandbox = await Sandbox.create({
   wasmDir: FIXTURES,
   adapter: new NodeAdapter(),
   timeoutMs: 2_000,
+  bootImports: (api) => bashBootImports(api),
+  runCommandHandler: makeRunCommandHandler(),
 });
 
 try {

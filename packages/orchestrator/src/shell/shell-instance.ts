@@ -118,22 +118,6 @@ export class ShellInstance implements CommandRunner {
     options?: ShellInstanceOptions,
   ): Promise<ShellInstance> {
     let shellRef: ShellInstance | null = null;
-    const runCommand = async (cmd: string, stdin: string) => {
-      const sub = await ShellInstance.create(loaderCtx.vfs, mgr, loaderCtx.adapter, wasmPath, {
-        networkBridge: options?.networkBridge,
-        extensionRegistry: options?.extensionRegistry,
-        toolAllowlist: options?.toolAllowlist,
-        memoryBytes: options?.memoryBytes,
-      });
-      try {
-        sub.inheritDeadlineFrom(shellRef);
-        const result = await sub.run(cmd, { stdinData: new TextEncoder().encode(stdin) });
-        return { exitCode: result.exitCode ?? 0, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
-      } finally {
-        sub.destroy();
-      }
-    };
-    const kernelRunCommand = options?.runCommandHandler ? undefined : runCommand;
 
     const shellCtx: LoaderContext = {
       ...loaderCtx,
@@ -150,7 +134,6 @@ export class ShellInstance implements CommandRunner {
           networkBridge: options?.networkBridge,
           extensionRegistry: options?.extensionRegistry,
           nativeModules: mgr.nativeModules,
-          runCommand: kernelRunCommand,
           runCommandHandler: options?.runCommandHandler,
           sandbox: options?.sandbox,
           syncSpawn: options?.syncSpawn,
@@ -168,7 +151,7 @@ export class ShellInstance implements CommandRunner {
               options?.memoryBytes,
               options?.networkBridge,
               options?.extensionRegistry,
-              kernelRunCommand,
+              undefined,
               options?.runCommandHandler,
               options?.sandbox,
               parentPid,
