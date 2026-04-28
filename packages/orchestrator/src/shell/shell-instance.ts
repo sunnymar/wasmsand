@@ -26,6 +26,8 @@ import type { Process } from '../process/handle.js';
 import { loadProcess, type LoaderContext, type LoadProcessOptions } from '../process/loader.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import { createBufferTarget, createNullTarget, createStaticTarget, bufferToString, type FdTarget } from '../wasi/fd-target.js';
+import type { RunCommandHandler } from '../run-command.js';
+import type { Sandbox } from '../sandbox.js';
 
 /** Default environment variables for a new ShellInstance. */
 const DEFAULT_ENV: [string, string][] = [
@@ -63,6 +65,10 @@ export interface ShellInstanceOptions {
   extraCodepodImports?: LoadProcessOptions['extraCodepodImports'];
   /** argv for the loader-backed shell process. */
   bootArgv?: string[];
+  /** Host-registered handler for guest-issued host_run_command. */
+  runCommandHandler?: RunCommandHandler;
+  /** Sandbox instance supplied to RunCommandContext. */
+  sandbox?: Sandbox;
 }
 
 export class ShellInstance implements ShellLike {
@@ -132,6 +138,7 @@ export class ShellInstance implements ShellLike {
         sub.destroy();
       }
     };
+    const kernelRunCommand = options?.sandbox ? undefined : runCommand;
 
     const shellCtx: LoaderContext = {
       ...loaderCtx,
@@ -148,7 +155,9 @@ export class ShellInstance implements ShellLike {
           networkBridge: options?.networkBridge,
           extensionRegistry: options?.extensionRegistry,
           nativeModules: mgr.nativeModules,
-          runCommand,
+          runCommand: kernelRunCommand,
+          runCommandHandler: options?.runCommandHandler,
+          sandbox: options?.sandbox,
           syncSpawn: options?.syncSpawn,
           spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => {
             if (options?.syncSpawn) {
@@ -164,7 +173,9 @@ export class ShellInstance implements ShellLike {
               options?.memoryBytes,
               options?.networkBridge,
               options?.extensionRegistry,
-              runCommand,
+              kernelRunCommand,
+              options?.runCommandHandler,
+              options?.sandbox,
               parentPid,
             );
           },
@@ -280,6 +291,7 @@ export class ShellInstance implements ShellLike {
         sub.destroy();
       }
     };
+    const kernelRunCommand = options?.sandbox ? undefined : runCommand;
 
     // Kernel imports provide codepod-namespace syscalls (network, process mgmt)
     const kernelImports = createKernelImports({
@@ -288,13 +300,15 @@ export class ShellInstance implements ShellLike {
       kernel,
       networkBridge: options?.networkBridge,
       nativeModules: mgr.nativeModules,
-      runCommand,
+      runCommand: kernelRunCommand,
+      runCommandHandler: options?.runCommandHandler,
+      sandbox: options?.sandbox,
       syncSpawn: options?.syncSpawn,
       spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => {
         if (options?.syncSpawn) {
           return spawnSyncProcess(req, fdTable, kernel, options.syncSpawn, parentPid);
         }
-        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes, options?.networkBridge, options?.extensionRegistry, runCommand, parentPid);
+        return spawnAsyncProcess(req, fdTable, mgr, kernel, adapter, shellRef?.getDeadlineMs(), options?.memoryBytes, options?.networkBridge, options?.extensionRegistry, kernelRunCommand, options?.runCommandHandler, options?.sandbox, parentPid);
       },
     });
 
@@ -1081,6 +1095,8 @@ function spawnAsyncProcess(
   networkBridge?: NetworkBridgeLike,
   extensionRegistry?: ExtensionRegistry,
   runCommand?: (cmd: string, stdin: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
+  runCommandHandler?: RunCommandHandler,
+  sandbox?: Sandbox,
   parentPid: number = NO_PARENT_PID,
 ): number {
   // Tool allowlist check
@@ -1308,10 +1324,12 @@ function spawnAsyncProcess(
       extensionRegistry,
       nativeModules: mgr.nativeModules,
       runCommand,
+      runCommandHandler,
+      sandbox,
       // The child's spawn calls record the child's pid as the new
       // grandchild's ppid — this is how getppid() resolves to the real
       // parent at every level of the process tree.
-      spawnProcess: (req2, fdTable2, grandparentPid) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry, runCommand, grandparentPid),
+      spawnProcess: (req2, fdTable2, grandparentPid) => spawnAsyncProcess(req2, fdTable2, mgr, kernel, adapter, deadlineMs, memoryBytes, networkBridge, extensionRegistry, runCommand, runCommandHandler, sandbox, grandparentPid),
     });
     imports.codepod = childKernelImports as unknown as Record<string, WebAssembly.ImportValue>;
 

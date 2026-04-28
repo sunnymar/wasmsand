@@ -59,6 +59,7 @@ import {
 } from './wasi/fd-target.js';
 import type { KernelApi } from './kernel-api.js';
 import { MemoryProxy } from './kernel-api.js';
+import type { RunCommandHandler } from './run-command.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -85,6 +86,8 @@ export interface SandboxOptions {
   bootArgv?: string[];
   /** Host-supplied userland imports for the boot process. */
   bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
+  /** Host-registered handler for guest-issued host_run_command. */
+  runCommandHandler?: RunCommandHandler;
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
   /** Security policy and limits. */
@@ -144,6 +147,7 @@ interface SandboxParts {
   extensionRegistry?: ExtensionRegistry;
   storage?: StorageCallbacks;
   bootImports?: SandboxOptions['bootImports'];
+  runCommandHandler?: RunCommandHandler;
 }
 
 export class Sandbox {
@@ -169,6 +173,7 @@ export class Sandbox {
   private persistenceManager: PersistenceManager | null = null;
   private extensionRegistry: ExtensionRegistry | null = null;
   private readonly bootImports: SandboxOptions['bootImports'];
+  readonly runCommandHandler: RunCommandHandler | undefined;
 
   private constructor(parts: SandboxParts) {
     this.vfs = parts.vfs;
@@ -190,6 +195,7 @@ export class Sandbox {
     this.extensionRegistry = parts.extensionRegistry ?? null;
     this.storage = parts.storage ?? null;
     this.bootImports = parts.bootImports;
+    this.runCommandHandler = parts.runCommandHandler;
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -231,6 +237,8 @@ export class Sandbox {
         extensionRegistry: this.extensionRegistry ?? undefined,
         nativeModules: this.mgr.nativeModules,
         wasiHost,
+        runCommandHandler: this.runCommandHandler,
+        sandbox: this,
       }),
       makeFdReadAndClear: (pid) => (fd) => {
         const target = this.kernel.getFdTarget(pid, fd);
@@ -539,6 +547,7 @@ export class Sandbox {
       security: options.security, workerExecutor,
       extensionRegistry, storage: options.storage,
       bootImports: options.bootImports,
+      runCommandHandler: options.runCommandHandler,
     });
 
     await sb.bootPid1({
@@ -547,6 +556,8 @@ export class Sandbox {
       toolAllowlist: options.security?.toolAllowlist,
       memoryBytes: secLimits?.memoryBytes,
       bootArgv: options.bootArgv ?? ['/bin/bash'],
+      runCommandHandler: options.runCommandHandler,
+      sandbox: sb,
     });
 
     // Wire output limits

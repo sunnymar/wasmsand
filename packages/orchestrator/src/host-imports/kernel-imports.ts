@@ -25,6 +25,8 @@ import type { WasiHost } from '../wasi/wasi-host.js';
 import type { FdTarget } from '../wasi/fd-target.js';
 import { createStaticTarget } from '../wasi/fd-target.js';
 import { readString, writeJson } from './common.js';
+import type { RunCommandHandler, RunRequest } from '../run-command.js';
+import type { Sandbox } from '../sandbox.js';
 
 export interface KernelImportsOptions {
   memory: WebAssembly.Memory;
@@ -54,6 +56,12 @@ export interface KernelImportsOptions {
 
   /** Run a shell command and collect output. Used by Python _codepod.spawn(). */
   runCommand?: (cmd: string, stdin: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+  /** Host-registered handler for guest-issued host_run_command. */
+  runCommandHandler?: RunCommandHandler;
+
+  /** Sandbox instance supplied to RunCommandContext when invoking runCommandHandler. */
+  sandbox?: Sandbox;
 
   /**
    * Legacy synchronous spawn handler for the shell's 4-argument host_spawn ABI.
@@ -557,6 +565,18 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       reqPtr: number, reqLen: number,
       outPtr: number, outCap: number,
     ): Promise<number> {
+      if (opts.runCommandHandler && opts.sandbox) {
+        try {
+          const req = JSON.parse(readString(memory, reqPtr, reqLen)) as RunRequest;
+          const result = await opts.runCommandHandler(req, { sandbox: opts.sandbox });
+          return writeJson(memory, outPtr, outCap, result);
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return writeJson(memory, outPtr, outCap, {
+            exit_code: 1, stdout: '', stderr: `${msg}\n`,
+          });
+        }
+      }
       if (!opts.runCommand) {
         return writeJson(memory, outPtr, outCap, {
           exit_code: 1, stdout: '', stderr: 'subprocess not available\n',
