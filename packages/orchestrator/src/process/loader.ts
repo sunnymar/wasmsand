@@ -130,7 +130,10 @@ export async function loadProcess(
   const wrappedExports: Record<string, (...args: number[]) => unknown> = {};
   for (const [name, raw] of Object.entries(instance.exports)) {
     if (typeof raw !== "function") continue;
-    if (typeof WebAssembly.promising === "function") {
+    if (
+      typeof WebAssembly.promising === "function" &&
+      shouldAsyncWrapExport(name)
+    ) {
       wrappedExports[name] = WebAssembly.promising(
         raw as (...args: number[]) => unknown,
       );
@@ -203,6 +206,10 @@ function initAsyncifyBridge(
 }
 
 function shouldAsyncifyWrapExport(name: string): boolean {
+  return shouldAsyncWrapExport(name);
+}
+
+function shouldAsyncWrapExport(name: string): boolean {
   return ![
     "__alloc",
     "__dealloc",
@@ -211,5 +218,7 @@ function shouldAsyncifyWrapExport(name: string): boolean {
     "asyncify_start_rewind",
     "asyncify_stop_rewind",
     "asyncify_get_state",
+    "codepod_asyncify_buf_addr",
+    "codepod_asyncify_buf_size",
   ].includes(name);
 }

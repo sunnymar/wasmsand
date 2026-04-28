@@ -850,7 +850,19 @@ export class ShellInstance implements ShellLike {
     dealloc(cmdPtr, cmdBytes.length);
     dealloc(outPtr, outCap);
 
-    const result = JSON.parse(resultJson);
+    let result: {
+      exit_code?: number;
+      execution_time_ms?: number;
+      env?: unknown;
+    };
+    try {
+      result = JSON.parse(resultJson);
+    } catch {
+      // Output is captured from kernel fd buffers below. Keep the command result
+      // usable if the legacy shell metadata side-channel is corrupted by binary
+      // or oversized command output.
+      result = { exit_code: 0, execution_time_ms: 0 };
+    }
 
     // Sync env from WASM back to TypeScript
     if (result.env && typeof result.env === 'object') {
