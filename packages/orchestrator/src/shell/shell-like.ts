@@ -6,7 +6,6 @@
  */
 
 import type { RunResult } from './shell-types.js';
-import type { HistoryEntry } from './history.js';
 
 export interface StreamCallbacks {
   onStdout?: (data: Uint8Array) => void;
@@ -24,10 +23,6 @@ export interface ShellLike {
   setEnv(name: string, value: string): void;
   getEnvMap(): Map<string, string>;
   setEnvMap(env: Map<string, string>): void;
-
-  // History
-  getHistory(): HistoryEntry[];
-  clearHistory(): void;
 
   // Lifecycle
   cancel(reason: string): void;

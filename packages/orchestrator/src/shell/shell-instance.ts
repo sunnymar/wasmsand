@@ -16,7 +16,6 @@ import type { PlatformAdapter } from '../platform/adapter.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { RunResult } from './shell-types.js';
-import type { HistoryEntry } from './history.js';
 import type { ShellLike, StreamCallbacks } from './shell-like.js';
 import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import { createShellImports } from '../host-imports/shell-imports.js';
@@ -80,10 +79,6 @@ export class ShellInstance implements ShellLike {
   private env: Map<string, string> = new Map(DEFAULT_ENV);
   // Track which env vars have been synced to the WASM module
   private syncedEnv: Map<string, string> = new Map(DEFAULT_ENV);
-
-  // History
-  private historyEntries: HistoryEntry[] = [];
-  private nextHistoryIndex = 1;
 
   // Cancellation
   private cancelledReason: string | null = null;
@@ -695,17 +690,6 @@ export class ShellInstance implements ShellLike {
     this.syncedEnv = new Map();
   }
 
-  // ── History ──
-
-  getHistory(): HistoryEntry[] {
-    return [...this.historyEntries];
-  }
-
-  clearHistory(): void {
-    this.historyEntries = [];
-    this.nextHistoryIndex = 1;
-  }
-
   // ── Cancellation ──
 
   cancel(reason: string): void {
@@ -836,13 +820,6 @@ export class ShellInstance implements ShellLike {
       dealloc(envCmdPtr, envBytes.length);
       dealloc(envOutPtr, envOutCap);
     }
-
-    // Record in history
-    this.historyEntries.push({
-      index: this.nextHistoryIndex++,
-      command,
-      timestamp: Date.now(),
-    });
 
     // Write command string into WASM memory
     const encoder = new TextEncoder();
