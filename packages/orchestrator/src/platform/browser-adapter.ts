@@ -43,6 +43,15 @@ export class BrowserAdapter implements PlatformAdapter {
     return WebAssembly.compileStreaming(response);
   }
 
+  async readBytes(url: string): Promise<Uint8Array> {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+    }
+    const buf = await response.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
   async instantiate(
     module: WebAssembly.Module,
     imports: WebAssembly.Imports,

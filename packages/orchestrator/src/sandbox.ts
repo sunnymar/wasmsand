@@ -223,6 +223,17 @@ export class Sandbox {
     // Pre-load all tool modules so spawnSync can use them synchronously
     await mgr.preloadModules();
 
+    // Install the shell wasm into the sandbox VFS at /bin/bash so it is
+    // reachable by path. Future PRs will pass `bootArgv: ["/bin/bash"]` to
+    // spawn it; today's ShellInstance still loads from shellExecWasmPath
+    // directly. Both reads see the same bytes (host filesystem source).
+    const shellWasmBytes = await adapter.readBytes(shellExecWasmPath);
+    vfs.withWriteAccess(() => {
+      vfs.mkdirp('/bin');
+      vfs.writeFile('/bin/bash', shellWasmBytes);
+      vfs.chmod('/bin/bash', 0o755);
+    });
+
     const secLimits = options.security?.limits;
 
     const runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
@@ -838,6 +849,17 @@ export class Sandbox {
 
     // Pre-load all tool modules so spawnSync can use them synchronously
     await childMgr.preloadModules();
+
+    // Forked sandbox gets its own /bin/bash install. (VFS state is cloned
+    // from parent via cowClone, so /bin/bash is already present, but install
+    // idempotently for parity with Sandbox.create and to insulate against
+    // older parent VFS instances that pre-date this PR.)
+    const shellWasmBytes = await this.adapter.readBytes(this.shellExecWasmPath);
+    childVfs.withWriteAccess(() => {
+      childVfs.mkdirp('/bin');
+      childVfs.writeFile('/bin/bash', shellWasmBytes);
+      childVfs.chmod('/bin/bash', 0o755);
+    });
 
     const secLimits = this.security?.limits;
 

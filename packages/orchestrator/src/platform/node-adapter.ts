@@ -33,6 +33,13 @@ export class NodeAdapter implements PlatformAdapter {
     return module;
   }
 
+  async readBytes(path: string): Promise<Uint8Array> {
+    const buf = await readFile(path);
+    // Return a plain Uint8Array (not Buffer) so callers don't accidentally
+    // depend on Node-specific Buffer methods.
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+
   async instantiate(
     module: WebAssembly.Module,
     imports: WebAssembly.Imports,

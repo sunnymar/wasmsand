@@ -96,12 +96,10 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Init overhead is dominated by file/libmagic's magic.mgc data
-    // file (~10MB), which the sandbox auto-loads at /usr/share/misc
-    // when file.wasm is present.  The tool-stub layer itself is only
-    // ~12KB.  Pick a limit that fits init + first file (40KB) but
-    // not the second (10MB).
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 12_000_000 });
+    // Init overhead is dominated by file/libmagic's magic.mgc (~10MB) plus
+    // the shell wasm installed at /bin/bash (~1.4MB). Pick a limit that fits
+    // init + first file (40KB) but not the second (10MB).
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 13_500_000 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(40_000));
     expect(() => {
       sandbox.writeFile('/tmp/b.txt', new Uint8Array(10_000_000));
