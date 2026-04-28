@@ -128,6 +128,14 @@ export class WorkerExecutor {
   private async createWorker(): Promise<void> {
     const { Worker } = await import('node:worker_threads');
 
+    const { NodeAdapter } = await import('../platform/node-adapter.js');
+    const shellWasmBytes = await new NodeAdapter().readBytes(this.config.shellExecWasmPath);
+    this.config.vfs.withWriteAccess(() => {
+      this.config.vfs.mkdirp('/bin');
+      this.config.vfs.writeFile('/bin/bash', shellWasmBytes);
+      this.config.vfs.chmod('/bin/bash', 0o755);
+    });
+
     // Fresh SAB for each Worker to avoid data races with terminated Workers
     // whose threads may still be lingering on the old SAB.
     this.sab = new SharedArrayBuffer(SAB_SIZE);
