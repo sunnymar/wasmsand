@@ -412,12 +412,11 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
         adapter: new NodeAdapter(),
         security: { limits: { fileCount: 500 } },
       });
-      // Default layout creates ~280 inodes (BusyBox installs 96
-      // applet symlinks at /usr/bin/, plus dirs, python shims,
-      // canary fixtures, the magic.mgc data file, etc.).
-      // Try to fill up the remaining allocation.
+      // Default layout creates ~170 inodes after boot. Fill beyond the
+      // remaining allocation so this assertion tracks the VFS limit instead
+      // of depending on the exact default fixture count.
       let threw = false;
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < 400; i++) {
         try {
           sandbox.writeFile(`/tmp/f${i}.txt`, new TextEncoder().encode('x'));
         } catch {

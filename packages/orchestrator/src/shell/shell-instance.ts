@@ -22,6 +22,8 @@ import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import { createShellImports } from '../host-imports/shell-imports.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
 import { ProcessKernel, NO_PARENT_PID, type SpawnRequest } from '../process/kernel.js';
+import type { Process } from '../process/handle.js';
+import { loadProcess, type LoaderContext, type LoadProcessOptions } from '../process/loader.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import { createBufferTarget, createNullTarget, createStaticTarget, bufferToString, type FdTarget } from '../wasi/fd-target.js';
 
@@ -57,11 +59,16 @@ export interface ShellInstanceOptions {
   toolAllowlist?: string[];
   /** Max WASM linear memory in bytes for spawned child processes. */
   memoryBytes?: number;
+  /** Additional codepod imports for loader-backed shell instances. */
+  extraCodepodImports?: LoadProcessOptions['extraCodepodImports'];
+  /** argv for the loader-backed shell process. */
+  bootArgv?: string[];
 }
 
 export class ShellInstance implements ShellLike {
-  private instance: WebAssembly.Instance;
-  private memory: WebAssembly.Memory;
+  private instance: WebAssembly.Instance | undefined;
+  private memory: WebAssembly.Memory | undefined;
+  private procField: Process | undefined;
 
   // Environment (local mirror for Sandbox snapshot/restore)
   private env: Map<string, string> = new Map(DEFAULT_ENV);
@@ -95,9 +102,95 @@ export class ShellInstance implements ShellLike {
   // (1 for the topmost shell, 2+ for nested shells inside spawned tools).
   private pid: number = 0;
 
-  private constructor(instance: WebAssembly.Instance) {
+  private constructor(instance?: WebAssembly.Instance, proc?: Process, kernel?: ProcessKernel, pid = 0) {
     this.instance = instance;
-    this.memory = instance.exports.memory as WebAssembly.Memory;
+    this.memory = instance?.exports.memory as WebAssembly.Memory | undefined;
+    this.procField = proc;
+    this.kernel = kernel;
+    this.pid = pid;
+  }
+
+  static async createWithLoader(
+    loaderCtx: LoaderContext,
+    mgr: ProcessManager,
+    wasmPath: string,
+    options?: ShellInstanceOptions,
+  ): Promise<ShellInstance> {
+    let shellRef: ShellInstance | null = null;
+    const runCommand = async (cmd: string, stdin: string) => {
+      const sub = await ShellInstance.create(loaderCtx.vfs, mgr, loaderCtx.adapter, wasmPath, {
+        networkBridge: options?.networkBridge,
+        extensionRegistry: options?.extensionRegistry,
+        toolAllowlist: options?.toolAllowlist,
+        memoryBytes: options?.memoryBytes,
+      });
+      try {
+        const result = await sub.run(cmd, { stdinData: new TextEncoder().encode(stdin) });
+        return { exitCode: result.exitCode ?? 0, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+      } finally {
+        sub.destroy();
+      }
+    };
+
+    const shellCtx: LoaderContext = {
+      ...loaderCtx,
+      buildKernelImports: (pid, memory, wasiHost) => {
+        const shellImports = createShellImports({
+          vfs: loaderCtx.vfs,
+          mgr,
+          memory,
+          syncSpawn: options?.syncSpawn,
+        });
+        const kernelImports = createKernelImports({
+          memory,
+          callerPid: pid,
+          kernel: loaderCtx.kernel,
+          networkBridge: options?.networkBridge,
+          extensionRegistry: options?.extensionRegistry,
+          nativeModules: mgr.nativeModules,
+          runCommand,
+          spawnProcess: (req: SpawnRequest, fdTable: Map<number, FdTarget>, parentPid: number) => {
+            if (options?.syncSpawn) {
+              return spawnSyncProcess(req, fdTable, loaderCtx.kernel, options.syncSpawn, parentPid);
+            }
+            return spawnAsyncProcess(
+              req,
+              fdTable,
+              mgr,
+              loaderCtx.kernel,
+              loaderCtx.adapter,
+              shellRef?.getDeadlineMs(),
+              options?.memoryBytes,
+              options?.networkBridge,
+              options?.extensionRegistry,
+              runCommand,
+              parentPid,
+            );
+          },
+          wasiHost,
+        });
+
+        return {
+          ...kernelImports,
+          ...shellImports,
+          host_spawn_async: kernelImports.host_spawn as WebAssembly.ImportValue,
+        };
+      },
+    };
+
+    const proc = await loadProcess(shellCtx, {
+      argv: options?.bootArgv ?? ['/bin/bash'],
+      mode: 'resident',
+      extraCodepodImports: options?.extraCodepodImports,
+    });
+    const shell = new ShellInstance(undefined, proc, shellCtx.kernel, proc.pid);
+    shellRef = shell;
+    return shell;
+  }
+
+  get process(): Process {
+    if (!this.procField) throw new Error('ShellInstance is not backed by a Process');
+    return this.procField;
   }
 
   static async create(
@@ -637,24 +730,34 @@ export class ShellInstance implements ShellLike {
     // When JSPI is active, runCommandFn is wrapped with WebAssembly.promising()
     // and returns a Promise<number>. When JSPI is not active, it returns number.
     // Either way, `await` handles both correctly.
-    const runCommand = this.runCommandFn as (
-      cmdPtr: number,
-      cmdLen: number,
-      outPtr: number,
-      outCap: number,
-    ) => number | Promise<number>;
+    const runCommand = this.procField
+      ? ((
+        cmdPtr: number,
+        cmdLen: number,
+        outPtr: number,
+        outCap: number,
+      ) => this.procField!.callExport('__run_command', cmdPtr, cmdLen, outPtr, outCap))
+      : this.runCommandFn as (
+        cmdPtr: number,
+        cmdLen: number,
+        outPtr: number,
+        outCap: number,
+      ) => number | Promise<number>;
 
     if (!runCommand) {
       throw new Error('WASM module does not export __run_command');
     }
 
-    const alloc = this.instance.exports.__alloc as (size: number) => number;
-    const dealloc = this.instance.exports.__dealloc as (
+    const exports = this.procField?.exports ?? this.instance?.exports;
+    const memory = this.procField?.memory ?? this.memory;
+
+    const alloc = exports?.__alloc as ((size: number) => number) | undefined;
+    const dealloc = exports?.__dealloc as ((
       ptr: number,
       size: number,
-    ) => void;
+    ) => void) | undefined;
 
-    if (!alloc || !dealloc) {
+    if (!alloc || !dealloc || !memory) {
       throw new Error('WASM module does not export __alloc/__dealloc');
     }
 
@@ -697,7 +800,7 @@ export class ShellInstance implements ShellLike {
       const envEncoder = new TextEncoder();
       const envBytes = envEncoder.encode(envCmd);
       const envCmdPtr = alloc(envBytes.length);
-      new Uint8Array(this.memory.buffer, envCmdPtr, envBytes.length).set(envBytes);
+      new Uint8Array(memory.buffer, envCmdPtr, envBytes.length).set(envBytes);
 
       let envOutCap = 256;
       let envOutPtr = alloc(envOutCap);
@@ -723,7 +826,7 @@ export class ShellInstance implements ShellLike {
     const encoder = new TextEncoder();
     const cmdBytes = encoder.encode(command);
     const cmdPtr = alloc(cmdBytes.length);
-    new Uint8Array(this.memory.buffer, cmdPtr, cmdBytes.length).set(cmdBytes);
+    new Uint8Array(memory.buffer, cmdPtr, cmdBytes.length).set(cmdBytes);
 
     // Allocate output buffer
     let outCap = 4096;
@@ -740,7 +843,7 @@ export class ShellInstance implements ShellLike {
     }
 
     // Read result JSON from output buffer
-    const resultBytes = new Uint8Array(this.memory.buffer, outPtr, needed);
+    const resultBytes = new Uint8Array(memory.buffer, outPtr, needed);
     const resultJson = new TextDecoder().decode(resultBytes);
 
     // Free WASM memory
@@ -768,7 +871,12 @@ export class ShellInstance implements ShellLike {
     // This is the single source of truth for stdout/stderr.
     let stdout = '';
     let stderr = '';
-    if (this.kernel) {
+    if (this.procField) {
+      const out = this.procField.fdReadAndClear(1);
+      const err = this.procField.fdReadAndClear(2);
+      stdout = out.data;
+      stderr = err.data;
+    } else if (this.kernel) {
       const stdoutTarget = this.kernel.getFdTarget(this.pid, 1);
       const stderrTarget = this.kernel.getFdTarget(this.pid, 2);
       if (stdoutTarget?.type === 'buffer' && stdoutTarget.buf.length > 0) {
@@ -840,6 +948,7 @@ export class ShellInstance implements ShellLike {
 
   /** Release the WASM instance (will be GC'd). */
   destroy(): void {
+    void this.procField?.terminate();
     // WASM instance will be garbage collected
   }
 }

@@ -78,6 +78,7 @@ export class BrowserAdapter implements PlatformAdapter {
     try {
       const response = await fetch(`${wasmBase}/${name}`);
       if (!response.ok) return null;
+      if (response.headers.get('content-type')?.includes('text/html')) return null;
       const ab = await response.arrayBuffer();
       return new Uint8Array(ab);
     } catch {
