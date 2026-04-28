@@ -10,9 +10,9 @@ import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
 import { NO_PARENT_PID, ProcessKernel } from './process/kernel.js';
 import { loadProcess, type LoaderContext, type LoadProcessOptions } from './process/loader.js';
-import { ShellInstance, type ShellInstanceOptions } from './shell/shell-instance.js';
 import type { Process, ProcessMode } from './process/handle.js';
-import type { CommandRunner } from './command-runner.js';
+import type { CommandRunner, ResidentCommandRunner } from './command-runner.js';
+import { createResidentBashRunner, type ResidentBashRunnerOptions } from './resident-bash-runner.js';
 
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
 export interface StreamCallbacks {
@@ -256,8 +256,8 @@ export class Sandbox {
     };
   }
 
-  private async bootPid1(opts: ShellInstanceOptions): Promise<void> {
-    this.runner = await ShellInstance.createWithLoader(
+  private async bootPid1(opts: ResidentBashRunnerOptions): Promise<void> {
+    this.runner = await createResidentBashRunner(
       this.loaderContext(),
       this.mgr,
       this.shellExecWasmPath,
@@ -569,7 +569,7 @@ export class Sandbox {
 
     // Wire output limits
     if (secLimits) {
-      (sb.runner as ShellInstance).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
+      (sb.runner as ResidentCommandRunner).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
     }
 
     // Set PYTHONPATH: user-provided paths + /usr/lib/python (always included)
@@ -960,7 +960,7 @@ export class Sandbox {
   }
 
   process(pid: number): Process | undefined {
-    if (pid === 1) return (this.runner as ShellInstance).process;
+    if (pid === 1) return (this.runner as ResidentCommandRunner).process;
     return undefined;
   }
 
@@ -1058,7 +1058,7 @@ export class Sandbox {
 
     // Wire output limits and env to the forked runner
     if (secLimits) {
-      (child.runner as ShellInstance).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
+      (child.runner as ResidentCommandRunner).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
     }
     child.runner.setEnvMap(this.runner.getEnvMap());
 

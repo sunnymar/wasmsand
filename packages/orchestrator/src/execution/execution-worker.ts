@@ -17,7 +17,6 @@ import {
   decodeResponse,
 } from './proxy-protocol.js';
 import { ProcessManager } from '../process/manager.js';
-import { ShellInstance } from '../shell/shell-instance.js';
 import { NO_PARENT_PID, ProcessKernel } from '../process/kernel.js';
 import type { LoaderContext } from '../process/loader.js';
 import { WasiHost } from '../wasi/wasi-host.js';
@@ -27,6 +26,8 @@ import {
   createNullTarget,
   type FdTarget,
 } from '../wasi/fd-target.js';
+import type { ResidentCommandRunner } from '../command-runner.js';
+import { createResidentBashRunner } from '../resident-bash-runner.js';
 import type { RunResult } from '../run-result.js';
 import { CancelledError } from '../security.js';
 
@@ -57,7 +58,7 @@ interface RunMessage {
   stderrLimit?: number;
 }
 
-let runner: ShellInstance | null = null;
+let runner: ResidentCommandRunner | null = null;
 
 parentPort.on('message', async (msg: InitMessage | RunMessage) => {
   if (msg.type === 'init') {
@@ -143,7 +144,7 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
       },
     };
 
-    runner = await ShellInstance.createWithLoader(loaderContext, mgr, shellExecWasmPath, {
+    runner = await createResidentBashRunner(loaderContext, mgr, shellExecWasmPath, {
       networkBridge,
       toolAllowlist: msg.toolAllowlist,
       memoryBytes: msg.memoryBytes,
