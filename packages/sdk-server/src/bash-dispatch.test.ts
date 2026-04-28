@@ -56,6 +56,28 @@ Deno.test('runCommand syncs host-set env into PID 1', async () => {
   }
 });
 
+Deno.test('forked sandbox preserves bash boot imports and run command handler', async () => {
+  const sb = await Sandbox.create({
+    wasmDir: WASM_DIR,
+    adapter: new NodeAdapter(),
+    bootImports: (api) => bashBootImports(api),
+    runCommandHandler: makeRunCommandHandler(),
+  } as Parameters<typeof Sandbox.create>[0] & Record<string, unknown>);
+  let child: Sandbox | undefined;
+  try {
+    child = await sb.fork();
+    const result = await runCommand(
+      child,
+      'python3 -c "import _codepod; print(_codepod.spawn(\'echo forked\')[\'stdout\'], end=\'\')"',
+    );
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, 'forked\n');
+  } finally {
+    child?.destroy();
+    sb.destroy();
+  }
+});
+
 Deno.test('makeRunCommandHandler uses a fresh resident bash for nested subprocess calls', async () => {
   const sb = await Sandbox.create({
     wasmDir: WASM_DIR,

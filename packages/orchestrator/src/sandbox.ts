@@ -149,6 +149,7 @@ interface SandboxParts {
   storage?: StorageCallbacks;
   bootImports?: SandboxOptions['bootImports'];
   runCommandHandler?: RunCommandHandler;
+  bootArgv?: string[];
 }
 
 export class Sandbox {
@@ -175,6 +176,7 @@ export class Sandbox {
   private extensionRegistry: ExtensionRegistry | null = null;
   private readonly bootImports: SandboxOptions['bootImports'];
   readonly runCommandHandler: RunCommandHandler | undefined;
+  private readonly bootArgv: string[];
 
   private constructor(parts: SandboxParts) {
     this.vfs = parts.vfs;
@@ -197,6 +199,7 @@ export class Sandbox {
     this.storage = parts.storage ?? null;
     this.bootImports = parts.bootImports;
     this.runCommandHandler = parts.runCommandHandler;
+    this.bootArgv = parts.bootArgv ?? ['/bin/bash'];
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -551,6 +554,7 @@ export class Sandbox {
       extensionRegistry, storage: options.storage,
       bootImports: options.bootImports,
       runCommandHandler: options.runCommandHandler,
+      bootArgv: options.bootArgv ?? ['/bin/bash'],
     });
 
     await sb.bootPid1({
@@ -558,7 +562,7 @@ export class Sandbox {
       extensionRegistry,
       toolAllowlist: options.security?.toolAllowlist,
       memoryBytes: secLimits?.memoryBytes,
-      bootArgv: options.bootArgv ?? ['/bin/bash'],
+      bootArgv: sb.bootArgv,
       runCommandHandler: options.runCommandHandler,
       sandbox: sb,
     });
@@ -1035,38 +1039,40 @@ export class Sandbox {
 
     const secLimits = this.security?.limits;
 
-    // Fork as ShellInstance — create a fresh instance and copy env
-    const childRunner = await ShellInstance.create(childVfs, childMgr, this.adapter, this.shellExecWasmPath, {
-      networkBridge: bridge,
-      extensionRegistry: this.extensionRegistry ?? undefined,
-      toolAllowlist: this.security?.toolAllowlist,
-      memoryBytes: this.security?.limits?.memoryBytes,
-    });
-
-    // Wire output limits to forked runner
-    if (secLimits) {
-      childRunner.setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
-    }
-
-    // Copy env
-    const envMap = this.runner.getEnvMap();
-    for (const [k, v] of envMap) {
-      childRunner.setEnv(k, v);
-    }
-
     // Create WorkerExecutor for the child if parent uses hard-kill
     const childWorkerExecutor = await Sandbox.createWorkerExecutor(
       childVfs, this.wasmDir, this.shellExecWasmPath, tools, this.adapter,
       this.security, bridge, this.networkPolicy, this.extensionRegistry ?? undefined,
     );
 
-    return new Sandbox({
-      vfs: childVfs, runner: childRunner, timeoutMs: this.timeoutMs,
+    const child = new Sandbox({
+      vfs: childVfs, timeoutMs: this.timeoutMs,
       adapter: this.adapter, wasmDir: this.wasmDir, shellExecWasmPath: this.shellExecWasmPath,
       mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
       security: this.security, workerExecutor: childWorkerExecutor,
       extensionRegistry: this.extensionRegistry ?? undefined,
+      bootImports: this.bootImports,
+      runCommandHandler: this.runCommandHandler,
+      bootArgv: this.bootArgv,
     });
+
+    await child.bootPid1({
+      networkBridge: bridge,
+      extensionRegistry: this.extensionRegistry ?? undefined,
+      toolAllowlist: this.security?.toolAllowlist,
+      memoryBytes: this.security?.limits?.memoryBytes,
+      bootArgv: this.bootArgv,
+      runCommandHandler: this.runCommandHandler,
+      sandbox: child,
+    });
+
+    // Wire output limits and env to the forked runner
+    if (secLimits) {
+      (child.runner as ShellInstance).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
+    }
+    child.runner.setEnvMap(this.runner.getEnvMap());
+
+    return child;
   }
 
   /** Cancel the currently running command. */
