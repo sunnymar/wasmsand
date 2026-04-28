@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { NodeAdapter } from '../platform/node-adapter.ts';
 import { Sandbox } from '../sandbox.ts';
 
-const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
+const WASM_DIR = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
 
 Deno.test('Sandbox.create accepts bootArgv and exposes sandbox.process(1)', async () => {
   const sb = await Sandbox.create({

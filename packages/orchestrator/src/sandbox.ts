@@ -9,9 +9,9 @@ import { VFS } from './vfs/vfs.js';
 import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
 import { NO_PARENT_PID, ProcessKernel } from './process/kernel.js';
-import type { LoaderContext } from './process/loader.js';
+import { loadProcess, type LoaderContext, type LoadProcessOptions } from './process/loader.js';
 import { ShellInstance, type ShellInstanceOptions } from './shell/shell-instance.js';
-import type { Process } from './process/handle.js';
+import type { Process, ProcessMode } from './process/handle.js';
 import type { ShellLike } from './shell/shell-like.js';
 
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
@@ -107,6 +107,14 @@ export interface SandboxOptions {
    * by Atomics.wait on the main thread when JSPI is active).
    */
   _pipRegistryIndex?: string;
+}
+
+export interface SandboxSpawnOptions {
+  mode: ProcessMode;
+  env?: Record<string, string>;
+  cwd?: string;
+  /** Low-level import factory used by tests and later bash-host wiring. */
+  extraCodepodImports?: LoadProcessOptions['extraCodepodImports'];
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -884,6 +892,17 @@ export class Sandbox {
   process(pid: number): Process | undefined {
     if (pid === 1) return (this.runner as ShellInstance).process;
     return undefined;
+  }
+
+  async spawn(argv: string[], opts: SandboxSpawnOptions): Promise<Process> {
+    this.assertAlive();
+    return loadProcess(this.loaderContext(), {
+      argv,
+      mode: opts.mode,
+      env: opts.env,
+      cwd: opts.cwd,
+      extraCodepodImports: opts.extraCodepodImports,
+    });
   }
 
   /** Test-only. Removed in PR4 along with ShellInstance. */
