@@ -7,57 +7,34 @@ import { createInterface } from 'node:readline';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { VFS } from './vfs/vfs.js';
-import { ProcessManager } from './process/manager.js';
 import { NodeAdapter } from './platform/node-adapter.js';
-import { ShellInstance } from './shell/shell-instance.js';
+import { Sandbox } from './sandbox.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const FIXTURES = resolve(__dirname, 'platform/__tests__/fixtures');
 const SHELL_EXEC_WASM = resolve(__dirname, 'shell/__tests__/fixtures/codepod-shell-exec.wasm');
 
-const TOOLS = [
-  'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
-  'ls', 'mkdir', 'rm', 'cp', 'mv', 'touch', 'tee', 'tr', 'cut',
-  'basename', 'dirname', 'env', 'printf',
-  'find', 'sed', 'awk', 'jq',
-  'du', 'df',
-  'gzip', 'gunzip', 'tar',
-  'true', 'false',
-];
-
-function wasmName(tool: string): string {
-  if (tool === 'true') return 'true-cmd.wasm';
-  if (tool === 'false') return 'false-cmd.wasm';
-  if (tool === 'gunzip') return 'gzip.wasm';
-  return `${tool}.wasm`;
-}
-
 async function main() {
-  const vfs = new VFS();
   const adapter = new NodeAdapter();
-  const mgr = new ProcessManager(vfs, adapter);
-
-  for (const tool of TOOLS) {
-    mgr.registerTool(tool, resolve(FIXTURES, wasmName(tool)));
-  }
-
-  await mgr.preloadModules();
-
-  const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM);
-  shell.setEnv('HOME', '/home/user');
-  shell.setEnv('PWD', '/home/user');
-  shell.setEnv('USER', 'user');
-  shell.setEnv('PATH', '/bin:/usr/bin');
+  const sandbox = await Sandbox.create({
+    wasmDir: FIXTURES,
+    adapter,
+    shellExecWasmPath: SHELL_EXEC_WASM,
+  });
+  sandbox.setEnv('HOME', '/home/user');
+  sandbox.setEnv('PWD', '/home/user');
+  sandbox.setEnv('USER', 'user');
+  sandbox.setEnv('PATH', '/bin:/usr/bin');
 
   // Handle -c flag: run single command and exit
   const cIndex = process.argv.indexOf('-c');
   if (cIndex !== -1 && cIndex + 1 < process.argv.length) {
     const cmd = process.argv[cIndex + 1];
-    const result = await shell.run(cmd);
+    const result = await sandbox.run(cmd);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
+    sandbox.destroy();
     process.exit(result.exitCode);
   }
 
@@ -88,7 +65,7 @@ async function main() {
       }
 
       try {
-        const result = await shell.run(cmd);
+        const result = await sandbox.run(cmd);
         if (result.stdout) process.stdout.write(result.stdout);
         if (result.stderr) process.stderr.write(result.stderr);
       } catch (err: unknown) {
@@ -106,7 +83,7 @@ async function main() {
   }
 
   console.log('codepod — WASM sandbox shell');
-  console.log(`${TOOLS.length} tools + python3 available. Type "exit" to quit.\n`);
+  console.log('WASM tools + python3 available. Type "exit" to quit.\n');
   rl.prompt();
 
   rl.on('line', (line: string) => {
@@ -121,6 +98,7 @@ async function main() {
         await new Promise(r => setTimeout(r, 10));
       }
       console.log('\nbye');
+      sandbox.destroy();
       process.exit(0);
     };
     closing = true;
