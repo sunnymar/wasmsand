@@ -5,6 +5,7 @@ export default defineConfig({
     index: 'src/index.ts',
     'node-adapter': 'src/node-adapter.ts',
     'browser-adapter': 'src/browser-adapter.ts',
+    'execution-worker': 'src/execution/execution-worker.ts',
   },
   format: ['esm'],
   dts: true,
