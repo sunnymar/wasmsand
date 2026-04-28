@@ -971,11 +971,6 @@ export class Sandbox {
     });
   }
 
-  /** Test-only. Removed in PR4 along with ShellInstance. */
-  __getShellInstanceProcess(): Process {
-    return (this.runner as ShellInstance).process;
-  }
-
   /** Persist current state to the configured backend. Requires persistence mode. */
   async saveState(): Promise<void> {
     this.assertAlive();
