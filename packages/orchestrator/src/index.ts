@@ -6,6 +6,7 @@ export { ShellInstance } from './shell/shell-instance.js';
 export { PythonRunner } from './python/python-runner.js';
 export { Sandbox } from './sandbox.js';
 export type { SandboxOptions, MountConfig, StorageCallbacks } from './sandbox.js';
+export type { KernelApi, KernelApiMemory, KernelApiProcessManager, KernelApiTime } from './kernel-api.js';
 export { BrowserAdapter } from './platform/browser-adapter.js';
 // NodeAdapter not re-exported — imports node:fs/promises which breaks browser bundlers.
 // Node consumers: import { NodeAdapter } from '@codepod/sandbox/node'

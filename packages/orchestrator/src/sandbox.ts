@@ -57,6 +57,8 @@ import {
   createNullTarget,
   type FdTarget,
 } from './wasi/fd-target.js';
+import type { KernelApi } from './kernel-api.js';
+import { MemoryProxy } from './kernel-api.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -81,6 +83,8 @@ export interface SandboxOptions {
   shellExecWasmPath?: string;
   /** argv for the boot process (PID 1). Defaults to ["/bin/bash"]. */
   bootArgv?: string[];
+  /** Host-supplied userland imports for the boot process. */
+  bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
   /** Security policy and limits. */
@@ -139,6 +143,7 @@ interface SandboxParts {
   workerExecutor?: WorkerExecutor;
   extensionRegistry?: ExtensionRegistry;
   storage?: StorageCallbacks;
+  bootImports?: SandboxOptions['bootImports'];
 }
 
 export class Sandbox {
@@ -163,6 +168,7 @@ export class Sandbox {
   private workerExecutor: WorkerExecutor | null = null;
   private persistenceManager: PersistenceManager | null = null;
   private extensionRegistry: ExtensionRegistry | null = null;
+  private readonly bootImports: SandboxOptions['bootImports'];
 
   private constructor(parts: SandboxParts) {
     this.vfs = parts.vfs;
@@ -183,6 +189,7 @@ export class Sandbox {
     this.workerExecutor = parts.workerExecutor ?? null;
     this.extensionRegistry = parts.extensionRegistry ?? null;
     this.storage = parts.storage ?? null;
+    this.bootImports = parts.bootImports;
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -243,8 +250,38 @@ export class Sandbox {
       this.loaderContext(),
       this.mgr,
       this.shellExecWasmPath,
-      opts,
+      {
+        ...opts,
+        extraCodepodImports: this.buildUserlandImportFactory(this.bootImports),
+      },
     );
+  }
+
+  private buildKernelApi(memory: MemoryProxy): KernelApi {
+    return {
+      vfs: this.vfs,
+      processManager: {
+        registerTool: (name, impl) => this.mgr.registerTool(name, String(impl)),
+        hasTool: (name) => this.mgr.hasTool(name),
+      },
+      time: {
+        now: () => Date.now() / 1000,
+        monotonic: () => BigInt(Math.floor(performance.now() * 1_000_000)),
+      },
+      memory,
+    };
+  }
+
+  private buildUserlandImportFactory(
+    bootImports?: SandboxOptions['bootImports'],
+  ): LoadProcessOptions['extraCodepodImports'] {
+    if (!bootImports) return undefined;
+    const memory = new MemoryProxy();
+    const imports = bootImports(this.buildKernelApi(memory));
+    return (wasmMemory) => {
+      memory.current = wasmMemory;
+      return imports;
+    };
   }
 
   static async create(options: SandboxOptions): Promise<Sandbox> {
@@ -501,6 +538,7 @@ export class Sandbox {
       mgr, bridge, networkPolicy: options.network,
       security: options.security, workerExecutor,
       extensionRegistry, storage: options.storage,
+      bootImports: options.bootImports,
     });
 
     await sb.bootPid1({
