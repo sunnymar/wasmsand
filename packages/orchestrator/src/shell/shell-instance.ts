@@ -15,7 +15,7 @@ import type { ProcessManager } from '../process/manager.js';
 import type { PlatformAdapter } from '../platform/adapter.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
-import type { RunResult } from './shell-types.js';
+import type { RunResult } from '../run-result.js';
 import type { ShellLike, StreamCallbacks } from './shell-like.js';
 import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import { createShellImports } from '../host-imports/shell-imports.js';

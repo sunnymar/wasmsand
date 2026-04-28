@@ -5,7 +5,7 @@
  * providing shell parsing and execution via WebAssembly.
  */
 
-import type { RunResult } from './shell-types.js';
+import type { RunResult } from '../run-result.js';
 
 export interface StreamCallbacks {
   onStdout?: (data: Uint8Array) => void;

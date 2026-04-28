@@ -7,7 +7,7 @@
 
 import type { Worker } from 'node:worker_threads';
 import type { VFS } from '../vfs/vfs.js';
-import type { RunResult } from '../shell/shell-types.js';
+import type { RunResult } from '../run-result.js';
 import {
   SAB_SIZE,
   STATUS_RESPONSE,

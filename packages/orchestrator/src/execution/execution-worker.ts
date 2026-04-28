@@ -17,7 +17,7 @@ import {
 } from './proxy-protocol.js';
 import { ProcessManager } from '../process/manager.js';
 import { ShellInstance } from '../shell/shell-instance.js';
-import type { RunResult } from '../shell/shell-types.js';
+import type { RunResult } from '../run-result.js';
 import { CancelledError } from '../security.js';
 
 if (!parentPort) throw new Error('Must run as Worker thread');

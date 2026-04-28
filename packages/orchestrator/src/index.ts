@@ -12,7 +12,7 @@ export { BrowserAdapter } from './platform/browser-adapter.js';
 // Node consumers: import { NodeAdapter } from '@codepod/sandbox/node'
 export type { PlatformAdapter } from './platform/adapter.js';
 export type { SpawnOptions, SpawnResult } from './process/process.js';
-export type { RunResult } from './shell/shell-types.js';
+export type { RunResult } from './run-result.js';
 export { NetworkGateway, NetworkAccessDenied } from './network/gateway.js';
 export type { NetworkPolicy } from './network/gateway.js';
 export { NetworkBridge } from './network/bridge.js';

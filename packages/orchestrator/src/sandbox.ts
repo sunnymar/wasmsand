@@ -25,7 +25,7 @@ export interface StorageCallbacks {
   save: (sandboxId: string, state: Uint8Array) => Promise<void>;
   load: (sandboxId: string) => Promise<Uint8Array>;
 }
-import type { RunResult } from './shell/shell-types.js';
+import type { RunResult } from './run-result.js';
 import type { PlatformAdapter } from './platform/adapter.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
