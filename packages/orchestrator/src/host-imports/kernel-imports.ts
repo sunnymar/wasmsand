@@ -82,6 +82,13 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         return writeJson(memory, outPtr, outCap, { error: 'kernel not available' });
       }
       const { readFd, writeFd } = opts.kernel.createPipe(callerPid);
+      if (opts.wasiHost) {
+        const ioFds = opts.wasiHost.getIoFds();
+        const readTarget = opts.kernel.getFdTarget(callerPid, readFd);
+        const writeTarget = opts.kernel.getFdTarget(callerPid, writeFd);
+        if (readTarget) ioFds.set(readFd, readTarget);
+        if (writeTarget) ioFds.set(writeFd, writeTarget);
+      }
       return writeJson(memory, outPtr, outCap, { read_fd: readFd, write_fd: writeFd });
     },
 
@@ -148,6 +155,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     host_close_fd(fd: number): number {
       if (!opts.kernel) return -1;
       opts.kernel.closeFd(callerPid, fd);
+      opts.wasiHost?.getIoFds().delete(fd);
       return 0;
     },
 
@@ -196,13 +204,14 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // host_dup2(src_fd, dst_fd) -> i32
     // Makes dst_fd point to the same target as src_fd.
     host_dup2(srcFd: number, dstFd: number): number {
+      let wasiResult = 0;
       if (opts.wasiHost) {
-        return opts.wasiHost.renumberFd(srcFd, dstFd) === 0 ? 0 : -1;
+        wasiResult = opts.wasiHost.renumberFd(srcFd, dstFd) === 0 ? 0 : -1;
       }
-      if (!opts.kernel) return -1;
+      if (!opts.kernel) return wasiResult;
       try {
         opts.kernel.dup2(callerPid, srcFd, dstFd);
-        return 0;
+        return wasiResult === -1 ? -1 : 0;
       } catch { return -1; }
     },
 

@@ -76,6 +76,18 @@ export async function loadProcess(
     ...ctx.buildKernelImports(pid, memoryProxy, wasi),
     ...(opts.extraCodepodImports?.(memoryProxy, wasi) ?? {}),
   };
+  wrapAsyncImports(codepodImports, [
+    'host_waitpid',
+    'host_yield',
+    'host_network_fetch',
+    'host_register_tool',
+    'host_run_command',
+  ]);
+  wrapAsyncImports(wasiImports as Record<string, WebAssembly.ImportValue>, [
+    'fd_read',
+    'fd_write',
+    'poll_oneoff',
+  ]);
 
   const instance = await ctx.adapter.instantiate(module, {
     wasi_snapshot_preview1: wasiImports,
@@ -105,4 +117,14 @@ export async function loadProcess(
   });
 
   return proc;
+}
+
+function wrapAsyncImports(imports: Record<string, WebAssembly.ImportValue>, names: string[]): void {
+  if (typeof WebAssembly.Suspending !== 'function') return;
+  for (const name of names) {
+    const value = imports[name];
+    if (typeof value === 'function') {
+      imports[name] = new WebAssembly.Suspending(value as (...args: number[]) => unknown) as unknown as WebAssembly.ImportValue;
+    }
+  }
 }

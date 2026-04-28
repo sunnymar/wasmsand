@@ -10,7 +10,8 @@ import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
 import { NO_PARENT_PID, ProcessKernel } from './process/kernel.js';
 import type { LoaderContext } from './process/loader.js';
-import { ShellInstance } from './shell/shell-instance.js';
+import { ShellInstance, type ShellInstanceOptions } from './shell/shell-instance.js';
+import type { Process } from './process/handle.js';
 import type { ShellLike } from './shell/shell-like.js';
 
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
@@ -78,6 +79,8 @@ export interface SandboxOptions {
   fsLimitBytes?: number;
   /** Path to the shell-exec WASM binary. Defaults to `${wasmDir}/codepod-shell-exec.wasm`. */
   shellExecWasmPath?: string;
+  /** argv for the boot process (PID 1). Defaults to ["/bin/bash"]. */
+  bootArgv?: string[];
   /** Network policy for curl/wget builtins. If omitted, network access is disabled. */
   network?: NetworkPolicy;
   /** Security policy and limits. */
@@ -112,7 +115,7 @@ const DEFAULT_FS_LIMIT = 256 * 1024 * 1024; // 256 MB
 /** Internal config for the Sandbox constructor. Not part of the public API. */
 interface SandboxParts {
   vfs: VFS;
-  runner: ShellLike;
+  runner?: ShellLike;
   timeoutMs: number;
   adapter: PlatformAdapter;
   wasmDir: string;
@@ -128,7 +131,7 @@ interface SandboxParts {
 
 export class Sandbox {
   private vfs: VFS;
-  private runner: ShellLike;
+  private runner!: ShellLike;
   private timeoutMs: number;
   private destroyed = false;
   private offloaded = false;
@@ -151,7 +154,7 @@ export class Sandbox {
 
   private constructor(parts: SandboxParts) {
     this.vfs = parts.vfs;
-    this.runner = parts.runner;
+    if (parts.runner) this.runner = parts.runner;
     this.timeoutMs = parts.timeoutMs;
     this.adapter = parts.adapter;
     this.wasmDir = parts.wasmDir;
@@ -223,6 +226,15 @@ export class Sandbox {
     };
   }
 
+  private async bootPid1(opts: ShellInstanceOptions): Promise<void> {
+    this.runner = await ShellInstance.createWithLoader(
+      this.loaderContext(),
+      this.mgr,
+      this.shellExecWasmPath,
+      opts,
+    );
+  }
+
   static async create(options: SandboxOptions): Promise<Sandbox> {
     const adapter = options.adapter ?? await Sandbox.detectAdapter();
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -290,18 +302,6 @@ export class Sandbox {
     });
 
     const secLimits = options.security?.limits;
-
-    const runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath, {
-      networkBridge: bridge,
-      extensionRegistry,
-      toolAllowlist: options.security?.toolAllowlist,
-      memoryBytes: secLimits?.memoryBytes,
-    });
-
-    // Wire output limits
-    if (secLimits) {
-      runner.setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
-    }
 
     // Install sandbox-native package files into VFS
     if (options.packages && options.packages.length > 0) {
@@ -477,12 +477,6 @@ export class Sandbox {
       });
     }
 
-    // Set PYTHONPATH: user-provided paths + /usr/lib/python (always included)
-    if (options.pythonPath || bridge || extensionRegistry.getPackageNames().length > 0 || (options.packages && options.packages.length > 0)) {
-      const paths = [...(options.pythonPath ?? []), '/usr/lib/python'];
-      runner.setEnv('PYTHONPATH', paths.join(':'));
-    }
-
     // Create WorkerExecutor for hard-kill preemption when enabled.
     const workerExecutor = await Sandbox.createWorkerExecutor(
       vfs, options.wasmDir, shellExecWasmPath, tools, adapter,
@@ -490,12 +484,31 @@ export class Sandbox {
     );
 
     const sb = new Sandbox({
-      vfs, runner, timeoutMs, adapter,
+      vfs, timeoutMs, adapter,
       wasmDir: options.wasmDir, shellExecWasmPath,
       mgr, bridge, networkPolicy: options.network,
       security: options.security, workerExecutor,
       extensionRegistry, storage: options.storage,
     });
+
+    await sb.bootPid1({
+      networkBridge: bridge,
+      extensionRegistry,
+      toolAllowlist: options.security?.toolAllowlist,
+      memoryBytes: secLimits?.memoryBytes,
+      bootArgv: options.bootArgv ?? ['/bin/bash'],
+    });
+
+    // Wire output limits
+    if (secLimits) {
+      (sb.runner as ShellInstance).setOutputLimits(secLimits.stdoutBytes, secLimits.stderrBytes);
+    }
+
+    // Set PYTHONPATH: user-provided paths + /usr/lib/python (always included)
+    if (options.pythonPath || bridge || extensionRegistry.getPackageNames().length > 0 || (options.packages && options.packages.length > 0)) {
+      const paths = [...(options.pythonPath ?? []), '/usr/lib/python'];
+      sb.runner.setEnv('PYTHONPATH', paths.join(':'));
+    }
 
     // Wire persistence if configured
     const pMode = options.persistence?.mode ?? 'ephemeral';
@@ -503,8 +516,8 @@ export class Sandbox {
       const backend = options.persistence?.backend ?? await Sandbox.detectBackend();
       const pm = new PersistenceManager(
         backend, vfs, options.persistence,
-        () => runner.getEnvMap(),
-        (env) => runner.setEnvMap(env),
+        () => sb.runner.getEnvMap(),
+        (env) => sb.runner.setEnvMap(env),
       );
       sb.persistenceManager = pm;
 
@@ -866,6 +879,16 @@ export class Sandbox {
     if (env) {
       this.runner.setEnvMap(env);
     }
+  }
+
+  process(pid: number): Process | undefined {
+    if (pid === 1) return (this.runner as ShellInstance).process;
+    return undefined;
+  }
+
+  /** Test-only. Removed in PR4 along with ShellInstance. */
+  __getShellInstanceProcess(): Process {
+    return (this.runner as ShellInstance).process;
   }
 
   /** Persist current state to the configured backend. Requires persistence mode. */
