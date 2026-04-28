@@ -3,12 +3,12 @@
  * imports, runs _start, and returns a Process handle.
  */
 
-import { Process, type ProcessMode } from './handle.ts';
-import type { PlatformAdapter } from '../platform/adapter.ts';
-import type { VfsLike } from '../vfs/vfs-like.ts';
-import type { ProcessKernel } from './kernel.ts';
-import { WasiHost } from '../wasi/wasi-host.ts';
-import { createBufferTarget, createNullTarget } from '../wasi/fd-target.ts';
+import { Process, type ProcessMode } from './handle.js';
+import type { PlatformAdapter } from '../platform/adapter.js';
+import type { VfsLike } from '../vfs/vfs-like.js';
+import type { ProcessKernel } from './kernel.js';
+import { WasiHost } from '../wasi/wasi-host.js';
+import { createBufferTarget, createNullTarget } from '../wasi/fd-target.js';
 
 export interface LoaderContext {
   vfs: VfsLike;
