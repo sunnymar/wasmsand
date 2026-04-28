@@ -12,7 +12,7 @@ import { NO_PARENT_PID, ProcessKernel } from './process/kernel.js';
 import { loadProcess, type LoaderContext, type LoadProcessOptions } from './process/loader.js';
 import { ShellInstance, type ShellInstanceOptions } from './shell/shell-instance.js';
 import type { Process, ProcessMode } from './process/handle.js';
-import type { ShellLike } from './shell/shell-like.js';
+import type { CommandRunner } from './command-runner.js';
 
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
 export interface StreamCallbacks {
@@ -134,7 +134,7 @@ const BOOTSTRAP_EXPORT_EXCLUDES = [
 /** Internal config for the Sandbox constructor. Not part of the public API. */
 interface SandboxParts {
   vfs: VFS;
-  runner?: ShellLike;
+  runner?: CommandRunner;
   timeoutMs: number;
   adapter: PlatformAdapter;
   wasmDir: string;
@@ -153,7 +153,7 @@ interface SandboxParts {
 
 export class Sandbox {
   private vfs: VFS;
-  private runner!: ShellLike;
+  private runner!: CommandRunner;
   private timeoutMs: number;
   private destroyed = false;
   private offloaded = false;

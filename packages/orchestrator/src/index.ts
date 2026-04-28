@@ -21,8 +21,6 @@ export type { SyncFetchResult } from './network/bridge.js';
 export type { SecurityOptions, SecurityLimits, ErrorClass, AuditEvent, AuditEventHandler } from './security.js';
 export { CancelledError } from './security.js';
 export type { VfsLike } from './vfs/vfs-like.js';
-export { WorkerExecutor } from './execution/worker-executor.js';
-export type { WorkerConfig, WorkerRunResult } from './execution/worker-executor.js';
 export type { VirtualProvider } from './vfs/provider.js';
 export { HostMount } from './vfs/host-mount.js';
 export type { HostMountOptions } from './vfs/host-mount.js';

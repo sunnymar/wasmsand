@@ -16,7 +16,7 @@ import type { PlatformAdapter } from '../platform/adapter.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { RunResult } from '../run-result.js';
-import type { ShellLike, StreamCallbacks } from './shell-like.js';
+import type { CommandRunner, RunnerStreamCallbacks } from '../command-runner.js';
 import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import { createShellImports } from '../host-imports/shell-imports.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
@@ -70,7 +70,7 @@ export interface ShellInstanceOptions {
   sandbox?: Sandbox;
 }
 
-export class ShellInstance implements ShellLike {
+export class ShellInstance implements CommandRunner {
   private instance: WebAssembly.Instance | undefined;
   private memory: WebAssembly.Memory | undefined;
   private procField: Process | undefined;
@@ -949,7 +949,7 @@ export class ShellInstance implements ShellLike {
   }
 
   /** Set or clear streaming callbacks on the shell's stdout/stderr buffer targets. */
-  setOutputCallbacks(callbacks: StreamCallbacks | null): void {
+  setOutputCallbacks(callbacks: RunnerStreamCallbacks | null): void {
     if (!this.kernel) return;
     const stdoutTarget = this.kernel.getFdTarget(this.pid, 1);
     const stderrTarget = this.kernel.getFdTarget(this.pid, 2);
