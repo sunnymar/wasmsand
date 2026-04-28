@@ -6,6 +6,7 @@ interface ProcessLike {
   readonly exports: Record<string, (...args: number[]) => unknown>;
   callExport(name: string, ...args: number[]): Promise<number>;
   fdReadAndClear(fd: 1 | 2): { data: string; truncated: boolean };
+  setStdin?(data: Uint8Array | undefined): void;
   terminate(): Promise<void>;
 }
 
@@ -33,7 +34,7 @@ export interface BashRunResult {
 export async function callRunCommand(
   proc: ProcessLike,
   cmd: string,
-  _opts?: BashRunOptions,
+  opts?: BashRunOptions,
 ): Promise<BashRunResult> {
   const memory = proc.memory;
   const alloc = proc.exports.__alloc as ((size: number) => number) | undefined;
@@ -42,18 +43,30 @@ export async function callRunCommand(
     throw new Error('process does not export __alloc/__dealloc');
   }
 
-  const cmdBytes = new TextEncoder().encode(cmd);
+  const encoder = new TextEncoder();
+  const stdin = opts?.stdin ? encoder.encode(opts.stdin) : undefined;
+  if (stdin && !proc.setStdin) {
+    throw new Error('process does not support stdin binding');
+  }
+  proc.setStdin?.(stdin);
+
+  const cmdBytes = encoder.encode(cmd);
   const cmdPtr = alloc(cmdBytes.length);
   new Uint8Array(memory.buffer, cmdPtr, cmdBytes.length).set(cmdBytes);
 
   let outCap = 4096;
   let outPtr = alloc(outCap);
-  let written = await proc.callExport('__run_command', cmdPtr, cmdBytes.length, outPtr, outCap);
-  if (written > outCap) {
-    dealloc(outPtr, outCap);
-    outCap = written;
-    outPtr = alloc(outCap);
+  let written: number;
+  try {
     written = await proc.callExport('__run_command', cmdPtr, cmdBytes.length, outPtr, outCap);
+    if (written > outCap) {
+      dealloc(outPtr, outCap);
+      outCap = written;
+      outPtr = alloc(outCap);
+      written = await proc.callExport('__run_command', cmdPtr, cmdBytes.length, outPtr, outCap);
+    }
+  } finally {
+    proc.setStdin?.(undefined);
   }
 
   const decoded = new TextDecoder().decode(new Uint8Array(memory.buffer, outPtr, written));
