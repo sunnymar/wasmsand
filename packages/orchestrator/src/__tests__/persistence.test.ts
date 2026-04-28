@@ -15,7 +15,7 @@ import { MemoryBackend } from '../persistence/backend.js';
 import { FsBackend } from '../persistence/fs-backend.js';
 import { PersistenceManager } from '../persistence/manager.js';
 
-const WASM_DIR = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
+const WASM_DIR = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
 
 
 /** Helper: encode a string as UTF-8 bytes. */
@@ -299,6 +299,23 @@ describe('Sandbox exportState / importState', () => {
 
       expect(dec(sandbox2.readFile('/tmp/hello.txt'))).toBe('world');
       expect(sandbox2.getEnv('MY_KEY')).toBe('my_value');
+    } finally {
+      sandbox2.destroy();
+    }
+  });
+
+  it('does not serialize the bootstrap shell binary', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+
+    const blob = sandbox.exportState();
+    const state = JSON.parse(dec(blob.subarray(12)));
+    expect(state.files.some((f: any) => f.path === '/bin/bash')).toBe(false);
+
+    const sandbox2 = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    try {
+      sandbox2.importState(blob);
+      expect(sandbox2.stat('/bin/bash').type).toBe('file');
+      expect(sandbox2.readFile('/bin/bash').length).toBeGreaterThan(8);
     } finally {
       sandbox2.destroy();
     }

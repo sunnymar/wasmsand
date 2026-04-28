@@ -119,6 +119,7 @@ export interface SandboxSpawnOptions {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_FS_LIMIT = 256 * 1024 * 1024; // 256 MB
+const BOOTSTRAP_EXPORT_EXCLUDES = ['/bin/bash'];
 
 /** Internal config for the Sandbox constructor. Not part of the public API. */
 interface SandboxParts {
@@ -850,7 +851,11 @@ export class Sandbox {
   /** Export the entire sandbox state (VFS files + env vars) as a binary blob. */
   exportState(): Uint8Array {
     this.assertAlive();
-    return serializerExportState(this.vfs, this.runner.getEnvMap(), this.vfs.getProviderPaths());
+    return serializerExportState(
+      this.vfs,
+      this.runner.getEnvMap(),
+      [...this.vfs.getProviderPaths(), ...BOOTSTRAP_EXPORT_EXCLUDES],
+    );
   }
 
   /** Import a previously exported state blob, restoring files and env vars. */
