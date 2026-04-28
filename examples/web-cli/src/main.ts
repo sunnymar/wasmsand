@@ -13,6 +13,7 @@ async function boot(): Promise<void> {
   });
 
   // Write a sample file for curl/wget demos
+  sandbox.mkdir('/var');
   sandbox.mkdir('/var/www');
   sandbox.writeFile(
     '/var/www/hello.txt',
