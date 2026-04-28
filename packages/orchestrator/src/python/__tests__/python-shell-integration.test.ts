@@ -10,7 +10,7 @@ const FIXTURES = resolve(
 );
 const SHELL_EXEC_WASM = resolve(
   import.meta.dirname!,
-  '../../shell/__tests__/fixtures/codepod-shell-exec.wasm',
+  '../../platform/__tests__/fixtures/codepod-shell-exec.wasm',
 );
 
 describe('Python via Sandbox shell', () => {

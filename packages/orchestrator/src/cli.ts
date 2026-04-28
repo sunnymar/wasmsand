@@ -13,7 +13,7 @@ import { Sandbox } from './sandbox.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const FIXTURES = resolve(__dirname, 'platform/__tests__/fixtures');
-const SHELL_EXEC_WASM = resolve(__dirname, 'shell/__tests__/fixtures/codepod-shell-exec.wasm');
+const SHELL_EXEC_WASM = resolve(__dirname, 'platform/__tests__/fixtures/codepod-shell-exec.wasm');
 
 async function main() {
   const adapter = new NodeAdapter();

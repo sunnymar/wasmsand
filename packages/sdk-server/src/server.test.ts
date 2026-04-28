@@ -7,7 +7,7 @@ import { createInterface } from 'node:readline';
 
 const SERVER_PATH = resolve(import.meta.dirname!, 'server.ts');
 const WASM_DIR = resolve(import.meta.dirname!, '../../orchestrator/src/platform/__tests__/fixtures');
-const SHELL_WASM = resolve(import.meta.dirname!, '../../orchestrator/src/shell/__tests__/fixtures/codepod-shell-exec.wasm');
+const SHELL_WASM = resolve(import.meta.dirname!, '../../orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm');
 
 function startServer() {
   const denoPath = Deno.execPath();
