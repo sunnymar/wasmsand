@@ -8,11 +8,7 @@ import type { PlatformAdapter } from "../platform/adapter.js";
 import type { VfsLike } from "../vfs/vfs-like.js";
 import type { ProcessKernel } from "./kernel.js";
 import { WasiHost } from "../wasi/wasi-host.js";
-import {
-  createBufferTarget,
-  createNullTarget,
-  type FdTarget,
-} from "../wasi/fd-target.js";
+import { createBufferTarget, createNullTarget } from "../wasi/fd-target.js";
 import { AsyncifyAsyncBridge } from "../async-bridge.js";
 
 export interface LoaderContext {
@@ -101,10 +97,6 @@ export async function loadProcess(
       .hostSetjmp as unknown as WebAssembly.ImportValue;
     codepodImports.host_longjmp = asyncifyBridge
       .hostLongjmp as unknown as WebAssembly.ImportValue;
-    // The current asyncified shell binary was not transformed for
-    // wasi_snapshot_preview1.fd_write unwinds. Keep fd_write synchronous on
-    // this fallback path, matching the pre-loader resident shell behavior.
-    wasiImports.fd_write = createSyncFdWrite(memoryProxy, wasi);
   }
   wrapAsyncImports(codepodImports, [
     "host_waitpid",
@@ -115,9 +107,7 @@ export async function loadProcess(
   ], asyncifyBridge);
   wrapAsyncImports(
     wasiImports as Record<string, WebAssembly.ImportValue>,
-    asyncifyBridge
-      ? ["fd_read", "poll_oneoff"]
-      : ["fd_read", "fd_write", "poll_oneoff"],
+    ["fd_read", "fd_write", "poll_oneoff"],
     asyncifyBridge,
   );
 
@@ -181,71 +171,6 @@ function wrapAsyncImports(
         value as (...args: number[]) => Promise<number> | number,
       ) as WebAssembly.ImportValue;
     }
-  }
-}
-
-function createSyncFdWrite(memory: WebAssembly.Memory, wasiHost: WasiHost) {
-  const ioFds = wasiHost.getIoFds();
-  return (
-    fd: number,
-    iovPtr: number,
-    iovLen: number,
-    nwrittenPtr: number,
-  ): number => {
-    const view = new DataView(memory.buffer);
-    const bytes = new Uint8Array(memory.buffer);
-    const target = ioFds.get(fd);
-    let totalWritten = 0;
-
-    for (let i = 0; i < iovLen; i++) {
-      const buf = view.getUint32(iovPtr + i * 8, true);
-      const len = view.getUint32(iovPtr + i * 8 + 4, true);
-      const data = bytes.slice(buf, buf + len);
-      const result = writeFdTargetSync(target, data);
-      if (result.errno !== 0) {
-        view.setUint32(nwrittenPtr, totalWritten, true);
-        return result.errno;
-      }
-      totalWritten += result.written;
-    }
-
-    view.setUint32(nwrittenPtr, totalWritten, true);
-    return 0;
-  };
-}
-
-function writeFdTargetSync(
-  target: FdTarget | undefined,
-  data: Uint8Array,
-): { written: number; errno: number } {
-  if (!target) return { written: 0, errno: 8 };
-
-  switch (target.type) {
-    case "pipe_write": {
-      const written = target.pipe.write(data);
-      if (written === -1) return { written: 0, errno: 76 };
-      return { written, errno: 0 };
-    }
-    case "buffer": {
-      if (target.total < target.limit) {
-        const remaining = target.limit - target.total;
-        const slice = data.byteLength <= remaining
-          ? data
-          : data.slice(0, remaining);
-        target.buf.push(slice);
-        target.onChunk?.(slice);
-        if (data.byteLength > remaining) target.truncated = true;
-      } else {
-        target.truncated = true;
-      }
-      target.total += data.byteLength;
-      return { written: data.byteLength, errno: 0 };
-    }
-    case "null":
-      return { written: data.byteLength, errno: 0 };
-    case "static":
-    case "pipe_read":
-      return { written: 0, errno: 8 };
   }
 }
 

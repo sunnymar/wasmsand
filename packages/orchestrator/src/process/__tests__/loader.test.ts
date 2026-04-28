@@ -119,6 +119,10 @@ Deno.test("loader-backed resident shell supports Asyncify fallback without JSPI"
     );
     assertEquals(fileResult.exitCode, 0);
     assertEquals(fileResult.stdout, "file-data\n");
+
+    const multiStageResult = await sandbox.run("seq 1 10 | head -5 | wc -l");
+    assertEquals(multiStageResult.exitCode, 0);
+    assertEquals(multiStageResult.stdout.trim(), "5");
   } finally {
     sandbox?.destroy();
     Object.defineProperty(WebAssembly, "Suspending", {
