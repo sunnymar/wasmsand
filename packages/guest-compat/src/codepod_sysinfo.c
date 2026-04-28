@@ -1,5 +1,5 @@
 /* sysinfo(2) — Linux-style system info, sourced from the codepod
- * /proc files (proc-provider.ts in the orchestrator):
+ * /proc files (proc-provider.ts in the kernel):
  *   /proc/uptime   "<seconds_up> <seconds_idle>"
  *   /proc/meminfo  "MemTotal: NNNN kB\nMemFree: ...\n..."
  *   /proc/loadavg  "<1m> <5m> <15m> <runnable>/<total> <last_pid>"

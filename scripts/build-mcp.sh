@@ -57,7 +57,7 @@ elif [ "$ENGINE" != "deno" ]; then
 fi
 
 # Build python3.wasm with native packages if needed
-WASM_FIXTURES="packages/orchestrator/src/platform/__tests__/fixtures"
+WASM_FIXTURES="packages/kernel/src/platform/__tests__/fixtures"
 if [ "$REBUILD_PYTHON" = true ] || [ ! -f "$WASM_FIXTURES/python3.wasm" ]; then
   echo "==> Building python3.wasm (features: $PYTHON_FEATURES)..."
   bash packages/python/build.sh "$PYTHON_FEATURES"
@@ -69,8 +69,8 @@ mkdir -p "$OUT_DIR"
 
 BUNDLE="$OUT_DIR/.codepod-mcp-bundle.mjs"
 
-echo "==> Building orchestrator TypeScript..."
-(cd packages/orchestrator && "$DENO" task build)
+echo "==> Building kernel TypeScript..."
+(cd packages/kernel && "$DENO" task build)
 
 echo "==> Bundling with esbuild..."
 npx esbuild packages/mcp-server/src/index.ts \
@@ -105,11 +105,11 @@ echo "==> Embedding python-shims..."
 # The bundled code resolves python-shims relative to import.meta.url (= dist/).
 # Copy them next to the bundle so deno compile --include picks them up at the
 # right relative path.
-cp -R packages/orchestrator/src/network/python-shims "$OUT_DIR/python-shims"
+cp -R packages/kernel/src/network/python-shims "$OUT_DIR/python-shims"
 
 echo "==> Embedding package python files..."
 # The PackageRegistry resolves pythonDir relative to PACKAGES_ROOT, which is
-# 3 levels up from packages/orchestrator/src/packages/ in the source tree.
+# 3 levels up from packages/kernel/src/packages/ in the source tree.
 # In the bundle (dist/.codepod-mcp-bundle.mjs), import.meta.dirname is dist/,
 # so PACKAGES_ROOT = dist/../../../ which won't exist. We mirror the expected
 # relative structure so the embedded FS works: packages/{name}/python/
@@ -157,7 +157,7 @@ echo "==> Built: $OUT_DIR/codepod-mcp ($SIZE)"
 # Generate .mcp.json in this project directory (where Claude Code reads it)
 CODEPOD_ROOT="$(pwd)"
 REPO_PARENT="$(dirname "$CODEPOD_ROOT")"
-WASM_DIR="$CODEPOD_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
+WASM_DIR="$CODEPOD_ROOT/packages/kernel/src/platform/__tests__/fixtures"
 MCP_JSON="$CODEPOD_ROOT/.mcp.json"
 
 cat > "$MCP_JSON" <<MCPEOF

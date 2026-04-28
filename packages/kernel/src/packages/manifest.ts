@@ -4,7 +4,7 @@
  * host build (cpcc-level Makefiles in packages/c-ports/<port>/) and
  * copied into wasmDir alongside the binary they describe.
  *
- * The orchestrator-side install is intentionally minimal: copy any
+ * The kernel-side install is intentionally minimal: copy any
  * declared sidecar files into the VFS at the declared paths, register
  * the binary as a multicall dispatcher when applets are listed, and
  * create any declared symlinks.  Pure WASI binaries with no sidecars

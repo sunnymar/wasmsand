@@ -43,7 +43,7 @@ elif [ "$ENGINE" = "deno" ]; then
   fi
 
   BUNDLE="$OUT_DIR/.codepod-sdk-bundle.mjs"
-  (cd packages/orchestrator && "$DENO" task build 2>&1)
+  (cd packages/kernel && "$DENO" task build 2>&1)
   npx esbuild packages/sdk-server/src/server.ts \
     --bundle --platform=node --format=esm --outfile="$BUNDLE" --log-level=warning
   "$DENO" compile -A --no-check -o "$OUT_DIR/codepod-server-deno" "$BUNDLE"

@@ -10,9 +10,9 @@
 
 import { Buffer } from 'node:buffer';
 import { createInterface } from 'node:readline';
-import { Sandbox, SandboxPool } from '@codepod/sandbox';
-import type { ExtensionConfig, ExtensionInvokeArgs, ExtensionInvokeResult, StorageCallbacks } from '@codepod/sandbox';
-import { NodeAdapter } from '@codepod/sandbox/node';
+import { Sandbox, SandboxPool } from '@codepod/kernel';
+import type { ExtensionConfig, ExtensionInvokeArgs, ExtensionInvokeResult, StorageCallbacks } from '@codepod/kernel';
+import { NodeAdapter } from '@codepod/kernel/node';
 import { Dispatcher } from './dispatcher.js';
 import { makeRunCommandHandler } from './bash-dispatch.js';
 import { bashBootImports } from './bash-host-imports.js';

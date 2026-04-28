@@ -8,7 +8,7 @@ standalones: **csplit, fmt, join, numfmt, sha224sum, sha384sum**.
 ## Status
 
 **Working.**  All six tools build, link, and pass conformance tests
-in the sandbox.  Conformance: `packages/orchestrator/src/__tests__/coreutils-conformance.test.ts`.
+in the sandbox.  Conformance: `packages/kernel/src/__tests__/coreutils-conformance.test.ts`.
 
 ### Compat-layer fixes already landed for this port
 
@@ -32,7 +32,7 @@ Each fix below is broadly useful — future ports inherit it.
   before gnulib falls back to `F_DUPFD=1`, which would collide
   with wasi-libc's `F_GETFD=1` in fcntl-op switch statements.
 - **`wait`/`waitpid`** real impls routed through `host_waitpid`
-  (async, wrapped via JSPI/asyncify by the orchestrator) — blocking
+  (async, wrapped via JSPI/asyncify by the kernel) — blocking
   waits work end-to-end regardless of scheduler backend.
 - **`codepod_fs.c`** — real symbols for `chown`/`lchown`/`fchown`/
   `fchdir`/`chroot`/`getpriority`/`setpriority`/`getrusage`/

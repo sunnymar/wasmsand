@@ -21,7 +21,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_DIR="$REPO_ROOT/target/wasm32-wasip1/release"
-FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
+FIXTURES_DIR="$REPO_ROOT/packages/kernel/src/platform/__tests__/fixtures"
 ARCHIVE="$REPO_ROOT/packages/guest-compat/build/libcodepod_guest_compat.a"
 PRE_OPT_DIR="$REPO_ROOT/target/wasm32-wasip1/release/coreutils-pre-opt"
 

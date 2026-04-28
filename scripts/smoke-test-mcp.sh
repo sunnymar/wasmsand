@@ -4,7 +4,7 @@ set -euo pipefail
 # Smoke test for the codepod MCP server binary.
 # Uses named pipes to send JSON-RPC and read responses.
 
-WASM_DIR="${1:-packages/orchestrator/src/platform/__tests__/fixtures}"
+WASM_DIR="${1:-packages/kernel/src/platform/__tests__/fixtures}"
 SHELL_WASM="${2:-$WASM_DIR/codepod-shell-exec.wasm}"
 MCP_BIN="${MCP_BIN:-./dist/codepod-mcp}"
 

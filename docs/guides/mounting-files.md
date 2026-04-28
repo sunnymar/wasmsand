@@ -11,8 +11,8 @@ This guide covers how to inject files from the host into the codepod virtual fil
 ### TypeScript
 
 ```typescript
-import { Sandbox } from '@codepod/sandbox';
-import { NodeAdapter } from '@codepod/sandbox/node';
+import { Sandbox } from '@codepod/kernel';
+import { NodeAdapter } from '@codepod/kernel/node';
 
 const encode = (s: string) => new TextEncoder().encode(s);
 
@@ -208,7 +208,7 @@ When mounted, the SDK walks the VFS via `readdir()` and `read_file()` to snapsho
 In TypeScript, `mount()` accepts either a flat file dict or a `VirtualProvider`:
 
 ```typescript
-import { HostMount } from '@codepod/sandbox';
+import { HostMount } from '@codepod/kernel';
 
 // Using HostMount directly
 const provider = new HostMount({

@@ -2,7 +2,7 @@
 # --whole-archive by cpcc, so no per-object injection is needed.
 
 REPO_ROOT := $(shell cd ../../.. && pwd)
-FIXTURES := $(REPO_ROOT)/packages/orchestrator/src/platform/__tests__/fixtures
+FIXTURES := $(REPO_ROOT)/packages/kernel/src/platform/__tests__/fixtures
 BUSYBOX_VERSION := 1.37.0
 BUSYBOX_ARCHIVE := busybox-$(BUSYBOX_VERSION).tar.bz2
 BUSYBOX_URL := https://busybox.net/downloads/$(BUSYBOX_ARCHIVE)
@@ -105,7 +105,7 @@ $(BUILD_DIR)/busybox.wasm: configure ensure-compat
 
 copy-fixtures: $(BUILD_DIR)/busybox.wasm manifest.json
 	cp $(BUILD_DIR)/busybox.wasm $(FIXTURES)/busybox.wasm
-	# Manifest declares the multicall applets list — orchestrator's
+	# Manifest declares the multicall applets list — kernel's
 	# manifest pass uses it to install /usr/bin/<applet> symlinks
 	# and override registry entries to dispatch through busybox.
 	cp manifest.json $(FIXTURES)/busybox.manifest.json

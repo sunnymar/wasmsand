@@ -40,13 +40,13 @@ int codepod_host_dup(int fd, int out_ptr, int out_cap);
 /* host_spawn synchronously spawns a child WASM process from a JSON
  * SpawnRequest.  Returns the new child's PID, or -1 on failure.
  * Used by posix_spawn / posix_spawnp.  See SpawnRequest in
- * packages/orchestrator/src/process/kernel.ts for the JSON shape. */
+ * packages/kernel/src/process/kernel.ts for the JSON shape. */
 __attribute__((import_module("codepod"), import_name("host_spawn")))
 int codepod_host_spawn(int req_ptr, int req_len);
 
 /* host_waitpid blocks until the named child exits and writes JSON
  * `{"exit_code":N}` to the output buffer.  Returns byte count or -1.
- * The orchestrator wraps this with WebAssembly.Suspending (JSPI) or
+ * The kernel wraps this with WebAssembly.Suspending (JSPI) or
  * the asyncify bridge automatically — backend choice is host-wide
  * (wasi2-preempt > JSPI > asyncify), so the C caller just sees a
  * normal blocking call.  Used by waitpid(pid > 0). */

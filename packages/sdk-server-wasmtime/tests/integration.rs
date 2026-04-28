@@ -5,7 +5,7 @@ use sdk_server_wasmtime::sandbox::SandboxManager;
 
 fn wasm_bytes() -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
     std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
@@ -63,7 +63,7 @@ async fn test_file_ops_rpc() {
 
     // create
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
     let (r, _) = disp
         .dispatch(
             Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
@@ -170,7 +170,7 @@ async fn test_run_and_env() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
     disp.dispatch(Some(sdk_server_wasmtime::rpc::RequestId::Int(1)), "create", serde_json::json!({
         "shellWasmPath": wasm_path.to_str().unwrap(),
     })).await;
@@ -241,7 +241,7 @@ async fn test_snapshot_rpc() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     // create
     let (r, _) = disp.dispatch(
@@ -311,7 +311,7 @@ async fn test_mount_rpc() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     // create
     let (r, _) = disp.dispatch(
@@ -356,7 +356,7 @@ async fn test_snapshot_restore_invalid_id() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     disp.dispatch(
         Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
@@ -383,7 +383,7 @@ async fn test_mount_no_files() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     disp.dispatch(
         Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
@@ -435,7 +435,7 @@ async fn test_persistence_rpc() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     // create
     let (r, _) = disp.dispatch(
@@ -525,7 +525,7 @@ async fn test_sandbox_fork_rpc() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     // create root sandbox
     let (r, _) = disp.dispatch(
@@ -608,7 +608,7 @@ async fn test_sandbox_create_list_remove_rpc() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     // create root sandbox
     let (r, _) = disp.dispatch(
@@ -722,7 +722,7 @@ async fn test_removed_history_rpc_handlers() {
     let mut disp = Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
     disp.dispatch(
         Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
         "create",
@@ -758,7 +758,7 @@ async fn test_offload_rehydrate() {
     let mut disp = Dispatcher::new(stdout_tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
     disp.dispatch(
         Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
         "create",
@@ -842,7 +842,7 @@ async fn test_streaming_run() {
     let mut d = Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
     d.dispatch(
         Some(sdk_server_wasmtime::rpc::RequestId::Int(1)),
         "create",
@@ -977,7 +977,7 @@ async fn test_timeout_rpc() {
     let mut disp = sdk_server_wasmtime::dispatcher::Dispatcher::new(tx, cb_rx);
 
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
+        .join("../../packages/kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm");
 
     let (r, _) = disp
         .dispatch(

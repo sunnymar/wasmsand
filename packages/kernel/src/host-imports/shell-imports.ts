@@ -3,7 +3,7 @@
  *
  * These are the shell-specific `codepod` imports that remain after generic
  * process/network/native primitives moved to kernel-imports.ts. PR4 moves
- * this userland bucket out of the orchestrator package.
+ * this userland bucket out of the kernel package.
  */
 
 import type { VfsLike } from '../vfs/vfs-like.js';

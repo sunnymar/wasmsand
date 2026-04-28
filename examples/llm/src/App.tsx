@@ -5,7 +5,7 @@ import { initEngine } from './llm.js';
 import { ModelLoader } from './components/ModelLoader.js';
 import { Chat } from './components/Chat.js';
 import { IntroDialog, shouldShowIntro } from './components/IntroDialog.js';
-import type { Sandbox } from '@codepod/sandbox';
+import type { Sandbox } from '@codepod/kernel';
 import { DEFAULT_MODEL_ID } from './models.js';
 import type { SubAgentFn } from './types.js';
 

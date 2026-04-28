@@ -11,7 +11,7 @@
     "build": "tsup src/server.ts --format esm --dts"
   },
   "dependencies": {
-    "@codepod/sandbox": "*"
+    "@codepod/kernel": "*"
   },
   "devDependencies": {
     "tsup": "^8.0",

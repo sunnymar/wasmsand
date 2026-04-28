@@ -32,7 +32,7 @@ This will:
    `--disable-decnum`, `--disable-docs`, `--enable-static`).
 6. Run jq's `make` to produce `build/work/jq`.
 7. Copy the artifact to
-   `packages/orchestrator/src/platform/__tests__/fixtures/jq.wasm`.
+   `packages/kernel/src/platform/__tests__/fixtures/jq.wasm`.
 
 ## Why submodule + out-of-tree
 
@@ -70,5 +70,5 @@ jq pulls in:
   round-trip as `double`, not arbitrary precision. Matches what most
   pure-Python and BusyBox JSON tools do; accept the precision loss
   to keep the binary lean.
-- Tests live in `packages/orchestrator/src/__tests__/jq-conformance.test.ts`
+- Tests live in `packages/kernel/src/__tests__/jq-conformance.test.ts`
   (TBD).

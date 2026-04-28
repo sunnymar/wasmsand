@@ -11,7 +11,7 @@
 # binary.
 
 REPO_ROOT := $(shell cd ../../.. && pwd)
-FIXTURES := $(REPO_ROOT)/packages/orchestrator/src/platform/__tests__/fixtures
+FIXTURES := $(REPO_ROOT)/packages/kernel/src/platform/__tests__/fixtures
 FILE_VERSION := 5.47
 UPSTREAM := upstream
 PATCHES_DIR := patches
@@ -119,7 +119,7 @@ $(BUILD_DIR)/file.wasm: $(WORK_DIR)/Makefile ensure-compat
 copy-fixtures: $(BUILD_DIR)/file.wasm $(BUILD_DIR)/magic.mgc manifest.json
 	cp $(BUILD_DIR)/file.wasm $(FIXTURES)/file.wasm
 	cp $(BUILD_DIR)/magic.mgc $(FIXTURES)/magic.mgc
-	# Manifest declares magic.mgc's install path — orchestrator's
+	# Manifest declares magic.mgc's install path — kernel's
 	# manifest pass copies it into /usr/share/misc/magic.mgc so
 	# libmagic finds it without MAGIC=... at runtime.
 	cp manifest.json $(FIXTURES)/file.manifest.json
