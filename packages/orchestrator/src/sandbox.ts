@@ -30,7 +30,7 @@ import type { PlatformAdapter } from './platform/adapter.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
-import { NetworkBridge } from './network/bridge.js';
+import { NetworkBridge, type NetworkBridgeLike } from './network/bridge.js';
 import { getSocketShimSource, getSslShimSource, buildSiteCustomizeSource, getRequestsShimSource } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
@@ -140,7 +140,7 @@ interface SandboxParts {
   wasmDir: string;
   shellExecWasmPath: string;
   mgr: ProcessManager;
-  bridge?: NetworkBridge;
+  bridge?: NetworkBridgeLike;
   networkPolicy?: NetworkPolicy;
   security?: SecurityOptions;
   workerExecutor?: WorkerExecutor;
@@ -165,7 +165,7 @@ export class Sandbox {
   private mgr: ProcessManager;
   private kernel: ProcessKernel;
   private envSnapshots: Map<string, Map<string, string>> = new Map();
-  private bridge: NetworkBridge | null = null;
+  private bridge: NetworkBridgeLike | null = null;
   private networkPolicy: NetworkPolicy | undefined;
   private security: SecurityOptions | undefined;
   readonly sessionId: string;
@@ -540,9 +540,10 @@ export class Sandbox {
     }
 
     // Create WorkerExecutor for hard-kill preemption when enabled.
+    const workerBridge = bridge instanceof NetworkBridge ? bridge : undefined;
     const workerExecutor = await Sandbox.createWorkerExecutor(
       vfs, options.wasmDir, shellExecWasmPath, tools, adapter,
-      options.security, bridge, options.network, extensionRegistry,
+      options.security, workerBridge, options.network, extensionRegistry,
     );
 
     const sb = new Sandbox({
@@ -619,8 +620,14 @@ export class Sandbox {
 
   private static async createNetworkBridge(
     policy: NetworkPolicy | undefined,
-  ): Promise<{ gateway?: NetworkGateway; bridge?: NetworkBridge }> {
+  ): Promise<{ gateway?: NetworkGateway; bridge?: NetworkBridgeLike }> {
     if (!policy) return {};
+    if (!(typeof globalThis.process !== 'undefined' && globalThis.process.versions?.node)) {
+      const { BrowserNetworkBridge } = await import('./network/browser-bridge.js');
+      const bridge = new BrowserNetworkBridge(policy);
+      await bridge.start();
+      return { bridge };
+    }
     const gateway = new NetworkGateway(policy);
     const bridge = new NetworkBridge(gateway);
     await bridge.start();
@@ -1022,9 +1029,10 @@ export class Sandbox {
     const secLimits = this.security?.limits;
 
     // Create WorkerExecutor for the child if parent uses hard-kill
+    const childWorkerBridge = bridge instanceof NetworkBridge ? bridge : undefined;
     const childWorkerExecutor = await Sandbox.createWorkerExecutor(
       childVfs, this.wasmDir, this.shellExecWasmPath, tools, this.adapter,
-      this.security, bridge, this.networkPolicy, this.extensionRegistry ?? undefined,
+      this.security, childWorkerBridge, this.networkPolicy, this.extensionRegistry ?? undefined,
     );
 
     const child = new Sandbox({
@@ -1075,7 +1083,11 @@ export class Sandbox {
     // Fire-and-forget: dispose is async but destroy is sync
     this.persistenceManager?.dispose().catch(() => {});
     this.workerExecutor?.dispose();
-    this.bridge?.dispose();
+    if (this.bridge && 'dispose' in this.bridge && typeof this.bridge.dispose === 'function') {
+      this.bridge.dispose();
+    } else if (this.bridge && 'stop' in this.bridge && typeof this.bridge.stop === 'function') {
+      this.bridge.stop();
+    }
     this.runner.destroy?.();
   }
 

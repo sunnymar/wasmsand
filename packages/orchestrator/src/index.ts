@@ -2,7 +2,6 @@
 export { VFS } from './vfs/vfs.js';
 export type { VfsOptions } from './vfs/vfs.js';
 export { ProcessManager } from './process/manager.js';
-export { ShellInstance } from './shell/shell-instance.js';
 export { PythonRunner } from './python/python-runner.js';
 export { Sandbox } from './sandbox.js';
 export type { SandboxOptions, MountConfig, StorageCallbacks } from './sandbox.js';
