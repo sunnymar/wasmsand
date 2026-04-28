@@ -133,7 +133,7 @@ export class ShellInstance implements CommandRunner {
         sub.destroy();
       }
     };
-    const kernelRunCommand = options?.sandbox ? undefined : runCommand;
+    const kernelRunCommand = options?.runCommandHandler ? undefined : runCommand;
 
     const shellCtx: LoaderContext = {
       ...loaderCtx,
