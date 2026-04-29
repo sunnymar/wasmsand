@@ -2,7 +2,8 @@
  * Execution Worker entrypoint.
  *
  * Runs inside a Worker thread. Receives init + run messages from the main
- * thread, executes commands via ShellInstance, and posts results back.
+ * thread, executes commands via the loader-backed resident shell runner,
+ * and posts results back.
  * VFS access goes through VfsProxy (SAB + Atomics).
  */
 
@@ -16,8 +17,18 @@ import {
   decodeResponse,
 } from './proxy-protocol.js';
 import { ProcessManager } from '../process/manager.js';
-import { ShellInstance } from '../shell/shell-instance.js';
-import type { RunResult } from '../shell/shell-types.js';
+import { NO_PARENT_PID, ProcessKernel } from '../process/kernel.js';
+import type { LoaderContext } from '../process/loader.js';
+import { WasiHost } from '../wasi/wasi-host.js';
+import {
+  bufferToString,
+  createBufferTarget,
+  createNullTarget,
+  type FdTarget,
+} from '../wasi/fd-target.js';
+import type { ResidentCommandRunner } from '../command-runner.js';
+import { createResidentBashRunner } from '../resident-bash-runner.js';
+import type { RunResult } from '../run-result.js';
 import { CancelledError } from '../security.js';
 
 if (!parentPort) throw new Error('Must run as Worker thread');
@@ -47,7 +58,7 @@ interface RunMessage {
   stderrLimit?: number;
 }
 
-let runner: ShellInstance | null = null;
+let runner: ResidentCommandRunner | null = null;
 
 parentPort.on('message', async (msg: InitMessage | RunMessage) => {
   if (msg.type === 'init') {
@@ -99,7 +110,45 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
     // Pre-load all tool modules so spawnSync can use them synchronously
     await mgr.preloadModules();
 
-    runner = await ShellInstance.create(vfs, mgr, adapter, shellExecWasmPath);
+    const kernel = new ProcessKernel();
+    const loaderContext: LoaderContext = {
+      vfs,
+      adapter,
+      kernel,
+      allocatePid: (argv) => kernel.allocPid(NO_PARENT_PID, argv[0]),
+      releasePid: (pid, exitCode) => kernel.releaseProcess(pid, exitCode),
+      buildWasiHost: (pid, argv, env, cwd) => {
+        const ioFds = new Map<number, FdTarget>();
+        ioFds.set(0, kernel.getFdTarget(pid, 0) ?? createNullTarget());
+        ioFds.set(1, kernel.getFdTarget(pid, 1) ?? createBufferTarget());
+        ioFds.set(2, kernel.getFdTarget(pid, 2) ?? createBufferTarget());
+        return new WasiHost({
+          vfs,
+          args: argv,
+          env,
+          preopens: { [cwd]: cwd },
+          ioFds,
+          pid,
+        });
+      },
+      buildKernelImports: () => ({}),
+      makeFdReadAndClear: (pid) => (fd) => {
+        const target = kernel.getFdTarget(pid, fd);
+        if (!target || target.type !== 'buffer') return { data: '', truncated: false };
+        const data = bufferToString(target);
+        const truncated = !!target.truncated;
+        target.buf.length = 0;
+        target.total = 0;
+        target.truncated = false;
+        return { data, truncated };
+      },
+    };
+
+    runner = await createResidentBashRunner(loaderContext, mgr, shellExecWasmPath, {
+      networkBridge,
+      toolAllowlist: msg.toolAllowlist,
+      memoryBytes: msg.memoryBytes,
+    });
 
     if (msg.stdoutBytes !== undefined || msg.stderrBytes !== undefined) {
       runner.setOutputLimits(msg.stdoutBytes, msg.stderrBytes);

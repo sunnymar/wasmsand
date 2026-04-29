@@ -335,20 +335,20 @@ export function createShellImports(opts: ShellImportsOptions): Record<string, We
     },
 
     // ── Shell session ──
-    // These are placeholders -- ShellInstance (Task 5) will provide the
-    // real implementations that wire into the command loop.
+    // These are placeholders retained for legacy shell-exec imports. The
+    // resident command loop is driven through __run_command.
 
     host_read_command(outPtr: number, outCap: number): number {
       void outPtr;
       void outCap;
-      // Placeholder -- ShellInstance will override this
+      // Placeholder -- retained for legacy ABI compatibility.
       return 0;
     },
 
     host_write_result(resultPtr: number, resultLen: number): void {
       void resultPtr;
       void resultLen;
-      // Placeholder -- ShellInstance will override this
+      // Placeholder -- retained for legacy ABI compatibility.
     },
   };
 }

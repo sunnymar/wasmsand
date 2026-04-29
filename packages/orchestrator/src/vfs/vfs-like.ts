@@ -1,7 +1,7 @@
 /**
  * Common interface for VFS and VfsProxy.
  *
- * Used by WasiHost, ProcessManager, and ShellInstance so they can
+ * Used by WasiHost, ProcessManager, and worker-side process runners so they can
  * accept either the real VFS (main thread) or VfsProxy (Worker thread).
  */
 import type { DirEntry, StatResult } from './inode.js';

@@ -7,9 +7,32 @@
  */
 
 import { Buffer } from 'node:buffer';
+import { runCommand as runBashCommand } from './bash-dispatch.js';
 
 /** Minimal interface for a sandbox, matching the methods we call. */
 export interface SandboxLike {
+  executeCommand?(
+    command: string,
+    executor: (command: string) => Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      executionTimeMs: number;
+      truncated?: { stdout: boolean; stderr: boolean };
+      errorClass?: 'TIMEOUT' | 'CANCELLED' | 'CAPABILITY_DENIED' | 'LIMIT_EXCEEDED';
+    }>,
+    callbacks?: {
+      onStdout?: (chunk: string) => void;
+      onStderr?: (chunk: string) => void;
+    },
+  ): Promise<{
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    executionTimeMs: number;
+    truncated?: { stdout: boolean; stderr: boolean };
+    errorClass?: 'TIMEOUT' | 'CANCELLED' | 'CAPABILITY_DENIED' | 'LIMIT_EXCEEDED';
+  }>;
   run(command: string, callbacks?: {
     onStdout?: (chunk: string) => void;
     onStderr?: (chunk: string) => void;
@@ -211,7 +234,7 @@ export class Dispatcher {
     } : undefined;
 
     if (callbacks) {
-      const result = await sb.run(command, callbacks);
+      const result = await this.runShellCommand(sb, command, callbacks);
       const response: Record<string, unknown> = {
         exitCode: result.exitCode,
         stdout: result.stdout,
@@ -223,7 +246,7 @@ export class Dispatcher {
       return response;
     }
 
-    const result = await sb.run(command);
+    const result = await this.runShellCommand(sb, command);
     const response: Record<string, unknown> = {
       exitCode: result.exitCode,
       stdout: result.stdout,
@@ -233,6 +256,21 @@ export class Dispatcher {
     if (result.truncated) response.truncated = result.truncated;
     if (result.errorClass) response.errorClass = result.errorClass;
     return response;
+  }
+
+  private async runShellCommand(
+    sb: SandboxLike,
+    command: string,
+    callbacks?: Parameters<NonNullable<SandboxLike['executeCommand']>>[2],
+  ) {
+    if (sb.executeCommand) {
+      return await sb.executeCommand(
+        command,
+        (cmd) => runBashCommand(sb as Parameters<typeof runBashCommand>[0], cmd),
+        callbacks,
+      );
+    }
+    return await sb.run(command, callbacks);
   }
 
   private filesWrite(params: Record<string, unknown>) {

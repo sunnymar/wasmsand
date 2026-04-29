@@ -1,12 +1,18 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import type { ShellInstance } from '../../orchestrator/src/shell/shell-instance.js';
 
 const PROMPT = '$ ';
 
+interface CommandRunner {
+  run(command: string): Promise<{
+    stdout?: string;
+    stderr?: string;
+  }>;
+}
+
 export function createTerminal(
   container: HTMLElement,
-  runner: ShellInstance,
+  runner: CommandRunner,
 ): Terminal {
   const term = new Terminal({
     cursorBlink: true,

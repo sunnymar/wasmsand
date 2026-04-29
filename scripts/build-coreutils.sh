@@ -22,7 +22,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_DIR="$REPO_ROOT/target/wasm32-wasip1/release"
 FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
-SHELL_FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/shell/__tests__/fixtures"
 ARCHIVE="$REPO_ROOT/packages/guest-compat/build/libcodepod_guest_compat.a"
 PRE_OPT_DIR="$REPO_ROOT/target/wasm32-wasip1/release/coreutils-pre-opt"
 
@@ -103,7 +102,6 @@ if [[ "$COPY_FIXTURES" -eq 1 ]]; then
 
   cp "$TARGET_DIR/true-cmd-wasm.wasm" "$FIXTURES_DIR/true-cmd.wasm"
   cp "$TARGET_DIR/false-cmd-wasm.wasm" "$FIXTURES_DIR/false-cmd.wasm"
-  cp "$TARGET_DIR/codepod-shell-exec.wasm" "$SHELL_FIXTURES_DIR/codepod-shell-exec.wasm"
   cp "$TARGET_DIR/codepod-shell-exec.wasm" "$FIXTURES_DIR/codepod-shell-exec.wasm"
 
   if command -v wasm-opt &>/dev/null; then
@@ -118,7 +116,6 @@ if [[ "$COPY_FIXTURES" -eq 1 ]]; then
       --pass-arg=asyncify-imports@codepod.host_waitpid,codepod.host_yield,codepod.host_network_fetch,codepod.host_register_tool,codepod.host_run_command,wasi_snapshot_preview1.fd_read,wasi_snapshot_preview1.fd_write,wasi_snapshot_preview1.poll_oneoff \
       -O1 \
       -o "$FIXTURES_DIR/codepod-shell-exec-asyncify.wasm"
-    cp "$FIXTURES_DIR/codepod-shell-exec-asyncify.wasm" "$SHELL_FIXTURES_DIR/codepod-shell-exec-asyncify.wasm"
     echo "  codepod-shell-exec-asyncify.wasm built."
   else
     echo "WARNING: wasm-opt not found — skipping asyncify build."

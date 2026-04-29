@@ -8,9 +8,20 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
+import { makeRunCommandHandler } from '../../../sdk-server/src/bash-dispatch.ts';
+import { bashBootImports } from '../../../sdk-server/src/bash-host-imports.ts';
 
 const FIXTURES = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
 const HAS_BUSYBOX_FIXTURE = existsSync(resolve(FIXTURES, 'busybox.wasm'));
+
+function createSandbox(): Promise<Sandbox> {
+  return Sandbox.create({
+    wasmDir: FIXTURES,
+    adapter: new NodeAdapter(),
+    bootImports: (api) => bashBootImports(api),
+    runCommandHandler: makeRunCommandHandler(),
+  });
+}
 
 describe('Guest compatibility canaries', () => {
   let sandbox: Sandbox | null = null;
@@ -21,10 +32,7 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs stdio-canary as a normal command', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
+    sandbox = await createSandbox();
 
     sandbox.writeFile('/tmp/in.txt', new TextEncoder().encode('hello canary\n'));
 
@@ -36,10 +44,7 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs sleep-canary and prints the sleep duration', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
+    sandbox = await createSandbox();
 
     const requestedMs = 20;
     const lowerBoundMs = 10;
@@ -53,10 +58,7 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs system-canary through the host command shim', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
+    sandbox = await createSandbox();
 
     const result = await sandbox.run('system-canary');
 
@@ -65,10 +67,7 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs popen-canary and captures command output', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
+    sandbox = await createSandbox();
 
     const result = await sandbox.run('popen-canary');
 
@@ -77,10 +76,7 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('retries host_run_command when the response exceeds the initial buffer', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
+    sandbox = await createSandbox();
 
     const result = await sandbox.run('system-canary large');
 
@@ -89,10 +85,7 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('returns the command exit status from codepod_pclose', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
+    sandbox = await createSandbox();
 
     const result = await sandbox.run('popen-canary status');
 

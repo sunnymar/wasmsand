@@ -5,7 +5,7 @@ import { WorkerExecutor } from '../worker-executor.js';
 import { VFS } from '../../vfs/vfs.js';
 
 const WASM_DIR = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
-const SHELL_EXEC_WASM = resolve(import.meta.dirname, '../../shell/__tests__/fixtures/codepod-shell-exec.wasm');
+const SHELL_EXEC_WASM = resolve(import.meta.dirname, '../../platform/__tests__/fixtures/codepod-shell-exec.wasm');
 
 /** Build a tool registry for the tests. */
 function makeToolRegistry(...names: string[]): [string, string][] {

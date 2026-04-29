@@ -7,7 +7,7 @@
 
 import type { Worker } from 'node:worker_threads';
 import type { VFS } from '../vfs/vfs.js';
-import type { RunResult } from '../shell/shell-types.js';
+import type { RunResult } from '../run-result.js';
 import {
   SAB_SIZE,
   STATUS_RESPONSE,
@@ -34,7 +34,7 @@ export interface WorkerConfig {
 }
 
 export interface WorkerRunResult extends RunResult {
-  /** Environment updates from the worker, for syncing back to ShellInstance. */
+  /** Environment updates from the worker, for syncing back to the main runner. */
   env?: [string, string][];
 }
 
@@ -132,10 +132,14 @@ export class WorkerExecutor {
     // whose threads may still be lingering on the old SAB.
     this.sab = new SharedArrayBuffer(SAB_SIZE);
     this.int32 = new Int32Array(this.sab);
+    await this.ensureBootBinary();
 
-    // In bun, TypeScript files can be loaded directly as Workers.
-    const workerPath = new URL('./execution-worker.ts', import.meta.url).pathname;
-    this.worker = new Worker(workerPath);
+    // Source runs can load TS directly; built Node packages load the emitted JS worker.
+    const workerPath = new URL(
+      import.meta.url.endsWith('.ts') ? './execution-worker.ts' : './execution-worker.js',
+      import.meta.url,
+    ).pathname;
+    this.worker = new Worker(workerPath, { execArgv: [] });
 
     // Don't let the Worker prevent the process from exiting (e.g. in tests).
     this.worker.unref();
@@ -178,14 +182,29 @@ export class WorkerExecutor {
     });
 
     // Send init message and wait for ready
-    const readyPromise = new Promise<void>((resolve) => {
+    const readyPromise = new Promise<void>((resolve, reject) => {
       const onMsg = (msg: any) => {
         if (msg?.type === 'ready') {
+          this.worker!.off('error', onError);
+          this.worker!.off('exit', onExit);
           this.worker!.off('message', onMsg);
           resolve();
         }
       };
+      const onError = (err: Error) => {
+        this.worker?.off('message', onMsg);
+        this.worker?.off('exit', onExit);
+        reject(err);
+      };
+      const onExit = (code: number) => {
+        if (code === 0) return;
+        this.worker?.off('message', onMsg);
+        this.worker?.off('error', onError);
+        reject(new Error(`Worker exited before ready with code ${code}`));
+      };
       this.worker!.on('message', onMsg);
+      this.worker!.once('error', onError);
+      this.worker!.once('exit', onExit);
     });
 
     this.worker.postMessage({
@@ -205,6 +224,24 @@ export class WorkerExecutor {
     });
 
     await readyPromise;
+  }
+
+  private async ensureBootBinary(): Promise<void> {
+    try {
+      this.config.vfs.stat('/bin/bash');
+      return;
+    } catch {
+      // Missing in direct WorkerExecutor tests/usage. Sandbox.create installs
+      // this already, so never overwrite an existing sandbox boot binary.
+    }
+
+    const { readFile } = await import('node:fs/promises');
+    const shellWasmBytes = await readFile(this.config.shellExecWasmPath);
+    this.config.vfs.withWriteAccess(() => {
+      this.config.vfs.mkdirp('/bin');
+      this.config.vfs.writeFile('/bin/bash', shellWasmBytes);
+      this.config.vfs.chmod('/bin/bash', 0o755);
+    });
   }
 
   private handleProxyRequest(): void {
@@ -232,8 +269,9 @@ export class WorkerExecutor {
     // overwriting security-critical files (e.g. Python socket shim).
     const READ_OPS = new Set(['readFile', 'stat', 'lstat', 'readdir']);
     const ELEVATED_WRITE_PREFIXES = ['/usr/bin/', '/.wasi/'];
+    const ELEVATED_WRITE_PATHS = new Set(['/.wasi-preopen-sentinel']);
     const isRead = READ_OPS.has(op);
-    const isElevatedPath = ELEVATED_WRITE_PREFIXES.some(p => path.startsWith(p));
+    const isElevatedPath = ELEVATED_WRITE_PATHS.has(path) || ELEVATED_WRITE_PREFIXES.some(p => path.startsWith(p));
     const needsElevation = !isRead && isElevatedPath;
 
     const exec = () => {

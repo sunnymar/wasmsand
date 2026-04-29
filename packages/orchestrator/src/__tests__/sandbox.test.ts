@@ -36,6 +36,109 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
     expect(result.stdout.trim()).toBe('12');
   });
 
+  it('executeCommand applies timeout policy around host executors', async () => {
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      adapter: new NodeAdapter(),
+      security: {
+        limits: { timeoutMs: 1, stdoutBytes: 5, stderrBytes: 3 },
+        onAuditEvent: (event) => events.push(event),
+      },
+    });
+
+    const result = await sandbox.executeCommand('host-side command', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return {
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+        executionTimeMs: 5,
+      };
+    });
+
+    expect(result.exitCode).toBe(124);
+    expect(result.errorClass).toBe('TIMEOUT');
+    expect(events.some((e) => e.type === 'command.timeout')).toBe(true);
+  });
+
+  it('executeCommand applies output limits around host executors', async () => {
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      adapter: new NodeAdapter(),
+      security: {
+        limits: { stdoutBytes: 5, stderrBytes: 3 },
+        onAuditEvent: (event) => events.push(event),
+      },
+    });
+
+    const result = await sandbox.executeCommand('host-side command', async () => ({
+      exitCode: 0,
+      stdout: '123456789',
+      stderr: 'abcdef',
+      executionTimeMs: 1,
+    }));
+
+    expect(result.stdout).toBe('12345');
+    expect(result.stderr).toBe('abc');
+    expect(result.truncated).toEqual({ stdout: true, stderr: true });
+    expect(events.some((e) => e.type === 'limit.exceeded' && e.subtype === 'stdout')).toBe(true);
+    expect(events.some((e) => e.type === 'limit.exceeded' && e.subtype === 'stderr')).toBe(true);
+  });
+
+  it('executeCommand uses the supplied host executor even when worker execution is present', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    let workerCalled = 0;
+    (sandbox as unknown as { workerExecutor: { run: () => Promise<unknown>; kill: () => void; dispose: () => void } }).workerExecutor = {
+      run: async () => {
+        workerCalled++;
+        return {
+          exitCode: 99,
+          stdout: 'worker\n',
+          stderr: '',
+          executionTimeMs: 0,
+        };
+      },
+      kill: () => {},
+      dispose: () => {},
+    };
+
+    const result = await sandbox.executeCommand('host-side command', async () => ({
+      exitCode: 0,
+      stdout: 'host\n',
+      stderr: '',
+      executionTimeMs: 1,
+    }));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('host\n');
+    expect(workerCalled).toBe(0);
+  });
+
+  it('run still uses worker execution when present', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    let workerCalled = 0;
+    (sandbox as unknown as { workerExecutor: { run: () => Promise<unknown>; kill: () => void; dispose: () => void } }).workerExecutor = {
+      run: async () => {
+        workerCalled++;
+        return {
+          exitCode: 0,
+          stdout: 'worker\n',
+          stderr: '',
+          executionTimeMs: 1,
+        };
+      },
+      kill: () => {},
+      dispose: () => {},
+    };
+
+    const result = await sandbox.run('echo host');
+
+    expect(result.stdout).toBe('worker\n');
+    expect(workerCalled).toBe(1);
+  });
+
   it('writeFile and readFile', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     const data = new TextEncoder().encode('test content');

@@ -1,4 +1,4 @@
-import type { RunCommandHandler, RunResponse } from '../../orchestrator/src/run-command.ts';
+import type { RunCommandHandler, RunResponse } from '@codepod/sandbox';
 import { bashBootImports } from './bash-host-imports.js';
 
 const RUN_COMMAND_METADATA_CAP = 1024 * 1024;

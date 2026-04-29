@@ -2,10 +2,9 @@
 export { VFS } from './vfs/vfs.js';
 export type { VfsOptions } from './vfs/vfs.js';
 export { ProcessManager } from './process/manager.js';
-export { ShellInstance } from './shell/shell-instance.js';
 export { PythonRunner } from './python/python-runner.js';
 export { Sandbox } from './sandbox.js';
-export type { SandboxOptions, MountConfig, StorageCallbacks } from './sandbox.js';
+export type { SandboxOptions, MountConfig, StorageCallbacks, CommandExecutor } from './sandbox.js';
 export type { KernelApi, KernelApiMemory, KernelApiProcessManager, KernelApiTime } from './kernel-api.js';
 export type { RunCommandContext, RunCommandHandler, RunRequest, RunResponse } from './run-command.js';
 export { BrowserAdapter } from './platform/browser-adapter.js';
@@ -13,7 +12,7 @@ export { BrowserAdapter } from './platform/browser-adapter.js';
 // Node consumers: import { NodeAdapter } from '@codepod/sandbox/node'
 export type { PlatformAdapter } from './platform/adapter.js';
 export type { SpawnOptions, SpawnResult } from './process/process.js';
-export type { RunResult } from './shell/shell-types.js';
+export type { RunResult } from './run-result.js';
 export { NetworkGateway, NetworkAccessDenied } from './network/gateway.js';
 export type { NetworkPolicy } from './network/gateway.js';
 export { NetworkBridge } from './network/bridge.js';
@@ -22,8 +21,6 @@ export type { SyncFetchResult } from './network/bridge.js';
 export type { SecurityOptions, SecurityLimits, ErrorClass, AuditEvent, AuditEventHandler } from './security.js';
 export { CancelledError } from './security.js';
 export type { VfsLike } from './vfs/vfs-like.js';
-export { WorkerExecutor } from './execution/worker-executor.js';
-export type { WorkerConfig, WorkerRunResult } from './execution/worker-executor.js';
 export type { VirtualProvider } from './vfs/provider.js';
 export { HostMount } from './vfs/host-mount.js';
 export type { HostMountOptions } from './vfs/host-mount.js';
@@ -41,8 +38,6 @@ export type { PersistenceManagerOptions } from './persistence/manager.js';
 export { exportState, importState } from './persistence/serializer.js';
 // FsBackend not re-exported — imports node:fs which breaks browser bundlers.
 // Node consumers: import { FsBackend } from '@codepod/sandbox/node'
-export { CommandHistory } from './shell/history.js';
-export type { HistoryEntry } from './shell/history.js';
 export type { ExtensionConfig, ExtensionHandler, ExtensionInvokeArgs, ExtensionInvokeResult, PythonPackageSpec } from './extension/types.js';
 export { ExtensionRegistry } from './extension/registry.js';
 export { SandboxPool } from './pool/sandbox-pool.js';

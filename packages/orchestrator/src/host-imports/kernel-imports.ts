@@ -122,7 +122,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     host_spawn(reqPtr: number, reqLen: number, outPtr?: number, outCap?: number): number {
       const reqJson = readString(memory, reqPtr, reqLen);
       if (typeof outPtr === 'number' && typeof outCap === 'number') {
-        let req: { program?: string; args?: string[]; env?: [string, string][]; cwd?: string; stdin?: string };
+        let req: { program?: string; args?: string[]; env?: [string, string][]; cwd?: string; stdin?: string; stdin_fd?: number };
         try { req = JSON.parse(reqJson); } catch { req = {}; }
 
         const cmd = req.program ?? '';
@@ -130,7 +130,15 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         const env: Record<string, string> = {};
         if (req.env) for (const [k, v] of req.env) env[k] = v;
         const cwd = req.cwd ?? '/';
-        const stdinStr = req.stdin ?? '';
+        let stdinStr = req.stdin ?? '';
+        if (!stdinStr && typeof req.stdin_fd === 'number' && opts.kernel) {
+          const stdinTarget = opts.kernel.getFdTarget(callerPid, req.stdin_fd);
+          if (stdinTarget?.type === 'static') {
+            stdinStr = new TextDecoder().decode(stdinTarget.data.slice(stdinTarget.offset));
+          } else if (stdinTarget?.type === 'pipe_read') {
+            stdinStr = new TextDecoder().decode(stdinTarget.pipe.drainSync());
+          }
+        }
         const stdin = new TextEncoder().encode(stdinStr);
 
         if (opts.syncSpawn) {

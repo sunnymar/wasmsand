@@ -1,7 +1,7 @@
 /**
  * Buffer read/write helpers for WASM linear memory.
  *
- * These utilities are shared by shell-imports.ts and (later) python-imports.ts.
+ * These utilities are shared by host import modules.
  * They handle the low-level task of moving strings, JSON, and raw bytes
  * between the TypeScript host and the WASM guest's linear memory.
  */

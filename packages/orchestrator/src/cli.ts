@@ -7,57 +7,102 @@ import { createInterface } from 'node:readline';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { VFS } from './vfs/vfs.js';
-import { ProcessManager } from './process/manager.js';
 import { NodeAdapter } from './platform/node-adapter.js';
-import { ShellInstance } from './shell/shell-instance.js';
+import { Sandbox } from './sandbox.js';
+import type { RunResult } from './run-result.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const FIXTURES = resolve(__dirname, 'platform/__tests__/fixtures');
-const SHELL_EXEC_WASM = resolve(__dirname, 'shell/__tests__/fixtures/codepod-shell-exec.wasm');
+const SHELL_EXEC_WASM = resolve(__dirname, 'platform/__tests__/fixtures/codepod-shell-exec.wasm');
+const RUN_COMMAND_METADATA_CAP = 1024 * 1024;
 
-const TOOLS = [
-  'cat', 'echo', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep',
-  'ls', 'mkdir', 'rm', 'cp', 'mv', 'touch', 'tee', 'tr', 'cut',
-  'basename', 'dirname', 'env', 'printf',
-  'find', 'sed', 'awk', 'jq',
-  'du', 'df',
-  'gzip', 'gunzip', 'tar',
-  'true', 'false',
-];
+async function runPid1Bash(sandbox: Sandbox, cmd: string): Promise<RunResult> {
+  const proc = sandbox.process(1);
+  if (!proc) throw new Error('PID 1 is not running');
 
-function wasmName(tool: string): string {
-  if (tool === 'true') return 'true-cmd.wasm';
-  if (tool === 'false') return 'false-cmd.wasm';
-  if (tool === 'gunzip') return 'gzip.wasm';
-  return `${tool}.wasm`;
+  const envPrefix = buildEnvPrefix(sandbox.getEnvMap());
+  const command = envPrefix ? `${envPrefix}; ${cmd}` : cmd;
+  const alloc = proc.exports.__alloc as ((size: number) => number) | undefined;
+  const dealloc = proc.exports.__dealloc as ((ptr: number, size: number) => void) | undefined;
+  if (!alloc || !dealloc) throw new Error('PID 1 does not export __alloc/__dealloc');
+
+  const encoder = new TextEncoder();
+  const cmdBytes = encoder.encode(command);
+  const cmdPtr = alloc(cmdBytes.length);
+  new Uint8Array(proc.memory.buffer, cmdPtr, cmdBytes.length).set(cmdBytes);
+
+  const outPtr = alloc(RUN_COMMAND_METADATA_CAP);
+  let decoded = '';
+  try {
+    const written = await proc.callExport('__run_command', cmdPtr, cmdBytes.length, outPtr, RUN_COMMAND_METADATA_CAP);
+    if (written > RUN_COMMAND_METADATA_CAP) {
+      throw new Error(`__run_command metadata exceeded ${RUN_COMMAND_METADATA_CAP} bytes`);
+    }
+    decoded = new TextDecoder().decode(new Uint8Array(proc.memory.buffer, outPtr, written));
+  } finally {
+    dealloc(cmdPtr, cmdBytes.length);
+    dealloc(outPtr, RUN_COMMAND_METADATA_CAP);
+  }
+
+  let parsed: { exit_code?: number; execution_time_ms?: number; env?: Record<string, string> };
+  try {
+    parsed = JSON.parse(decoded);
+  } catch {
+    parsed = { exit_code: 0, execution_time_ms: 0 };
+  }
+
+  if (parsed.env) {
+    sandbox.setEnvMap(new Map(Object.entries(parsed.env)));
+  }
+
+  const stdout = proc.fdReadAndClear(1);
+  const stderr = proc.fdReadAndClear(2);
+  const truncated = stdout.truncated || stderr.truncated
+    ? { stdout: stdout.truncated, stderr: stderr.truncated }
+    : undefined;
+
+  return {
+    exitCode: parsed.exit_code ?? 0,
+    stdout: stdout.data,
+    stderr: stderr.data,
+    executionTimeMs: parsed.execution_time_ms ?? 0,
+    ...(truncated ? { truncated } : {}),
+  };
+}
+
+function buildEnvPrefix(env: Map<string, string>): string {
+  if (env.size === 0) return '';
+  const exports: string[] = [];
+  for (const [name, value] of env) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    exports.push(`export ${name}='${value.replace(/'/g, "'\\''")}'`);
+  }
+  return exports.join('; ');
 }
 
 async function main() {
-  const vfs = new VFS();
   const adapter = new NodeAdapter();
-  const mgr = new ProcessManager(vfs, adapter);
-
-  for (const tool of TOOLS) {
-    mgr.registerTool(tool, resolve(FIXTURES, wasmName(tool)));
-  }
-
-  await mgr.preloadModules();
-
-  const shell = await ShellInstance.create(vfs, mgr, adapter, SHELL_EXEC_WASM);
-  shell.setEnv('HOME', '/home/user');
-  shell.setEnv('PWD', '/home/user');
-  shell.setEnv('USER', 'user');
-  shell.setEnv('PATH', '/bin:/usr/bin');
+  const sandbox = await Sandbox.create({
+    wasmDir: FIXTURES,
+    adapter,
+    shellExecWasmPath: SHELL_EXEC_WASM,
+  });
+  sandbox.setEnv('HOME', '/home/user');
+  sandbox.setEnv('PWD', '/home/user');
+  sandbox.setEnv('USER', 'user');
+  sandbox.setEnv('PATH', '/bin:/usr/bin');
 
   // Handle -c flag: run single command and exit
   const cIndex = process.argv.indexOf('-c');
   if (cIndex !== -1 && cIndex + 1 < process.argv.length) {
     const cmd = process.argv[cIndex + 1];
-    const result = await shell.run(cmd);
+    const result = await sandbox.executeCommand(cmd, (c) => runPid1Bash(sandbox, c), undefined, {
+      allowWorkerExecutor: true,
+    });
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
+    sandbox.destroy();
     process.exit(result.exitCode);
   }
 
@@ -88,7 +133,9 @@ async function main() {
       }
 
       try {
-        const result = await shell.run(cmd);
+        const result = await sandbox.executeCommand(cmd, (c) => runPid1Bash(sandbox, c), undefined, {
+          allowWorkerExecutor: true,
+        });
         if (result.stdout) process.stdout.write(result.stdout);
         if (result.stderr) process.stderr.write(result.stderr);
       } catch (err: unknown) {
@@ -106,7 +153,7 @@ async function main() {
   }
 
   console.log('codepod — WASM sandbox shell');
-  console.log(`${TOOLS.length} tools + python3 available. Type "exit" to quit.\n`);
+  console.log('WASM tools + python3 available. Type "exit" to quit.\n');
   rl.prompt();
 
   rl.on('line', (line: string) => {
@@ -121,6 +168,7 @@ async function main() {
         await new Promise(r => setTimeout(r, 10));
       }
       console.log('\nbye');
+      sandbox.destroy();
       process.exit(0);
     };
     closing = true;

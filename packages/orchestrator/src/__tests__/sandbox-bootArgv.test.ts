@@ -32,24 +32,6 @@ Deno.test('Sandbox.create defaults bootArgv to /bin/bash for compat', async () =
   }
 });
 
-Deno.test('Sandbox creates exactly one bash instance for PID 1', async () => {
-  const sb = await Sandbox.create({
-    wasmDir: WASM_DIR,
-    adapter: new NodeAdapter(),
-    bootArgv: ['/bin/bash'],
-  });
-  try {
-    const procFromSandbox = sb.process(1)!;
-    const procFromShell = sb.__getShellInstanceProcess();
-    assert(
-      procFromSandbox === procFromShell,
-      'sandbox.process(1) and ShellInstance.process must be the same Process',
-    );
-  } finally {
-    sb.destroy();
-  }
-});
-
 Deno.test('Sandbox PID 1 keeps synchronous allocator exports', async () => {
   const sb = await Sandbox.create({
     wasmDir: WASM_DIR,
