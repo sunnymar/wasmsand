@@ -381,7 +381,10 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_native_invoke(module_ptr, module_len, method_ptr, method_len,
     //                    args_ptr, args_len, out_ptr, out_cap) -> i32
-    // Calls invoke() on a dynamically loaded native Python module WASM.
+    // Dynamic native module dispatch. Currently consumed by RustPython's
+    // native-module bridge; this is Python-coupled debt scheduled to clear
+    // with the CPython port. New userlands should not depend on Python-specific
+    // module invocation from the kernel.
     host_native_invoke(
       modulePtr: number, moduleLen: number,
       methodPtr: number, methodLen: number,
@@ -487,9 +490,11 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // ── Extensions (Python only — shell routes through host_spawn) ──
 
     // host_extension_invoke(req_ptr, req_len, out_ptr, out_cap) -> i32
-    // Invokes a host extension. Used by Python's _codepod.extension_call().
-    // The shell no longer calls this — it goes through host_spawn and the
-    // ProcessManager dispatches to host commands.
+    // Dynamic extension dispatch. Currently consumed by RustPython through the
+    // auto-create virtual command machinery; this is Python-coupled debt
+    // scheduled to clear with the CPython port. New host integrations should
+    // register extensions through SandboxOptions/ExtensionRegistry and keep
+    // userland-specific protocols outside the kernel.
     async host_extension_invoke(
       reqPtr: number, reqLen: number,
       outPtr: number, outCap: number,
