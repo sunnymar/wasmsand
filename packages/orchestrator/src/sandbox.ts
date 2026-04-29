@@ -1,8 +1,8 @@
 /**
  * Sandbox: high-level facade wrapping VFS, ProcessManager, and PID 1.
  *
- * Provides a simple API for creating an isolated sandbox, running shell
- * commands, and interacting with the in-memory filesystem.
+ * Provides a simple API for creating an isolated sandbox, managing processes,
+ * and interacting with the in-memory filesystem.
  */
 
 import { VFS } from './vfs/vfs.js';
@@ -14,7 +14,7 @@ import type { Process, ProcessMode } from './process/handle.js';
 import type { CommandRunner, ResidentCommandRunner } from './command-runner.js';
 import { createResidentBashRunner, type ResidentBashRunnerOptions } from './resident-bash-runner.js';
 
-/** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
+/** Streaming callbacks for host-side command execution. Chunks are decoded UTF-8 strings. */
 export interface StreamCallbacks {
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
@@ -207,6 +207,16 @@ export class Sandbox {
     this.bootImports = parts.bootImports;
     this.runCommandHandler = parts.runCommandHandler;
     this.bootArgv = parts.bootArgv ?? ['/bin/bash'];
+
+    // Runtime-only compatibility for legacy internal tests. This is
+    // intentionally not a class member, so Sandbox.run is absent from the
+    // exported TypeScript API. Host consumers should use host-side userland
+    // dispatch and executeCommand().
+    (this as unknown as { run: (command: string, callbacks?: StreamCallbacks) => Promise<RunResult> }).run =
+      (command, callbacks) =>
+        this.executeCommand(command, (cmd) => this.runner.run(cmd), callbacks, {
+          allowWorkerExecutor: true,
+        });
   }
 
   private audit(type: string, data?: Record<string, unknown>): void {
@@ -933,12 +943,6 @@ export class Sandbox {
       this.currentCommandDeadlineMs = undefined;
       this.running = false;
     }
-  }
-
-  async run(command: string, callbacks?: StreamCallbacks): Promise<RunResult> {
-    return this.executeCommand(command, (cmd) => this.runner.run(cmd), callbacks, {
-      allowWorkerExecutor: true,
-    });
   }
 
   private applyOutputLimits(result: RunResult): RunResult {
