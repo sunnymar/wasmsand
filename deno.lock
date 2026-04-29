@@ -1133,14 +1133,14 @@
       "packages/mcp-server": {
         "packageJson": {
           "dependencies": [
-            "npm:@codepod/sandbox@*",
+            "npm:@codepod/kernel@*",
             "npm:@modelcontextprotocol/sdk@^1.27.0",
             "npm:typescript@^5.7.0",
             "npm:zod@^3.25.0"
           ]
         }
       },
-      "packages/orchestrator": {
+      "packages/kernel": {
         "packageJson": {
           "dependencies": [
             "npm:@types/node@22",
@@ -1152,7 +1152,7 @@
       "packages/sdk-server": {
         "packageJson": {
           "dependencies": [
-            "npm:@codepod/sandbox@*",
+            "npm:@codepod/kernel@*",
             "npm:tsup@8",
             "npm:typescript@^5.7.0"
           ]

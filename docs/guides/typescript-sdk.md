@@ -5,7 +5,7 @@ This guide covers the full TypeScript SDK for codepod. For Python, see the [READ
 ## Installation
 
 ```bash
-npm install @codepod/sandbox
+npm install @codepod/kernel
 ```
 
 The package includes all WASM binaries in the `wasm/` directory.
@@ -13,12 +13,12 @@ The package includes all WASM binaries in the `wasm/` directory.
 ## Quick start
 
 ```typescript
-import { Sandbox } from '@codepod/sandbox';
-import { NodeAdapter } from '@codepod/sandbox/node';
+import { Sandbox } from '@codepod/kernel';
+import { NodeAdapter } from '@codepod/kernel/node';
 
 const sandbox = await Sandbox.create({
   adapter: new NodeAdapter(),
-  wasmDir: './node_modules/@codepod/sandbox/wasm',
+  wasmDir: './node_modules/@codepod/kernel/wasm',
 });
 
 const result = await sandbox.run('echo hello world | wc -w');
@@ -31,8 +31,8 @@ sandbox.destroy();
 In the browser, use `BrowserAdapter`:
 
 ```typescript
-import { Sandbox } from '@codepod/sandbox';
-import { BrowserAdapter } from '@codepod/sandbox/browser';
+import { Sandbox } from '@codepod/kernel';
+import { BrowserAdapter } from '@codepod/kernel/browser';
 
 const sandbox = await Sandbox.create({
   adapter: new BrowserAdapter(),
@@ -207,7 +207,7 @@ sandbox.mount('/mnt/uploads', {
 For dynamic file sources, implement the `VirtualProvider` interface:
 
 ```typescript
-import type { VirtualProvider } from '@codepod/sandbox';
+import type { VirtualProvider } from '@codepod/kernel';
 
 const dbProvider: VirtualProvider = {
   readFile(subpath: string): Uint8Array {
@@ -234,7 +234,7 @@ sandbox.mount('/mnt/db', dbProvider);
 Or use the built-in `HostMount` class:
 
 ```typescript
-import { HostMount } from '@codepod/sandbox';
+import { HostMount } from '@codepod/kernel';
 
 const mount = new HostMount({
   'config.json': encode('{}'),

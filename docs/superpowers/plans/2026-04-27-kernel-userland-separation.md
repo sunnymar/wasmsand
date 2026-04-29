@@ -1,5 +1,8 @@
 # Kernel / Userland Separation Implementation Plan
 
+Note: pre-PR5 references to `packages/orchestrator/` below describe the
+pre-rename tree; after PR5 that package is `packages/kernel/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rename `packages/orchestrator/` → `packages/kernel/` and split userland-shaped code (`Sandbox.run`/history, host-server bash dispatch, old shell tree) out into host-side modules, exposing the kernel as a generic process+resource runtime. The final resident-bash compatibility imports remain documented debt until the Rust shell channel port.

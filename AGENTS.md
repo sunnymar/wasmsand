@@ -17,7 +17,7 @@ This adds `~/.deno/bin` and `~/.cargo/bin` to PATH and verifies tools are availa
 deno check packages/mcp-server/src/index.ts
 
 # Run all unit tests (pre-push hook runs these)
-deno test -A --no-check packages/orchestrator/src/**/*.test.ts packages/sdk-server/src/*.test.ts
+deno test -A --no-check packages/kernel/src/**/*.test.ts packages/sdk-server/src/*.test.ts
 
 # Run Python SDK tests
 cd packages/python-sdk && pip install -e . && pytest
@@ -31,7 +31,7 @@ bash scripts/build-wheel.sh
 
 ## Architecture
 
-- **`packages/orchestrator/`** — Core sandbox: VFS, shell executor, process manager, networking
+- **`packages/kernel/`** — Core sandbox kernel: VFS, process manager, host imports, networking. (Renamed from `packages/orchestrator/` in the kernel/userland separation refactor.)
 - **`packages/shell-exec/`** — Rust POSIX shell compiled to WASM (`codepod-shell-exec.wasm`)
 - **`packages/coreutils/`** — Rust coreutils compiled to WASM
 - **`packages/mcp-server/`** — MCP server exposing sandboxes via Model Context Protocol
@@ -43,7 +43,7 @@ bash scripts/build-wheel.sh
 - `codepod-shell-exec.wasm` (1.3MB) — Full shell executor with `__alloc`/`__dealloc`/`__run_command` exports.
 - `packages/shell/` is the parser library (Rust crate `codepod_shell`) used by `codepod-shell-exec`. It has no standalone binary.
 
-Test fixtures live at `packages/orchestrator/src/platform/__tests__/fixtures/`.
+Test fixtures live at `packages/kernel/src/platform/__tests__/fixtures/`.
 
 ## MCP Server
 

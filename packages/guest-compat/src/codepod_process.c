@@ -67,7 +67,7 @@ int pclose(FILE *stream) {
 
 /* wait(2) / waitpid(2) — POSIX wait surface routed through the
  * codepod kernel's host_waitpid.  host_waitpid is async on the
- * orchestrator side; the host wraps it with JSPI Suspending (or
+ * kernel side; the host wraps it with JSPI Suspending (or
  * the asyncify bridge as fallback), so from the C caller's
  * perspective it's a normal blocking call regardless of the
  * underlying scheduler — wasi-2-preempt, JSPI, or asyncify.

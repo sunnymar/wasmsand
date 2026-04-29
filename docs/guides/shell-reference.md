@@ -39,7 +39,7 @@ Note: `echo`, `printf`, `test`, and `sleep` exist as both executables and shell 
 
 ### BusyBox as the default userland
 
-BusyBox is built with `cpcc` (the codepod clang wrapper from the guest-compat toolchain) and linked against `libcodepod_guest_compat.a` for libc shims (`uname`, `getpid`, `setjmp`/`longjmp`, hardlink-aware `link`, …). The build artifact is a single `busybox.wasm` binary; at sandbox creation, the orchestrator's `ProcessManager.registerMulticallTool('busybox', …, BUSYBOX_APPLETS)` creates one VFS symlink per applet under `/usr/bin/`, all pointing to `/usr/bin/busybox`. BusyBox dispatches on `argv[0]`, so `cat foo.txt` runs the same wasm as `busybox cat foo.txt`.
+BusyBox is built with `cpcc` (the codepod clang wrapper from the guest-compat toolchain) and linked against `libcodepod_guest_compat.a` for libc shims (`uname`, `getpid`, `setjmp`/`longjmp`, hardlink-aware `link`, …). The build artifact is a single `busybox.wasm` binary; at sandbox creation, the kernel's `ProcessManager.registerMulticallTool('busybox', …, BUSYBOX_APPLETS)` creates one VFS symlink per applet under `/usr/bin/`, all pointing to `/usr/bin/busybox`. BusyBox dispatches on `argv[0]`, so `cat foo.txt` runs the same wasm as `busybox cat foo.txt`.
 
 This is identical to how BusyBox works on Alpine, OpenWrt, embedded Linux — the only sandbox-specific bit is that the symlinks live in the in-memory VFS rather than a real disk.
 

@@ -5,7 +5,7 @@
  *   posix_spawn  → host_spawn (sync)
  *   waitpid      → host_waitpid (async, JSPI-wrapped or asyncify)
  *
- * The orchestrator's host scheduler (wasi-2-preempt > JSPI > asyncify)
+ * The kernel's host scheduler (wasi-2-preempt > JSPI > asyncify)
  * is what makes the C caller see waitpid as a normal blocking call —
  * the choice is host-wide and orthogonal to setjmp/longjmp.
  *

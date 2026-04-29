@@ -13,12 +13,12 @@ build-sqlite:
 	cd packages/sqlite && make
 
 build-ts:
-	cd packages/orchestrator && bunx tsup
+	cd packages/kernel && bunx tsup
 
 # npm package
 npm: build-ts
-	scripts/copy-wasm.sh packages/orchestrator/wasm
-	cd packages/orchestrator && npm pack
+	scripts/copy-wasm.sh packages/kernel/wasm
+	cd packages/kernel && npm pack
 
 # Python wheel (for current platform)
 wheel:
@@ -30,7 +30,7 @@ setup:
 
 # Cleanup
 clean:
-	rm -rf packages/orchestrator/dist packages/orchestrator/wasm
+	rm -rf packages/kernel/dist packages/kernel/wasm
 	rm -rf packages/python-sdk/src/wasmsand/_bundled
 	rm -rf packages/python-sdk/dist packages/python-sdk/build
-	rm -f packages/orchestrator/*.tgz
+	rm -f packages/kernel/*.tgz

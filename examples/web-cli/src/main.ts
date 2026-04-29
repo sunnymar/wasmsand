@@ -1,4 +1,4 @@
-import { BrowserAdapter, Sandbox } from '@codepod/sandbox';
+import { BrowserAdapter, Sandbox } from '@codepod/kernel';
 import { createTerminal } from './terminal.js';
 import '@xterm/xterm/css/xterm.css';
 

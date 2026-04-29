@@ -9,7 +9,7 @@
  * --whole-archive'd into every canary, so every canary wasm imports
  * `codepod::host_dup2` (and system/popen variants carry host_run_command
  * too). Plain wasmtime has no such imports — it cannot instantiate the
- * modules. The orchestrator sandbox supplies those imports by definition
+ * modules. The kernel sandbox supplies those imports by definition
  * and is what real consumers will run against, so it is also the authentic
  * target for conformance.
  *
@@ -24,11 +24,11 @@
 import { resolve } from 'node:path';
 import { readFileSync, readdirSync, copyFileSync, unlinkSync } from 'node:fs';
 import { parse as parseToml } from 'jsr:@std/toml';
-import { Sandbox } from '../packages/orchestrator/src/sandbox.js';
-import { NodeAdapter } from '../packages/orchestrator/src/platform/node-adapter.js';
+import { Sandbox } from '../packages/kernel/src/sandbox.js';
+import { NodeAdapter } from '../packages/kernel/src/platform/node-adapter.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
-const FIXTURES = resolve(REPO_ROOT, 'packages/orchestrator/src/platform/__tests__/fixtures');
+const FIXTURES = resolve(REPO_ROOT, 'packages/kernel/src/platform/__tests__/fixtures');
 const CONFORMANCE = resolve(REPO_ROOT, 'packages/guest-compat/conformance');
 const RUST_BUILD = resolve(REPO_ROOT, 'packages/guest-compat/build/rust');
 
@@ -90,7 +90,7 @@ function diff(c: Case, raw: string, processExit: number): TraceDiff[] {
 
 // Rust canaries live under build/rust/; stage copies in the fixtures dir
 // under a "rust-" prefix so scanTools picks them up as distinct tools.
-// The orchestrator rejects paths outside wasmDir, so we cannot register
+// The kernel rejects paths outside wasmDir, so we cannot register
 // them from a side path. Staging is cheap and deterministic.
 const rustStaged: string[] = [];
 if (includeRust) {

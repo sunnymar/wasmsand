@@ -30,7 +30,7 @@
 
 /* getentropy(3) is provided by wasi-libc and routes through WASI
  * random_get, which the codepod host services with crypto.getRandomValues
- * (see packages/orchestrator/src/wasi/wasi-host.ts:randomGet).  This is
+ * (see packages/kernel/src/wasi/wasi-host.ts:randomGet).  This is
  * the canonical crypto-quality entropy source for the sandbox. */
 extern int getentropy(void *buffer, size_t length);
 

@@ -1,4 +1,4 @@
-import { Sandbox, BrowserAdapter } from '@codepod/sandbox';
+import { Sandbox, BrowserAdapter } from '@codepod/kernel';
 import type { SubAgentFn } from './types.js';
 
 const WASM_BASE = `${import.meta.env.BASE_URL}wasm`.replace(/\/\//g, '/');

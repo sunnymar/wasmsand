@@ -92,7 +92,7 @@ impl Driver {
     }
 
     pub fn run_behavioral_suite(&self) -> Result<()> {
-        // Delegate to the orchestrator canary suite. This is the Step 1
+        // Delegate to the kernel canary suite. This is the Step 1
         // behavioral harness; Step 3a replaces it with TOML-driven spec
         // tests.
         let status = Command::new("deno")
@@ -101,12 +101,12 @@ impl Driver {
                 "test",
                 "-A",
                 "--no-check",
-                "packages/orchestrator/src/__tests__/guest-compat.test.ts",
+                "packages/kernel/src/__tests__/guest-compat.test.ts",
             ])
             .status()
             .context("spawning deno test")?;
         if !status.success() {
-            return Err(anyhow!("orchestrator canary suite failed"));
+            return Err(anyhow!("kernel canary suite failed"));
         }
         Ok(())
     }

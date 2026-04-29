@@ -25,9 +25,9 @@ import { Buffer } from 'node:buffer';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Sandbox, SandboxPool } from '@codepod/sandbox';
-import type { NetworkPolicy } from '@codepod/sandbox';
-import { NodeAdapter, HostFsProvider } from '@codepod/sandbox/node';
+import { Sandbox, SandboxPool } from '@codepod/kernel';
+import type { NetworkPolicy } from '@codepod/kernel';
+import { NodeAdapter, HostFsProvider } from '@codepod/kernel/node';
 import { loadConfig } from './config.js';
 import { makeRunCommandHandler, runCommand as runBashCommand } from './bash-dispatch.js';
 import { bashBootImports } from './bash-host-imports.js';
@@ -64,9 +64,9 @@ const config = loadConfig(process.argv.slice(2), {
   timeoutMs: 30_000,
   fsLimitBytes: 256 * 1024 * 1024,
   wasmDir: process.env.CODEPOD_WASM_DIR
-    ?? resolve(__dirname, '../../orchestrator/src/platform/__tests__/fixtures'),
+    ?? resolve(__dirname, '../../kernel/src/platform/__tests__/fixtures'),
   shellWasm: process.env.CODEPOD_SHELL_WASM
-    ?? resolve(__dirname, '../../orchestrator/src/platform/__tests__/fixtures/codepod-shell-exec.wasm'),
+    ?? resolve(__dirname, '../../kernel/src/platform/__tests__/fixtures/codepod-shell-exec.wasm'),
 });
 
 // --- Sandbox pool (optional) ---

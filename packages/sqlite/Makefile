@@ -16,7 +16,7 @@ CC := $(WASI_SDK_PATH)/bin/clang
 SYSROOT := $(WASI_SDK_PATH)/share/wasi-sysroot
 
 REPO_ROOT := $(shell cd ../.. && pwd)
-FIXTURES := $(REPO_ROOT)/packages/orchestrator/src/platform/__tests__/fixtures
+FIXTURES := $(REPO_ROOT)/packages/kernel/src/platform/__tests__/fixtures
 
 CFLAGS := \
 	--sysroot=$(SYSROOT) \

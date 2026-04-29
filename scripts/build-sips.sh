@@ -7,7 +7,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SIPS_DIR="$REPO_ROOT/packages/sips"
 TARGET_DIR="$SIPS_DIR/target/wasm32-wasip1/release"
-FIXTURES_DIR="$REPO_ROOT/packages/orchestrator/src/platform/__tests__/fixtures"
+FIXTURES_DIR="$REPO_ROOT/packages/kernel/src/platform/__tests__/fixtures"
 
 echo "Building sips to wasm32-wasip1..."
 cargo build \

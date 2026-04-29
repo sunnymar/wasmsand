@@ -70,7 +70,7 @@ def _resolve_runtime(engine: str) -> tuple[str, list[str], str | None, str | Non
         server = os.path.join(repo_root, "packages", "sdk-server", "src", "server.ts")
         server_args = ["run", "-A", "--no-check", "--unstable-sloppy-imports", server]
         wasm_dir = os.path.join(
-            repo_root, "packages", "orchestrator", "src", "platform", "__tests__", "fixtures"
+            repo_root, "packages", "kernel", "src", "platform", "__tests__", "fixtures"
         )
         shell_wasm = os.path.join(wasm_dir, "codepod-shell-exec.wasm")
         return deno, server_args, wasm_dir, shell_wasm
@@ -96,10 +96,10 @@ def _dev_paths() -> tuple[str, list[str], str, str]:
     server = os.path.join(repo_root, "packages", "sdk-server", "src", "server.ts")
     server_args = ["run", "-A", "--no-check", "--unstable-sloppy-imports", server]
     wasm_dir = os.path.join(
-        repo_root, "packages", "orchestrator", "src", "platform", "__tests__", "fixtures"
+        repo_root, "packages", "kernel", "src", "platform", "__tests__", "fixtures"
     )
     shell_wasm = os.path.join(
-        repo_root, "packages", "orchestrator", "src", "platform", "__tests__", "fixtures",
+        repo_root, "packages", "kernel", "src", "platform", "__tests__", "fixtures",
         "codepod-shell-exec.wasm",
     )
     return runtime_path, server_args, wasm_dir, shell_wasm

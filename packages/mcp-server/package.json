@@ -7,7 +7,7 @@
     "test": "deno test -A --no-check"
   },
   "dependencies": {
-    "@codepod/sandbox": "*",
+    "@codepod/kernel": "*",
     "@modelcontextprotocol/sdk": "^1.27",
     "zod": "^3.25"
   },

@@ -1,6 +1,6 @@
 /* setjmp/longjmp implementation on top of Asyncify.
  *
- * The host (orchestrator) drives the Asyncify state machine: when
+ * The host (kernel) drives the Asyncify state machine: when
  * setjmp is called for the first time, host_setjmp records the
  * current Asyncify save-state into env and returns 0.  When longjmp
  * is called, host_longjmp triggers an unwind that the runtime

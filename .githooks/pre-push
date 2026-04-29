@@ -7,14 +7,14 @@ export PATH="$HOME/.deno/bin:$PATH"
 # Full integration suite runs in CI (GitHub Actions).
 echo "=== pre-push: running unit tests ==="
 deno test -A --no-check \
-  packages/orchestrator/src/vfs/__tests__/vfs.test.ts \
-  packages/orchestrator/src/vfs/__tests__/fd.test.ts \
-  packages/orchestrator/src/vfs/__tests__/host-mount.test.ts \
-  packages/orchestrator/src/vfs/__tests__/snapshot.test.ts \
-  packages/orchestrator/src/execution/__tests__/proxy-protocol.test.ts \
-  packages/orchestrator/src/execution/__tests__/vfs-proxy.test.ts \
-  packages/orchestrator/src/network/__tests__/gateway.test.ts \
-  packages/orchestrator/src/network/__tests__/socket-shim.test.ts \
+  packages/kernel/src/vfs/__tests__/vfs.test.ts \
+  packages/kernel/src/vfs/__tests__/fd.test.ts \
+  packages/kernel/src/vfs/__tests__/host-mount.test.ts \
+  packages/kernel/src/vfs/__tests__/snapshot.test.ts \
+  packages/kernel/src/execution/__tests__/proxy-protocol.test.ts \
+  packages/kernel/src/execution/__tests__/vfs-proxy.test.ts \
+  packages/kernel/src/network/__tests__/gateway.test.ts \
+  packages/kernel/src/network/__tests__/socket-shim.test.ts \
   packages/sdk-server/src/dispatcher.test.ts
 
 echo "pre-push passed"

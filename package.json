@@ -5,9 +5,9 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "deno task build:ts && deno test -A --no-check packages/orchestrator packages/sdk-server packages/mcp-server",
+    "test": "deno task build:ts && deno test -A --no-check packages/kernel packages/sdk-server packages/mcp-server",
     "build": "bun run build:rust && bun run build:ts",
-    "build:ts": "cd packages/orchestrator && tsup",
+    "build:ts": "cd packages/kernel && tsup",
     "build:rust": "cargo build --target wasm32-wasip1 --release",
     "prepare": "git config core.hooksPath .githooks"
   }

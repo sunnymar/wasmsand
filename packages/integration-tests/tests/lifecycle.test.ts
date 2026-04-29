@@ -6,7 +6,7 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 
 const WASM_FIXTURES = new URL(
-  "../../orchestrator/src/platform/__tests__/fixtures",
+  "../../kernel/src/platform/__tests__/fixtures",
   import.meta.url,
 ).pathname;
 

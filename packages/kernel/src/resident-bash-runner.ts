@@ -1363,11 +1363,11 @@ function spawnAsyncProcess(
   //      a. wasi-preview2 / wasmtime preemptive multitasking
   //         (real OS threads) — TODO when we add a wasmtime backend
   //         to this code path; currently relevant only to the Rust
-  //         codepod-server, not the Deno orchestrator.
+  //         codepod-server, not the Deno kernel.
   //      b. JSPI (WebAssembly.Suspending / promising) — cooperative
   //         scheduling on the JS event loop, available on Deno 2.4+,
   //         Node 25+, modern Chromium.  This is the preferred path
-  //         in this orchestrator.
+  //         in this kernel.
   //      c. Asyncify — Binaryen unwind/rewind kludge.  Works
   //         everywhere (Safari, older Node, etc.) but adds binary
   //         size and a per-call overhead.

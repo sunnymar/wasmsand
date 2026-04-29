@@ -28,14 +28,14 @@ jobs:
       - run: deno install
 
       - name: Build TypeScript
-        run: cd packages/orchestrator && npx tsup
+        run: cd packages/kernel && npx tsup
 
       - name: Run TypeScript tests
         timeout-minutes: 10
         run: |
           rc=0
           deno test -A --no-check --junit-path=test-results.xml \
-            packages/orchestrator packages/sdk-server packages/mcp-server 2>&1 || rc=$?
+            packages/kernel packages/sdk-server packages/mcp-server 2>&1 || rc=$?
           if [ $rc -ne 0 ]; then
             # Deno may exit non-zero when Worker threads leave pending promises
             # during cleanup, even when all tests pass. Check JUnit XML for
@@ -56,7 +56,7 @@ jobs:
 
       - name: Run browser tests (Chromium + WebKit)
         run: |
-          cd packages/orchestrator/browser-tests
+          cd packages/kernel/browser-tests
           npm ci
           npx playwright install --with-deps chromium webkit
           node_modules/.bin/playwright test --reporter=line
@@ -113,8 +113,8 @@ jobs:
 
       - run: deno install
 
-      - name: Build TypeScript orchestrator
-        run: cd packages/orchestrator && npx tsup
+      - name: Build TypeScript kernel
+        run: cd packages/kernel && npx tsup
 
       - name: Run integration tests (deno sdk-server)
         run: |

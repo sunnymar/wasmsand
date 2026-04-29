@@ -13,7 +13,7 @@ struct Args {
     /// Skip rebuilding cpcc/cpar/cpcheck/cargo-codepod (assume up to date).
     #[arg(long)]
     skip_toolchain_build: bool,
-    /// Skip the orchestrator behavioral canary suite.
+    /// Skip the kernel behavioral canary suite.
     #[arg(long)]
     skip_behavioral: bool,
     /// Skip the spec.toml-driven trace diff.

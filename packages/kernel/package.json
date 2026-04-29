@@ -1,5 +1,5 @@
 {
-  "name": "@codepod/sandbox",
+  "name": "@codepod/kernel",
   "version": "0.0.1",
   "type": "module",
   "exports": {

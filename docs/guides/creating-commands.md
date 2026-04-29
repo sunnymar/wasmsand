@@ -85,7 +85,7 @@ Output: `target/wasm32-wasip1/release/rot13.wasm`
 
 ```bash
 cp target/wasm32-wasip1/release/rot13.wasm \
-   packages/orchestrator/src/platform/__tests__/fixtures/
+   packages/kernel/src/platform/__tests__/fixtures/
 ```
 
 The sandbox auto-discovers `.wasm` files in the `wasmDir` directory. No registration code needed — just drop the file in. Each discovered tool is automatically registered as a special file in `/usr/bin/` with the `S_TOOL` flag (see [Security](./security.md#tool-file-integrity)).
@@ -93,7 +93,7 @@ The sandbox auto-discovers `.wasm` files in the `wasmDir` directory. No registra
 ### 5. Test
 
 ```bash
-deno test -A --no-check packages/orchestrator/src/__tests__/sandbox.test.ts
+deno test -A --no-check packages/kernel/src/__tests__/sandbox.test.ts
 ```
 
 Or test interactively via the SDK:
@@ -129,7 +129,7 @@ Build and deploy the same way:
 ```bash
 cargo build --target wasm32-wasip1 --release -p my-tool
 cp target/wasm32-wasip1/release/my-tool.wasm \
-   packages/orchestrator/src/platform/__tests__/fixtures/
+   packages/kernel/src/platform/__tests__/fixtures/
 ```
 
 The command name is derived from the `.wasm` filename: `my-tool.wasm` -> command `my-tool`.
@@ -217,7 +217,7 @@ child compiler processes in another directory.
 Multi-call ports such as BusyBox (`packages/c-ports/busybox/`) already
 follow this pattern and are a good working reference. BusyBox itself is
 built this way: a single `busybox.wasm` is dispatched by `argv[0]`, and
-the orchestrator's `ProcessManager.registerMulticallTool('busybox', …,
+the kernel's `ProcessManager.registerMulticallTool('busybox', …,
 applets)` creates one VFS symlink under `/usr/bin/<applet>` per applet,
 each pointing back at `/usr/bin/busybox`. Other multicall ports can use
 the same registration helper.
@@ -348,6 +348,6 @@ Use `default-features = false` to minimize binary size. Avoid dependencies that 
 | `packages/coreutils/src/bin/` | One `.rs` file per Rust executable |
 | `Cargo.toml` (root) | Workspace config — add standalone crates to `members` |
 | `target/wasm32-wasip1/release/` | Build output — `.wasm` binaries |
-| `packages/orchestrator/src/platform/__tests__/fixtures/` | Test fixtures — drop `.wasm` files here |
+| `packages/kernel/src/platform/__tests__/fixtures/` | Test fixtures — drop `.wasm` files here |
 | `packages/c-ports/busybox/manifest.json` | Multicall applets list — controls which symlinks resolve to `busybox.wasm` |
 | `scripts/copy-wasm.sh` | Copies fixtures to packaging directory |

@@ -9,7 +9,7 @@
 # configure inside the work tree.
 
 REPO_ROOT := $(shell cd ../../.. && pwd)
-FIXTURES := $(REPO_ROOT)/packages/orchestrator/src/platform/__tests__/fixtures
+FIXTURES := $(REPO_ROOT)/packages/kernel/src/platform/__tests__/fixtures
 COREUTILS_VERSION := 9.11
 UPSTREAM := upstream
 PATCHES_DIR := patches
