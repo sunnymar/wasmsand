@@ -714,6 +714,19 @@ export class WasiHost {
           case 'socket': {
             if (target.socket === null) return WASI_EBADF;
             if (target.readShutdown) break;
+            if (target.peekBuffer && target.peekBuffer.byteLength > 0) {
+              const toRead = Math.min(iov.len, target.peekBuffer.byteLength);
+              const bytes = this.getBytes();
+              bytes.set(target.peekBuffer.subarray(0, toRead), iov.buf);
+              target.peekBuffer = target.peekBuffer.slice(toRead);
+              totalRead += toRead;
+              if (toRead < iov.len) {
+                const viewAfter = this.getView();
+                viewAfter.setUint32(nreadPtr, totalRead, true);
+                return WASI_ESUCCESS;
+              }
+              continue;
+            }
             const result = target.recv(target.socket, iov.len);
             if (!result.ok) return WASI_EIO;
             const data = result.data_b64 !== undefined

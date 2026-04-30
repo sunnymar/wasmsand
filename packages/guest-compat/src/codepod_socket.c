@@ -16,9 +16,13 @@
 #ifndef SO_ERROR
 #define SO_ERROR 0x1007
 #endif
+#ifndef MSG_PEEK
+#define MSG_PEEK 0x02
+#endif
 
 #define CODEPOD_SO_REUSEADDR 0x0004
 #define CODEPOD_SO_ERROR 0x1007
+#define CODEPOD_MSG_PEEK 0x02
 #define CODEPOD_IPPROTO_TCP 6
 #define CODEPOD_TCP_NODELAY 1
 
@@ -463,8 +467,19 @@ static ssize_t codepod_recv_impl(int sockfd, void *buf, size_t len, int flags) {
   int req_len;
   int n;
 
-  (void)flags;
-  req_len = snprintf(req, sizeof(req), "{\"fd\":%d,\"max_bytes\":%zu}", sockfd, len);
+  if (flags != 0 && flags != MSG_PEEK && flags != CODEPOD_MSG_PEEK) {
+    errno = EOPNOTSUPP;
+    return -1;
+  }
+
+  req_len = snprintf(
+    req,
+    sizeof(req),
+    "{\"fd\":%d,\"max_bytes\":%zu%s}",
+    sockfd,
+    len,
+    (flags == MSG_PEEK || flags == CODEPOD_MSG_PEEK) ? ",\"peek\":true" : ""
+  );
   if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
     errno = EOVERFLOW;
     return -1;

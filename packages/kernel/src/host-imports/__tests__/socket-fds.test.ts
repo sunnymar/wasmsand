@@ -236,4 +236,45 @@ describe('socket fd host imports', () => {
     expect(readJson(memory, 256, connectLen)).toEqual({ ok: true });
     expect(requests).toEqual([{ op: 'setNoDelay', socket: 101, enabled: true }]);
   });
+
+  it('preserves peeked socket data for the next recv', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const requests: Record<string, unknown>[] = [];
+    const backend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 202 }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: (socket, maxBytes) => {
+        requests.push({ op: 'recv', socket, maxBytes });
+        return { ok: true, data_b64: btoa('abc') };
+      },
+      close: () => ({ ok: true }),
+    };
+    const imports = createKernelImports({ memory, kernel, socketBackend: backend });
+
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const connectReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      host: 'example.test',
+      port: 443,
+      tls: false,
+    }));
+    (imports.host_socket_connect as (...args: number[]) => number)(16, connectReqLen, 256, 4096);
+
+    const peekReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      max_bytes: 3,
+      peek: true,
+    }));
+    const peekLen = (imports.host_socket_recv as (...args: number[]) => number)(16, peekReqLen, 512, 4096);
+    expect(readJson(memory, 512, peekLen)).toEqual({ ok: true, data_b64: btoa('abc') });
+
+    const recvReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      max_bytes: 3,
+    }));
+    const recvLen = (imports.host_socket_recv as (...args: number[]) => number)(16, recvReqLen, 512, 4096);
+    expect(readJson(memory, 512, recvLen)).toEqual({ ok: true, data_b64: btoa('abc') });
+    expect(requests).toEqual([{ op: 'recv', socket: 202, maxBytes: 3 }]);
+  });
 });

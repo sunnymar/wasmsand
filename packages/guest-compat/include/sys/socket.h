@@ -15,6 +15,10 @@
 #undef SO_ERROR
 #define SO_ERROR 0x1007
 
+#ifndef MSG_PEEK
+#define MSG_PEEK 0x02
+#endif
+
 int socket(int domain, int type, int protocol);
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);

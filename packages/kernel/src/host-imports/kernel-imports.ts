@@ -104,6 +104,30 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
   const socketLocalHost = opts.socketLocalHost ?? '10.0.2.15';
   const socketLocalPortForFd = (fd: number) => 49152 + (Math.max(0, fd - 3) % 16384);
 
+  function bytesToBase64(data: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < data.byteLength; i++) {
+      binary += String.fromCharCode(data[i]);
+    }
+    return btoa(binary);
+  }
+
+  function base64ToBytes(value: string): Uint8Array {
+    const binary = atob(value);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  }
+
+  function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
+    const out = new Uint8Array(left.byteLength + right.byteLength);
+    out.set(left, 0);
+    out.set(right, left.byteLength);
+    return out;
+  }
+
   return {
     // ── Process management (new) ──
 
@@ -568,7 +592,21 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         if (!target || target.type !== 'socket' || target.socket === null) {
           return writeJson(memory, outPtr, outCap, { ok: false, error: `not a connected socket fd: ${req.fd}` });
         }
-        const result = socketBackend.recv(target.socket, req.max_bytes ?? 65536);
+        const maxBytes = req.max_bytes ?? 65536;
+        const peek = req.peek === true;
+        if (target.peekBuffer && target.peekBuffer.byteLength > 0) {
+          const chunk = target.peekBuffer.slice(0, maxBytes);
+          if (!peek) {
+            target.peekBuffer = target.peekBuffer.slice(chunk.byteLength);
+          }
+          return writeJson(memory, outPtr, outCap, { ok: true, data_b64: bytesToBase64(chunk) });
+        }
+        const result = socketBackend.recv(target.socket, maxBytes);
+        if (peek && result.ok) {
+          const data = base64ToBytes(result.data_b64 ?? '');
+          target.peekBuffer = target.peekBuffer ? concatBytes(target.peekBuffer, data) : data;
+          return writeJson(memory, outPtr, outCap, { ok: true, data_b64: bytesToBase64(data) });
+        }
         return writeJson(memory, outPtr, outCap, result);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
