@@ -18,6 +18,8 @@
  */
 
 import type { NetworkBridgeLike } from '../network/bridge.js';
+import type { SocketBackend } from '../network/socket-backend.js';
+import { createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { NativeModuleRegistry } from '../process/native-modules.js';
 import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
@@ -39,6 +41,9 @@ export interface KernelImportsOptions {
 
   /** Network bridge for synchronous HTTP fetch from WASM. */
   networkBridge?: NetworkBridgeLike;
+
+  /** Backend for fd-based POSIX socket imports. Defaults to a NetworkBridge adapter. */
+  socketBackend?: SocketBackend;
 
   /**
    * Extension registry for host_extension_invoke (used by Python WASM).
@@ -92,6 +97,7 @@ export interface KernelImportsOptions {
 export function createKernelImports(opts: KernelImportsOptions): Record<string, WebAssembly.ImportValue> {
   const { memory } = opts;
   const callerPid = opts.callerPid ?? 0;
+  const socketBackend = opts.socketBackend ?? (opts.networkBridge ? createNetworkBridgeSocketBackend(opts.networkBridge) : undefined);
 
   return {
     // ── Process management (new) ──
@@ -431,19 +437,46 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // ── Sockets (full mode only) ──
 
+    // host_socket_open(domain, type, protocol) -> fd
+    // Allocates a kernel-owned socket fd. connect() fills in the backend handle later.
+    host_socket_open(_domain: number, _type: number, _protocol: number): number {
+      if (!opts.kernel) return -1;
+      return opts.kernel.allocFd(callerPid, {
+        type: 'socket',
+        socket: null,
+        refs: 1,
+        send: (socket, dataB64) => socketBackend?.send(socket, dataB64) ?? { ok: false, error: 'networking not configured' },
+        recv: (socket, maxBytes) => socketBackend?.recv(socket, maxBytes) ?? { ok: false, error: 'networking not configured' },
+        close: (socket) => {
+          socketBackend?.close(socket);
+        },
+      });
+    },
+
     // host_socket_connect(req_ptr, req_len, out_ptr, out_cap) -> i32
     // Opens a TCP or TLS socket to the given host:port.
-    // Request JSON: { host, port, tls }
-    // Response JSON: { ok, socket_id } or { ok: false, error }
+    // Request JSON: { fd, host, port, tls }
+    // Response JSON: { ok: true } or { ok: false, error }
     host_socket_connect(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
-      if (!opts.networkBridge) {
+      if (!socketBackend) {
         return writeJson(memory, outPtr, outCap, { ok: false, error: 'networking not configured' });
       }
       try {
         const req = JSON.parse(readString(memory, reqPtr, reqLen));
-        const result = opts.networkBridge.requestSync({
-          op: 'connect', host: req.host, port: req.port, tls: req.tls ?? false,
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a socket fd: ${req.fd}` });
+        }
+        const result = socketBackend.connect({
+          host: req.host, port: req.port, tls: req.tls ?? false,
         });
+        if (result.ok) {
+          target.socket = result.socket;
+          return writeJson(memory, outPtr, outCap, { ok: true });
+        }
         return writeJson(memory, outPtr, outCap, result);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -453,17 +486,22 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_socket_send(req_ptr, req_len, out_ptr, out_cap) -> i32
     // Sends data on an open socket.
-    // Request JSON: { socket_id, data_b64 }
+    // Request JSON: { fd, data_b64 }
     // Response JSON: { ok, bytes_sent } or { ok: false, error }
     host_socket_send(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
-      if (!opts.networkBridge) {
+      if (!socketBackend) {
         return writeJson(memory, outPtr, outCap, { ok: false, error: 'networking not configured' });
       }
       try {
         const req = JSON.parse(readString(memory, reqPtr, reqLen));
-        const result = opts.networkBridge.requestSync({
-          op: 'send', socket_id: req.socket_id, data_b64: req.data_b64,
-        });
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket' || target.socket === null) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a connected socket fd: ${req.fd}` });
+        }
+        const result = socketBackend.send(target.socket, req.data_b64);
         return writeJson(memory, outPtr, outCap, result);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -473,17 +511,22 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_socket_recv(req_ptr, req_len, out_ptr, out_cap) -> i32
     // Receives data from an open socket.
-    // Request JSON: { socket_id, max_bytes }
+    // Request JSON: { fd, max_bytes }
     // Response JSON: { ok, data_b64 } or { ok: false, error }
     host_socket_recv(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
-      if (!opts.networkBridge) {
+      if (!socketBackend) {
         return writeJson(memory, outPtr, outCap, { ok: false, error: 'networking not configured' });
       }
       try {
         const req = JSON.parse(readString(memory, reqPtr, reqLen));
-        const result = opts.networkBridge.requestSync({
-          op: 'recv', socket_id: req.socket_id, max_bytes: req.max_bytes ?? 65536,
-        });
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket' || target.socket === null) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a connected socket fd: ${req.fd}` });
+        }
+        const result = socketBackend.recv(target.socket, req.max_bytes ?? 65536);
         return writeJson(memory, outPtr, outCap, result);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -493,14 +536,21 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_socket_close(req_ptr, req_len) -> i32
     // Closes an open socket.
-    // Request JSON: { socket_id }
+    // Request JSON: { fd }
     // Returns 0 on success, -1 on error.
     host_socket_close(reqPtr: number, reqLen: number): number {
-      if (!opts.networkBridge) return -1;
       try {
         const req = JSON.parse(readString(memory, reqPtr, reqLen));
-        opts.networkBridge.requestSync({ op: 'close', socket_id: req.socket_id });
-        return 0;
+        if (typeof req.fd !== 'number') return -1;
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket') return -1;
+        if (target.socket !== null) {
+          if (!socketBackend) return -1;
+          const socket = target.socket;
+          target.socket = null;
+          socketBackend.close(socket);
+        }
+        return opts.kernel?.closeFd(callerPid, req.fd) ? 0 : -1;
       } catch { return -1; }
     },
 

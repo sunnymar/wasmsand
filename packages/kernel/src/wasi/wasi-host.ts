@@ -18,6 +18,7 @@ import type { FdTarget } from './fd-target.js';
 import { createBufferTarget, createStaticTarget, createNullTarget, createVfsFileTarget, bufferToString } from './fd-target.js';
 import {
   WASI_EBADF,
+  WASI_EIO,
   WASI_EINVAL,
   WASI_ENOSYS,
   WASI_ENOTSUP,
@@ -82,6 +83,23 @@ interface PreopenEntry {
   vfsPath: string;
   label: string;
   fd: number;
+}
+
+function bytesToBase64(data: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < data.byteLength; i++) {
+    binary += String.fromCharCode(data[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
 }
 
 /**
@@ -597,6 +615,13 @@ export class WasiHost {
             totalWritten += target.fdTable.write(target.fd, data);
             break;
           }
+          case 'socket': {
+            if (target.socket === null) return WASI_EBADF;
+            const result = target.send(target.socket, bytesToBase64(data));
+            if (!result.ok) return WASI_EIO;
+            totalWritten += result.bytes_sent ?? data.byteLength;
+            break;
+          }
           case 'static':
           case 'pipe_read': {
             // Cannot write to a read-only target
@@ -678,6 +703,26 @@ export class WasiHost {
               totalRead += n;
             }
             if (n < iov.len) {
+              const viewAfter = this.getView();
+              viewAfter.setUint32(nreadPtr, totalRead, true);
+              return WASI_ESUCCESS;
+            }
+            continue;
+          }
+          case 'socket': {
+            if (target.socket === null) return WASI_EBADF;
+            const result = target.recv(target.socket, iov.len);
+            if (!result.ok) return WASI_EIO;
+            const data = result.data_b64 !== undefined
+              ? base64ToBytes(result.data_b64)
+              : this.encoder.encode(result.data ?? '');
+            const toRead = Math.min(iov.len, data.byteLength);
+            if (toRead > 0) {
+              const bytes = this.getBytes();
+              bytes.set(data.subarray(0, toRead), iov.buf);
+              totalRead += toRead;
+            }
+            if (toRead < iov.len) {
               const viewAfter = this.getView();
               viewAfter.setUint32(nreadPtr, totalRead, true);
               return WASI_ESUCCESS;

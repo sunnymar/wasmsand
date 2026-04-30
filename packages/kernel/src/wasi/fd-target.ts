@@ -1,10 +1,21 @@
 import type { AsyncPipeReadEnd, AsyncPipeWriteEnd } from '../vfs/pipe.js';
+import type { SocketBackendResult, SocketHandle } from '../network/socket-backend.js';
+import type { FdTable } from '../vfs/fd-table.js';
 
 /** Target for a file descriptor in a process's fd table. */
 export type FdTarget =
   | { type: 'buffer'; buf: Uint8Array[]; total: number; limit: number; truncated: boolean; onChunk?: (data: Uint8Array) => void }
   | { type: 'pipe_read'; pipe: AsyncPipeReadEnd }
   | { type: 'pipe_write'; pipe: AsyncPipeWriteEnd }
+  | { type: 'vfs_file'; fdTable: FdTable; fd: number; refs: number }
+  | {
+      type: 'socket';
+      socket: SocketHandle | null;
+      refs: number;
+      send: (socket: SocketHandle, dataB64: string) => SocketBackendResult;
+      recv: (socket: SocketHandle, maxBytes: number) => SocketBackendResult;
+      close: (socket: SocketHandle) => void;
+    }
   | { type: 'static'; data: Uint8Array; offset: number }
   | { type: 'null' };
 
@@ -18,6 +29,10 @@ export function createStaticTarget(data: Uint8Array): FdTarget & { type: 'static
 
 export function createNullTarget(): FdTarget & { type: 'null' } {
   return { type: 'null' };
+}
+
+export function createVfsFileTarget(fdTable: FdTable, fd: number): FdTarget & { type: 'vfs_file' } {
+  return { type: 'vfs_file', fdTable, fd, refs: 1 };
 }
 
 /** Concatenate buffer target chunks into a string. */
