@@ -4,7 +4,7 @@ import { createKernelImports } from '../kernel-imports.js';
 import { ProcessKernel } from '../../process/kernel.js';
 import type { SocketBackend, SocketHandle } from '../../network/socket-backend.js';
 import { WasiHost } from '../../wasi/wasi-host.js';
-import { WASI_ESUCCESS } from '../../wasi/types.js';
+import { WASI_EAGAIN, WASI_ESUCCESS, WASI_FDFLAGS_NONBLOCK } from '../../wasi/types.js';
 import { VFS } from '../../vfs/vfs.js';
 
 function writeString(memory: WebAssembly.Memory, ptr: number, value: string): number {
@@ -276,5 +276,49 @@ describe('socket fd host imports', () => {
     const recvLen = (imports.host_socket_recv as (...args: number[]) => number)(16, recvReqLen, 512, 4096);
     expect(readJson(memory, 512, recvLen)).toEqual({ ok: true, data_b64: btoa('abc') });
     expect(requests).toEqual([{ op: 'recv', socket: 202, maxBytes: 3 }]);
+  });
+
+  it('returns EAGAIN for nonblocking socket fd reads without buffered data', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const requests: Record<string, unknown>[] = [];
+    const backend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 303 }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: (socket, maxBytes) => {
+        requests.push({ op: 'recv', socket, maxBytes });
+        return { ok: true, data_b64: btoa('abc') };
+      },
+      close: () => ({ ok: true }),
+    };
+    const imports = createKernelImports({ memory, kernel, socketBackend: backend });
+
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const connectReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      host: 'example.test',
+      port: 443,
+      tls: false,
+    }));
+    (imports.host_socket_connect as (...args: number[]) => number)(16, connectReqLen, 256, 4096);
+
+    const wasi = new WasiHost({
+      vfs: new VFS(),
+      args: [],
+      env: {},
+      preopens: { '/': '/' },
+      ioFds: kernel.getFdTable(0),
+      kernel,
+      pid: 0,
+    });
+    wasi.setMemory(memory);
+    const wasiImports = wasi.getImports().wasi_snapshot_preview1;
+    expect(wasiImports.fd_fdstat_set_flags(fd, WASI_FDFLAGS_NONBLOCK)).toBe(WASI_ESUCCESS);
+
+    new DataView(memory.buffer).setUint32(128, 256, true);
+    new DataView(memory.buffer).setUint32(132, 3, true);
+
+    expect(wasiImports.fd_read(fd, 128, 1, 192)).toBe(WASI_EAGAIN);
+    expect(requests).toEqual([]);
   });
 });

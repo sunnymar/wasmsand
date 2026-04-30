@@ -18,6 +18,7 @@ export type FdTarget =
       localPort?: number;
       noDelay?: boolean;
       peekBuffer?: Uint8Array;
+      fdFlags?: number;
       readShutdown?: boolean;
       writeShutdown?: boolean;
       send: (socket: SocketHandle, dataB64: string) => SocketBackendResult;

@@ -18,6 +18,7 @@ import type { FdTarget } from './fd-target.js';
 import { createBufferTarget, createStaticTarget, createNullTarget, createVfsFileTarget, bufferToString } from './fd-target.js';
 import {
   WASI_EBADF,
+  WASI_EAGAIN,
   WASI_EIO,
   WASI_EINVAL,
   WASI_ENOSYS,
@@ -28,9 +29,11 @@ import {
   WASI_CLOCK_REALTIME,
   WASI_CLOCK_MONOTONIC,
   WASI_FDFLAGS_APPEND,
+  WASI_FDFLAGS_NONBLOCK,
   WASI_FILETYPE_CHARACTER_DEVICE,
   WASI_FILETYPE_DIRECTORY,
   WASI_FILETYPE_REGULAR_FILE,
+  WASI_FILETYPE_SOCKET_STREAM,
   WASI_FILETYPE_SYMBOLIC_LINK,
   WASI_OFLAGS_CREAT,
   WASI_OFLAGS_DIRECTORY,
@@ -422,7 +425,7 @@ export class WasiHost {
         fd_allocate: this.fdNoOp.bind(this),
         fd_datasync: this.fdNoOp.bind(this),
         fd_sync: this.fdNoOp.bind(this),
-        fd_fdstat_set_flags: this.fdNoOp.bind(this),
+        fd_fdstat_set_flags: this.fdFdstatSetFlags.bind(this),
         fd_fdstat_set_rights: this.fdNoOp.bind(this),
         fd_filestat_set_size: this.fdFilestatSetSize.bind(this),
         fd_filestat_set_times: this.fdNoOp.bind(this),
@@ -714,6 +717,11 @@ export class WasiHost {
           case 'socket': {
             if (target.socket === null) return WASI_EBADF;
             if (target.readShutdown) break;
+            if (((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0) {
+              if (!target.peekBuffer || target.peekBuffer.byteLength === 0) {
+                return WASI_EAGAIN;
+              }
+            }
             if (target.peekBuffer && target.peekBuffer.byteLength > 0) {
               const toRead = Math.min(iov.len, target.peekBuffer.byteLength);
               const bytes = this.getBytes();
@@ -930,9 +938,10 @@ export class WasiHost {
 
     let filetype: number;
 
-    // I/O target fds (stdio or custom) are character devices
-    if (this.ioFds.has(fd)) {
-      filetype = WASI_FILETYPE_CHARACTER_DEVICE;
+    // I/O target fds (stdio or custom) are character devices, except sockets.
+    const ioTarget = this.ioFds.get(fd);
+    if (ioTarget) {
+      filetype = ioTarget.type === 'socket' ? WASI_FILETYPE_SOCKET_STREAM : WASI_FILETYPE_CHARACTER_DEVICE;
     } else if (this.dirFds.has(fd)) {
       filetype = WASI_FILETYPE_DIRECTORY;
     } else if (this.fdTable.isOpen(fd)) {
@@ -943,11 +952,22 @@ export class WasiHost {
 
     view.setUint8(bufPtr, filetype);
     view.setUint8(bufPtr + 1, 0); // padding
-    view.setUint16(bufPtr + 2, 0, true); // fdflags
+    view.setUint16(bufPtr + 2, ioTarget?.type === 'socket' ? (ioTarget.fdFlags ?? 0) : 0, true); // fdflags
     // 4 bytes padding
     view.setUint32(bufPtr + 4, 0, true);
     view.setBigUint64(bufPtr + 8, WASI_RIGHTS_ALL, true); // rights_base
     view.setBigUint64(bufPtr + 16, WASI_RIGHTS_ALL, true); // rights_inheriting
+    return WASI_ESUCCESS;
+  }
+
+  private fdFdstatSetFlags(fd: number, flags: number): number {
+    const target = this.ioFds.get(fd);
+    if (!target) {
+      return (this.dirFds.has(fd) || this.fdTable.isOpen(fd)) ? WASI_ESUCCESS : WASI_EBADF;
+    }
+    if (target.type === 'socket') {
+      target.fdFlags = flags;
+    }
     return WASI_ESUCCESS;
   }
 

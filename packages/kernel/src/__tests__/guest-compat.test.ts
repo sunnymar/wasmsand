@@ -666,6 +666,30 @@ describe('Guest compatibility canaries', () => {
     expect(requests).toEqual([{ op: 'recv', socket: 1001, maxBytes: 3 }]);
   });
 
+  it('routes Rust std::net::TcpStream nonblocking through WASI fd flags', async () => {
+    const requests: unknown[] = [];
+    const socketBackend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 1002 }),
+      send: (_socket, dataB64) => ({ ok: true, bytes_sent: atob(dataB64).length }),
+      recv: (socket, maxBytes) => {
+        requests.push({ op: 'recv', socket, maxBytes });
+        return { ok: true, data_b64: btoa('abc') };
+      },
+      close: () => ({ ok: true }),
+    };
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      socketBackend,
+    });
+
+    const result = await sandbox.run('std-net-nonblocking-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('nonblocking=ok');
+    expect(requests).toEqual([]);
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
