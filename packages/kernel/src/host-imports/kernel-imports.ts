@@ -26,6 +26,7 @@ import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
 import type { WasiHost } from '../wasi/wasi-host.js';
 import type { FdTarget } from '../wasi/fd-target.js';
 import { createStaticTarget } from '../wasi/fd-target.js';
+import { WASI_FDFLAGS_NONBLOCK } from '../wasi/types.ts';
 import { readString, writeJson } from './common.js';
 import type { RunCommandHandler, RunRequest } from '../run-command.js';
 import type { Sandbox } from '../sandbox.js';
@@ -621,6 +622,9 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
             target.peekBuffer = target.peekBuffer.slice(chunk.byteLength);
           }
           return writeJson(memory, outPtr, outCap, { ok: true, data_b64: bytesToBase64(chunk) });
+        }
+        if (((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'EAGAIN' });
         }
         const result = socketBackend.recv(target.socket, maxBytes);
         if (peek && result.ok) {

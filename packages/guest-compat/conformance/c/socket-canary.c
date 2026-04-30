@@ -3,6 +3,7 @@
  * network policy, so this canary only exercises local API shape.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -38,6 +39,24 @@ int main(void) {
   if (fd < 0) {
     freeaddrinfo(res);
     emit("socket", 1);
+    return 1;
+  }
+
+  int flags = fcntl(fd, F_GETFL);
+  if (flags < 0 || (flags & O_NONBLOCK) != 0) {
+    emit("fcntl_getfl", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+    emit("fcntl_setfl_nonblock", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+  flags = fcntl(fd, F_GETFL);
+  if (flags < 0 || (flags & O_NONBLOCK) == 0) {
+    emit("fcntl_getfl_nonblock", 1);
+    freeaddrinfo(res);
     return 1;
   }
 

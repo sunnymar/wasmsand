@@ -321,4 +321,44 @@ describe('socket fd host imports', () => {
     expect(wasiImports.fd_read(fd, 128, 1, 192)).toBe(WASI_EAGAIN);
     expect(requests).toEqual([]);
   });
+
+  it('returns EAGAIN for nonblocking host_socket_recv without buffered data', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const requests: Record<string, unknown>[] = [];
+    const backend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 404 }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: (socket, maxBytes) => {
+        requests.push({ op: 'recv', socket, maxBytes });
+        return { ok: true, data_b64: btoa('abc') };
+      },
+      close: () => ({ ok: true }),
+    };
+    const imports = createKernelImports({ memory, kernel, socketBackend: backend });
+
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const connectReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      host: 'example.test',
+      port: 443,
+      tls: false,
+    }));
+    (imports.host_socket_connect as (...args: number[]) => number)(16, connectReqLen, 256, 4096);
+    const target = kernel.getFdTarget(0, fd);
+    expect(target?.type).toBe('socket');
+    if (!target || target.type !== 'socket') {
+      throw new Error('expected socket fd target');
+    }
+    target.fdFlags = WASI_FDFLAGS_NONBLOCK;
+
+    const recvReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      max_bytes: 3,
+    }));
+    const recvLen = (imports.host_socket_recv as (...args: number[]) => number)(16, recvReqLen, 512, 4096);
+
+    expect(readJson(memory, 512, recvLen)).toEqual({ ok: false, error: 'EAGAIN' });
+    expect(requests).toEqual([]);
+  });
 });

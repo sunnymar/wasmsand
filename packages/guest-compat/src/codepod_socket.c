@@ -103,6 +103,19 @@ static int parse_json_ok(const char *json, size_t json_len) {
   return field + 4 <= json + json_len && memcmp(field, "true", 4) == 0;
 }
 
+static int json_contains(const char *json, size_t json_len, const char *needle) {
+  size_t needle_len = strlen(needle);
+  if (needle_len == 0 || needle_len > json_len) {
+    return 0;
+  }
+  for (size_t offset = 0; offset + needle_len <= json_len; ++offset) {
+    if (memcmp(json + offset, needle, needle_len) == 0) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static int parse_json_string_field(
   const char *json,
   size_t json_len,
@@ -487,6 +500,10 @@ static ssize_t codepod_recv_impl(int sockfd, void *buf, size_t len, int flags) {
 
   n = codepod_host_socket_recv((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
   if (n <= 0 || !parse_json_ok(resp, (size_t)n)) {
+    if (n > 0 && json_contains(resp, (size_t)n, "\"error\":\"EAGAIN\"")) {
+      errno = EAGAIN;
+      return -1;
+    }
     errno = EIO;
     return -1;
   }

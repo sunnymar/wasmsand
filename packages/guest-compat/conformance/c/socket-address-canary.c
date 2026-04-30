@@ -1,4 +1,6 @@
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
@@ -67,6 +69,18 @@ int main(void) {
   if (getsockname(fd, (struct sockaddr *)&local, &local_len) != 0 ||
       local_len != sizeof(local) ||
       check_addr("local", &local, "10.0.2.15", 49152) != 0) {
+    return 1;
+  }
+
+  int flags = fcntl(fd, F_GETFL);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+    puts("fcntl=failed");
+    return 1;
+  }
+  char byte = 0;
+  errno = 0;
+  if (recv(fd, &byte, 1, 0) != -1 || errno != EAGAIN) {
+    printf("nonblock_recv=%d\n", errno);
     return 1;
   }
 
