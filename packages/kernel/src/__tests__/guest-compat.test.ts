@@ -8,20 +8,9 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
-import { makeRunCommandHandler } from '../../../sdk-server/src/bash-dispatch.ts';
-import { bashBootImports } from '../../../sdk-server/src/bash-host-imports.ts';
 
 const FIXTURES = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
 const HAS_BUSYBOX_FIXTURE = existsSync(resolve(FIXTURES, 'busybox.wasm'));
-
-function createSandbox(): Promise<Sandbox> {
-  return Sandbox.create({
-    wasmDir: FIXTURES,
-    adapter: new NodeAdapter(),
-    bootImports: (api) => bashBootImports(api),
-    runCommandHandler: makeRunCommandHandler(),
-  });
-}
 
 describe('Guest compatibility canaries', () => {
   let sandbox: Sandbox | null = null;
@@ -32,7 +21,10 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs stdio-canary as a normal command', async () => {
-    sandbox = await createSandbox();
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
 
     sandbox.writeFile('/tmp/in.txt', new TextEncoder().encode('hello canary\n'));
 
@@ -44,7 +36,10 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs sleep-canary and prints the sleep duration', async () => {
-    sandbox = await createSandbox();
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
 
     const requestedMs = 20;
     const lowerBoundMs = 10;
@@ -58,7 +53,10 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs system-canary through the host command shim', async () => {
-    sandbox = await createSandbox();
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
 
     const result = await sandbox.run('system-canary');
 
@@ -67,7 +65,10 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('runs popen-canary and captures command output', async () => {
-    sandbox = await createSandbox();
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
 
     const result = await sandbox.run('popen-canary');
 
@@ -76,7 +77,10 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('retries host_run_command when the response exceeds the initial buffer', async () => {
-    sandbox = await createSandbox();
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
 
     const result = await sandbox.run('system-canary large');
 
@@ -85,7 +89,10 @@ describe('Guest compatibility canaries', () => {
   });
 
   it('returns the command exit status from codepod_pclose', async () => {
-    sandbox = await createSandbox();
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
 
     const result = await sandbox.run('popen-canary status');
 
@@ -194,6 +201,146 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('signal-ok');
   });
 
+  it('exposes the POSIX socket compatibility header surface', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('socket-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('{"case":"socket_surface","exit":0}');
+  });
+
+  it('links Rust POSIX socket FFI calls through libcodepod', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('socket-rust-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('{"case":"socket_surface","exit":0}');
+  });
+
+  it('runs Rust std::env::temp_dir through the Codepod std patch', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-tempdir-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('/tmp');
+  });
+
+  it('runs Rust std env/process helpers through the Codepod std patch', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-env-process-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('home=/home/codepod');
+    expect(result.stdout).toContain('exe=');
+    expect(result.stdout).toContain('pid=1');
+  });
+
+  it('runs Rust std path list helpers through the Codepod std patch', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-paths-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('split=/bin:/usr/bin\njoined=/bin:/usr/bin\ninvalid=true');
+  });
+
+  it('runs Rust std filesystem helpers through the Codepod std patch', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-fs-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('canonical=');
+    expect(result.stdout).toContain('codepod-std-fs-canary.txt');
+    expect(result.stdout).toContain('contents=codepod');
+  });
+
+  it('runs Rust std file locks with real conflict behavior', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-file-lock-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('exclusive-blocks=true');
+  });
+
+  it('runs Rust std available_parallelism through the Codepod std patch', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-thread-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^parallelism=\d+$/);
+  });
+
+  it('runs Rust std::process::Command status through libcodepod spawn/wait', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-process-status-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      'true success=true code=Some(0)\nfalse success=false code=Some(1)',
+    );
+  });
+
+  it('runs Rust std::process::Command output through libcodepod pipes', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-process-output-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('status=Some(0) stdout="hello-rust" stderr=""');
+  });
+
+  it('runs Rust std::process::Command env and cwd through libcodepod spawn', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-process-env-cwd-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('env-status=Some(0)');
+    expect(result.stdout).toContain('cwd-status=Some(0)');
+    expect(result.stdout).toContain('cwd-stdout="marker.txt\\n"');
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
@@ -201,7 +348,7 @@ describe('Guest compatibility canaries', () => {
     });
 
     // Invoking /usr/bin/seq directly (absolute path, not bare name) must work.
-    // Before the Gap-1 fix, exec_path would try to execute the S_TOOL stub
+    // Before the Gap-1 fix, exec_path would try to execute the tool stub
     // content as a shell script and return exit code 127.
     const result = await sandbox.run('/usr/bin/seq 1 3');
 

@@ -365,6 +365,27 @@ describe('WasiHost', () => {
       const errno = wasi.path_open(3, 0, 500, pathStr.length, 0, BigInt(0), BigInt(0), 0, 400);
       expect(errno).toBe(WASI_ENOENT);
     });
+
+    it('resolves root-preopen relative paths from process cwd', () => {
+      vfs.mkdir('/tmp/std-process-cwd');
+      vfs.writeFile('/tmp/std-process-cwd/marker.txt', new TextEncoder().encode('cwd-ok'));
+      const cwdHost = new WasiHost({
+        vfs,
+        args: ['program'],
+        env: {},
+        preopens: { '/': '/' },
+        cwd: '/tmp/std-process-cwd',
+      });
+      cwdHost.setMemory(memory);
+      const { wasi, view, bytes } = getImportsAndView(cwdHost, memory);
+
+      const pathStr = 'marker.txt';
+      bytes.set(new TextEncoder().encode(pathStr), 500);
+
+      const errno = wasi.path_open(3, 0, 500, pathStr.length, 0, BigInt(0), BigInt(0), 0, 400);
+      expect(errno).toBe(WASI_ESUCCESS);
+      expect(view.getUint32(400, true)).toBeGreaterThanOrEqual(4);
+    });
   });
 
   describe('path_create_directory', () => {

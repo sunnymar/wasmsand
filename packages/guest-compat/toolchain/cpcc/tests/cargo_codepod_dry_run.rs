@@ -1,8 +1,12 @@
 use cpcc_toolchain::cargo_codepod::{plan_invocation, plan_invocation_with_sdk, profile_from_args, Subcommand};
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn build_subcommand_uses_wasm32_wasip1_target() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let plan = plan_invocation(Subcommand::Build, &["--release".into()]).unwrap();
     assert!(plan.cargo_args.iter().any(|a| a == "build"));
     assert!(plan.cargo_args.iter().any(|a| a == "--target=wasm32-wasip1"));
@@ -11,6 +15,7 @@ fn build_subcommand_uses_wasm32_wasip1_target() {
 
 #[test]
 fn test_subcommand_uses_wasm32_wasip1_target() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let plan = plan_invocation(Subcommand::Test, &[]).unwrap();
     assert!(plan.cargo_args.iter().any(|a| a == "test"));
     assert!(plan.cargo_args.iter().any(|a| a == "--target=wasm32-wasip1"));
@@ -18,6 +23,7 @@ fn test_subcommand_uses_wasm32_wasip1_target() {
 
 #[test]
 fn run_subcommand_uses_wasm32_wasip1_target() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let plan = plan_invocation(Subcommand::Run, &["--bin".into(), "foo".into()]).unwrap();
     assert!(plan.cargo_args.iter().any(|a| a == "run"));
     assert!(plan.cargo_args.iter().any(|a| a == "--target=wasm32-wasip1"));
@@ -27,6 +33,7 @@ fn run_subcommand_uses_wasm32_wasip1_target() {
 
 #[test]
 fn injected_env_includes_codepod_link_injected() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let plan = plan_invocation(Subcommand::Build, &[]).unwrap();
     assert_eq!(
         plan.env.iter().find(|(k, _)| k == "CODEPOD_LINK_INJECTED").map(|(_, v)| v.as_str()),
@@ -36,6 +43,7 @@ fn injected_env_includes_codepod_link_injected() {
 
 #[test]
 fn dry_run_does_not_set_target_specific_env_when_archive_missing() {
+    let _guard = ENV_LOCK.lock().unwrap();
     // Without CPCC_ARCHIVE pointing somewhere real, the linker/RUSTFLAGS env
     // vars are not set — letting the user diagnose "where's my archive?"
     // before they run a build.
@@ -46,6 +54,7 @@ fn dry_run_does_not_set_target_specific_env_when_archive_missing() {
 
 #[test]
 fn linker_injected_when_clang_supplied() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let plan = plan_invocation_with_sdk(
         Subcommand::Build,
         &[],
@@ -62,6 +71,7 @@ fn linker_injected_when_clang_supplied() {
 
 #[test]
 fn linker_omitted_when_clang_missing() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let plan = plan_invocation_with_sdk(Subcommand::Build, &[], None).unwrap();
     let linker = plan
         .env
@@ -82,6 +92,7 @@ fn profile_debug_when_release_flag_absent() {
 
 #[test]
 fn clang_linker_omitted_when_cpcc_no_clang_linker_set() {
+    let _guard = ENV_LOCK.lock().unwrap();
     // Save and restore to avoid cross-test contamination.
     let prev = std::env::var_os("CPCC_NO_CLANG_LINKER");
     std::env::set_var("CPCC_NO_CLANG_LINKER", "1");
@@ -100,4 +111,93 @@ fn clang_linker_omitted_when_cpcc_no_clang_linker_set() {
         .iter()
         .find(|(k, _)| k == "CARGO_TARGET_WASM32_WASIP1_LINKER");
     assert!(linker.is_none(), "CPCC_NO_CLANG_LINKER=1 should skip linker injection even when clang is supplied");
+}
+
+#[test]
+fn built_std_env_is_composed_into_target_rustflags() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let prev = std::env::var_os("CODEPOD_RUST_STD");
+    std::env::set_var("CODEPOD_RUST_STD", "/tmp/codepod-rust-std");
+
+    let plan = plan_invocation(Subcommand::Build, &[]).unwrap();
+
+    match prev {
+        Some(v) => std::env::set_var("CODEPOD_RUST_STD", v),
+        None => std::env::remove_var("CODEPOD_RUST_STD"),
+    }
+
+    let flags = plan
+        .env
+        .iter()
+        .find(|(k, _)| k == "CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    assert!(
+        flags.contains("--sysroot=/tmp/codepod-rust-std"),
+        "flags: {flags}"
+    );
+}
+
+#[test]
+fn codepod_home_std_is_composed_when_manifest_opts_in() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let codepod_home = tmp.path().join("home");
+    let std_lib = codepod_home.join("rust-std/1.93.0/lib/rustlib/wasm32-wasip1/lib");
+    std::fs::create_dir_all(&std_lib).unwrap();
+    let manifest = tmp.path().join("Cargo.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.codepod]
+target = "wasm32-wasip1"
+rust_std = "auto"
+"#,
+    )
+    .unwrap();
+
+    let prev_home = std::env::var_os("CODEPOD_HOME");
+    let prev_std = std::env::var_os("CODEPOD_RUST_STD");
+    let prev_rustc = std::env::var_os("CODEPOD_RUSTC_VERSION");
+    std::env::set_var("CODEPOD_HOME", &codepod_home);
+    std::env::remove_var("CODEPOD_RUST_STD");
+    std::env::set_var("CODEPOD_RUSTC_VERSION", "rustc 1.93.0 (abcdef 2026-01-01)");
+
+    let plan = plan_invocation(
+        Subcommand::Build,
+        &["--manifest-path".into(), manifest.display().to_string()],
+    )
+    .unwrap();
+
+    match prev_home {
+        Some(v) => std::env::set_var("CODEPOD_HOME", v),
+        None => std::env::remove_var("CODEPOD_HOME"),
+    }
+    match prev_std {
+        Some(v) => std::env::set_var("CODEPOD_RUST_STD", v),
+        None => std::env::remove_var("CODEPOD_RUST_STD"),
+    }
+    match prev_rustc {
+        Some(v) => std::env::set_var("CODEPOD_RUSTC_VERSION", v),
+        None => std::env::remove_var("CODEPOD_RUSTC_VERSION"),
+    }
+
+    let flags = plan
+        .env
+        .iter()
+        .find(|(k, _)| k == "CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    assert!(
+        flags.contains(&format!(
+            "--sysroot={}",
+            codepod_home.join("rust-std/1.93.0").display()
+        )),
+        "flags: {flags}"
+    );
 }

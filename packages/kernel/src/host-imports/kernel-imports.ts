@@ -225,6 +225,23 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       return 0;
     },
 
+    // host_file_lock(fd, operation) -> i32
+    // flock(2)-style advisory locking for VFS file descriptors.
+    host_file_lock(fd: number, operation: number): number {
+      if (!opts.kernel) return -38; // ENOSYS
+      const LOCK_SH = 1;
+      const LOCK_EX = 2;
+      const LOCK_UN = 8;
+      if ((operation & LOCK_UN) !== 0) {
+        const errno = opts.kernel.unlockFile(callerPid, fd);
+        return errno === 0 ? 0 : -errno;
+      }
+      const exclusive = (operation & LOCK_EX) !== 0;
+      if (!exclusive && (operation & LOCK_SH) === 0) return -22; // EINVAL
+      const errno = opts.kernel.lockFile(callerPid, fd, exclusive);
+      return errno === 0 ? 0 : -errno;
+    },
+
     // host_read_fd(fd, out_ptr, out_cap) -> i32
     // Reads all available data from a pipe fd and writes it to the output buffer.
     host_read_fd(fd: number, outPtr: number, outCap: number): number {

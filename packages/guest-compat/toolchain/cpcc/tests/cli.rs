@@ -131,6 +131,38 @@ fn dry_run_injects_compat_archive_and_isystem() {
 }
 
 #[test]
+fn dry_run_marks_setjmp_opt_in_builds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::create_dir_all(root.join("share/wasi-sysroot")).unwrap();
+    let clang = root.join("bin/clang");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&clang, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&clang, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let out = Command::new(bin())
+        .env("WASI_SDK_PATH", root)
+        .env("CPCC_ARCHIVE", "/fake/libcodepod.a")
+        .env("CPCC_SETJMP_ARCHIVE", "/fake/libcodepod_setjmp.a")
+        .env("CPCC_INCLUDE", "/fake/include")
+        .env("CPCC_SKIP_VERSION_CHECK", "1")
+        .env("CPCC_USE_SETJMP", "1")
+        .arg("--dry-run")
+        .arg("foo.c")
+        .arg("-o")
+        .arg("foo.wasm")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("-DCODEPOD_USE_SETJMP=1"), "{stdout}");
+    assert!(stdout.contains("/fake/libcodepod_setjmp.a"), "{stdout}");
+}
+
+#[test]
 fn missing_version_sentinel_is_a_hard_error() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();

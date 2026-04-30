@@ -2,8 +2,11 @@ pub mod archive;
 pub mod cargo_codepod;
 pub mod conform;
 pub mod env;
+pub mod features;
+pub mod maturin_codepod;
 pub mod precheck;
 pub mod preserve;
+pub mod rust_std;
 pub mod spec;
 pub mod trace;
 pub mod wasi_sdk;
@@ -74,3 +77,7 @@ pub const TIER1: &[&str] = &[
     "wait",
     "waitpid",
 ];
+
+/// POSIX symbols that are also present as strong wasi-libc definitions.
+/// Link with `--wrap` so guests consistently call libcodepod's versions.
+pub const WRAPPED_WASI_LIBC_SYMBOLS: &[&str] = &["accept", "getsockopt", "recv", "send"];

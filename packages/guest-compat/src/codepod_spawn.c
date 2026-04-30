@@ -379,8 +379,8 @@ static int do_posix_spawn(pid_t *pid_out, const char *prog,
   if (json_emit_string(json, cap, &pos, prog) != 0) goto fail_json;
   if (json_emit_lit(json, cap, &pos, ",\"args\":[") != 0) goto fail_json;
   if (argv) {
-    for (int i = 0; argv[i]; i++) {
-      if (i > 0 && json_emit_lit(json, cap, &pos, ",") != 0) goto fail_json;
+    for (int i = 1; argv[i]; i++) {
+      if (i > 1 && json_emit_lit(json, cap, &pos, ",") != 0) goto fail_json;
       if (json_emit_string(json, cap, &pos, argv[i]) != 0) goto fail_json;
     }
   }

@@ -3,7 +3,7 @@ use clap::Parser;
 use std::ffi::OsString;
 use std::process::{Command, ExitCode};
 
-use cpcc_toolchain::{archive, env, preserve, wasi_sdk, wasm_opt, TIER1};
+use cpcc_toolchain::{archive, env, features, preserve, wasi_sdk, wasm_opt, TIER1};
 
 #[derive(Parser, Debug)]
 #[command(name = "cpcc", version, about = "Clang wrapper for the codepod guest compatibility runtime", long_about = None)]
@@ -79,6 +79,13 @@ fn build_clang_invocation(
             argv.push("-Wl,--whole-archive".into());
             argv.push(archive.clone().into_os_string());
             argv.push("-Wl,--no-whole-archive".into());
+            if env.use_setjmp {
+                if let Some(setjmp_archive) = env.setjmp_archive.as_ref() {
+                    argv.push("-Wl,--whole-archive".into());
+                    argv.push(setjmp_archive.clone().into_os_string());
+                    argv.push("-Wl,--no-whole-archive".into());
+                }
+            }
             for sym in TIER1 {
                 // Always force-export the Tier 1 symbol itself.  This
                 // is what structural verification (default) checks
@@ -102,6 +109,9 @@ fn build_clang_invocation(
     // sites are no-ops) — the production / default mode.
     if env.markers_enabled {
         argv.push("-DCODEPOD_GUEST_COMPAT_MARKERS=1".into());
+    }
+    if env.use_setjmp {
+        argv.push("-DCODEPOD_USE_SETJMP=1".into());
     }
     argv
 }
@@ -154,7 +164,10 @@ fn main() -> Result<ExitCode> {
             preserve::copy_to_preserve(&out_wasm, env.preserve_pre_opt.as_deref())?;
         }
         if let Some(out_path) = preserve::output_path(&cli.args) {
-            wasm_opt::maybe_run(&out_path, &env.wasm_opt)?;
+            wasm_opt::maybe_run(&out_path, &env.wasm_opt, env.use_setjmp)?;
+            if env.use_setjmp {
+                features::append_setjmp_features(&out_path)?;
+            }
         }
     }
 

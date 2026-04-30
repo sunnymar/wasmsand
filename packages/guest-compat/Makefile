@@ -20,6 +20,7 @@ CPCC := $(REPO_ROOT)/target/release/cpcc
 CPAR := $(REPO_ROOT)/target/release/cpar
 
 LIB := $(BUILD_DIR)/libcodepod_guest_compat.a
+SETJMP_LIB := $(BUILD_DIR)/libcodepod_setjmp.a
 LIB_OBJS := \
   $(BUILD_DIR)/codepod_command.o \
   $(BUILD_DIR)/codepod_dup.o \
@@ -31,7 +32,6 @@ LIB_OBJS := \
   $(BUILD_DIR)/codepod_process.o \
   $(BUILD_DIR)/codepod_resource.o \
   $(BUILD_DIR)/codepod_sched.o \
-  $(BUILD_DIR)/codepod_setjmp.o \
   $(BUILD_DIR)/codepod_signal.o \
   $(BUILD_DIR)/codepod_spawn.o \
   $(BUILD_DIR)/codepod_sysinfo.o \
@@ -64,8 +64,22 @@ $(BUILD_DIR)/%.o: src/%.c include/codepod_compat.h src/codepod_runtime.h src/cod
 
 lib: $(LIB)
 
+SETJMP_OBJS := \
+  $(BUILD_DIR)/codepod_setjmp.o
+
 $(LIB): $(LIB_OBJS) | $(BUILD_DIR) ensure-toolchain
 	$(CPAR) rcs $@ $(LIB_OBJS)
+
+$(SETJMP_LIB): $(SETJMP_OBJS) | $(BUILD_DIR) ensure-toolchain
+	$(CPAR) rcs $@ $(SETJMP_OBJS)
+
+$(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(LIB) $(SETJMP_LIB) | $(BUILD_DIR) ensure-toolchain
+	CPCC_ARCHIVE=$(abspath $(LIB)) \
+	CPCC_SETJMP_ARCHIVE=$(abspath $(SETJMP_LIB)) \
+	CPCC_USE_SETJMP=1 \
+	CPCC_INCLUDE=$(INCLUDE) \
+	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/setjmp-canary.pre-opt.wasm \
+	$(CPCC) $< -o $@
 
 $(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(LIB) | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE=$(abspath $(LIB)) \
@@ -84,8 +98,9 @@ clean:
 RUST_CANARY_NAMES := dup2 getgroups affinity signal
 RUST_CANARY_PRE_OPT := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.pre-opt.wasm,$(RUST_CANARY_NAMES)))
 RUST_CANARY_WASM := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.wasm,$(RUST_CANARY_NAMES)))
+RUST_STD_CANARY_NAMES := std-tempdir std-env-process std-paths std-fs std-file-lock std-thread std-process-status std-process-output std-process-env-cwd
 
-.PHONY: rust-canaries
+.PHONY: rust-canaries rust-std-canaries
 
 rust-canaries: $(LIB) ensure-toolchain
 	@mkdir -p $(BUILD_DIR)/rust
@@ -97,4 +112,26 @@ rust-canaries: $(LIB) ensure-toolchain
 	  -p dup2-canary -p getgroups-canary -p affinity-canary -p signal-canary
 	@for n in $(RUST_CANARY_NAMES); do \
 	  cp $(REPO_ROOT)/target/wasm32-wasip1/release/$$n-canary.wasm $(BUILD_DIR)/rust/$$n-canary.wasm; \
+	done
+
+rust-std-canaries: $(LIB) ensure-toolchain
+	@mkdir -p $(BUILD_DIR)/rust
+	@version=$$(rustc --version | awk '{print $$2}'); \
+	std_root="$(REPO_ROOT)/packages/guest-compat/build/rust-std/$$version"; \
+	if [ ! -d "$$std_root/lib/rustlib/wasm32-wasip1/lib" ]; then \
+	  echo "missing Codepod Rust std for $$version; run scripts/build-rust-std.sh --rust $$version" >&2; \
+	  exit 1; \
+	fi; \
+	rm -rf $(REPO_ROOT)/target/rust-std-canaries/$$version; \
+	for n in $(RUST_STD_CANARY_NAMES); do \
+	  CPCC_ARCHIVE=$(abspath $(LIB)) \
+	  CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/rust \
+	  CPCC_NO_WASM_OPT=1 \
+	  CODEPOD_RUST_STD="$$std_root" \
+	  CARGO_TARGET_DIR=$(REPO_ROOT)/target/rust-std-canaries/$$version \
+	  $(REPO_ROOT)/target/release/cargo-codepod codepod build --release \
+	    --manifest-path $(REPO_ROOT)/packages/guest-compat/conformance/rust/$$n-canary/Cargo.toml; \
+	  cp $(REPO_ROOT)/target/rust-std-canaries/$$version/wasm32-wasip1/release/$$n-canary.wasm \
+	    $(BUILD_DIR)/rust/$$n-canary.wasm; \
+	  cp $(BUILD_DIR)/rust/$$n-canary.wasm $(FIXTURES)/$$n-canary.wasm; \
 	done

@@ -11,12 +11,14 @@
  */
 
 #include "codepod_markers.h"
+#include "codepod_runtime.h"
 
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/resource.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -105,6 +107,20 @@ CODEPOD_DEFINE_MARKER(ftrylockfile, 0x66747279u) /* "ftry" */
 void flockfile(FILE *f)    { CODEPOD_MARKER_CALL(flockfile);    (void)f; }
 void funlockfile(FILE *f)  { CODEPOD_MARKER_CALL(funlockfile);  (void)f; }
 int  ftrylockfile(FILE *f) { CODEPOD_MARKER_CALL(ftrylockfile); (void)f; return 0; }
+
+/* ── File advisory locks ── */
+CODEPOD_DECLARE_MARKER(flock);
+CODEPOD_DEFINE_MARKER(flock, 0x666c636bu) /* "flck" */
+
+int flock(int fd, int operation) {
+  CODEPOD_MARKER_CALL(flock);
+  int rc = codepod_host_file_lock(fd, operation);
+  if (rc < 0) {
+    errno = -rc;
+    return -1;
+  }
+  return 0;
+}
 
 /* ── qsort_r — GNU-flavor (4-arg with arg-after-comparator) ──
  * wasi-libc has qsort but not qsort_r.  gnulib's lib/savedir.c uses

@@ -1,0 +1,53 @@
+--- a/library/std/src/sys/fs/wasi.rs
++++ b/library/std/src/sys/fs/wasi.rs
+@@ -11,10 +11,13 @@
+ use crate::sys::fd::WasiFd;
+ pub use crate::sys::fs::common::exists;
+ use crate::sys::time::SystemTime;
+ use crate::sys::{unsupported, unsupported_err};
+ use crate::sys_common::{AsInner, FromInner, IntoInner, ignore_notfound};
+ use crate::{fmt, iter, ptr};
+
++#[path = "codepod_fs.rs"]
++mod codepod_fs;
++
+ pub struct File {
+     fd: WasiFd,
+ }
+@@ -530,9 +533,7 @@
+     }
+
+     pub fn set_permissions(&self, _perm: FilePermissions) -> io::Result<()> {
+-        // Permissions haven't been fully figured out in wasi yet, so this is
+-        // likely temporary
+-        unsupported()
++        Ok(())
+     }
+
+     pub fn set_times(&self, times: FileTimes) -> io::Result<()> {
+@@ -629,10 +630,8 @@
+     old.rename(osstr2str(old_file.as_ref())?, &new, osstr2str(new_file.as_ref())?)
+ }
+
+-pub fn set_perm(_p: &Path, _perm: FilePermissions) -> io::Result<()> {
+-    // Permissions haven't been fully figured out in wasi yet, so this is
+-    // likely temporary
+-    unsupported()
++pub fn set_perm(p: &Path, _perm: FilePermissions) -> io::Result<()> {
++    stat(p).map(|_| ())
+ }
+
+ #[inline(always)]
+@@ -742,10 +741,8 @@
+     Ok(FileAttr { meta })
+ }
+
+-pub fn canonicalize(_p: &Path) -> io::Result<PathBuf> {
+-    // This seems to not be in wasi's API yet, and we may need to end up
+-    // emulating it ourselves. For now just return an error.
+-    unsupported()
++pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
++    codepod_fs::canonicalize(p)
+ }
+
+ fn open_at(fd: &WasiFd, path: &Path, opts: &OpenOptions) -> io::Result<File> {

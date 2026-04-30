@@ -92,6 +92,14 @@ pub fn plan_invocation_with_sdk(
         }
     }
 
+    let mut rustflags = std::env::var("CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS").unwrap_or_default();
+    if let Some(std_root) = crate::rust_std::resolve_std_for_invocation(forwarded)? {
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        rustflags.push_str(&format!("--sysroot={}", std_root.display()));
+    }
+
     if let Some(archive) = &env.archive {
         // §Override And Link Precedence: --whole-archive bracket the compat
         // archive, then per-Tier-1-symbol --export framing so the
@@ -103,22 +111,42 @@ pub fn plan_invocation_with_sdk(
         // directly (CPCC_NO_CLANG_LINKER=1), the `-Wl,` prefix must be
         // omitted — rust-lld receives -C link-arg values verbatim and doesn't
         // understand `-Wl,` itself.
-        let (wa_open, wa_close, flag_prefix) = if skip_clang_linker {
-            ("--whole-archive", "--no-whole-archive", "--export=")
+        let (wa_open, wa_close, linker_flag_prefix, export_flag_prefix) = if skip_clang_linker {
+            ("--whole-archive", "--no-whole-archive", "", "--export=")
         } else {
-            ("-Wl,--whole-archive", "-Wl,--no-whole-archive", "-Wl,--export=")
+            (
+                "-Wl,--whole-archive",
+                "-Wl,--no-whole-archive",
+                "-Wl,",
+                "-Wl,--export=",
+            )
         };
 
-        let mut rustflags = String::new();
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        // Some POSIX names are already present as strong wasi-libc stubs.
+        // libcodepod.a is deliberately whole-archived before libc so the
+        // codepod definitions are the ones exported; allow the intentional
+        // duplicate definitions instead of making Rust FFI users fail to link.
+        rustflags.push_str(&format!(
+            "-C link-arg={linker_flag_prefix}--allow-multiple-definition "
+        ));
+        for sym in crate::WRAPPED_WASI_LIBC_SYMBOLS {
+            rustflags.push_str(&format!("-C link-arg={linker_flag_prefix}--wrap={sym} "));
+        }
         rustflags.push_str(&format!("-C link-arg={wa_open} "));
         rustflags.push_str(&format!("-C link-arg={} ", archive.display()));
         rustflags.push_str(&format!("-C link-arg={wa_close} "));
         for sym in crate::TIER1 {
-            rustflags.push_str(&format!("-C link-arg={flag_prefix}{sym} "));
+            rustflags.push_str(&format!("-C link-arg={export_flag_prefix}{sym} "));
             rustflags.push_str(&format!(
-                "-C link-arg={flag_prefix}__codepod_guest_compat_marker_{sym} "
+                "-C link-arg={export_flag_prefix}__codepod_guest_compat_marker_{sym} "
             ));
         }
+    }
+
+    if !rustflags.is_empty() {
         plan.env.push((
             "CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS".to_string(),
             rustflags.trim_end().to_string(),

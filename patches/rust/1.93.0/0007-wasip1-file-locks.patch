@@ -1,0 +1,31 @@
+--- a/library/std/src/sys/fs/wasi.rs
++++ b/library/std/src/sys/fs/wasi.rs
+@@ -458,23 +458,23 @@ impl File {
+     }
+
+     pub fn lock(&self) -> io::Result<()> {
+-        unsupported()
++        codepod_fs::lock(self.fd.as_raw_fd())
+     }
+
+     pub fn lock_shared(&self) -> io::Result<()> {
+-        unsupported()
++        codepod_fs::lock_shared(self.fd.as_raw_fd())
+     }
+
+     pub fn try_lock(&self) -> Result<(), TryLockError> {
+-        Err(TryLockError::Error(unsupported_err()))
++        codepod_fs::try_lock(self.fd.as_raw_fd())
+     }
+
+     pub fn try_lock_shared(&self) -> Result<(), TryLockError> {
+-        Err(TryLockError::Error(unsupported_err()))
++        codepod_fs::try_lock_shared(self.fd.as_raw_fd())
+     }
+
+     pub fn unlock(&self) -> io::Result<()> {
+-        unsupported()
++        codepod_fs::unlock(self.fd.as_raw_fd())
+     }
+
+     pub fn truncate(&self, size: u64) -> io::Result<()> {

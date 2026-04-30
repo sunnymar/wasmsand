@@ -9,12 +9,13 @@
 
 import { FdTable } from '../vfs/fd-table.js';
 import type { OpenMode, SeekWhence } from '../vfs/fd-table.js';
+import { KERNEL_FD_BASE, type ProcessKernel } from '../process/kernel.ts';
 import { VfsError } from '../vfs/inode.js';
 import type { InodeType } from '../vfs/inode.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
 import { fdErrorToWasi, vfsErrnoToWasi } from './errors.js';
 import type { FdTarget } from './fd-target.js';
-import { createBufferTarget, createStaticTarget, createNullTarget, bufferToString } from './fd-target.js';
+import { createBufferTarget, createStaticTarget, createNullTarget, createVfsFileTarget, bufferToString } from './fd-target.js';
 import {
   WASI_EBADF,
   WASI_EINVAL,
@@ -59,16 +60,22 @@ export interface WasiHostOptions {
   args: string[];
   env: Record<string, string>;
   preopens: Record<string, string>;
+  cwd?: string;
   stdin?: Uint8Array;
   stdoutLimit?: number;
   stderrLimit?: number;
   deadlineMs?: number;
   /** Per-fd I/O targets. If provided, overrides stdin/stdoutLimit/stderrLimit. */
   ioFds?: Map<number, FdTarget>;
-  /** Caller pid — used to resolve /proc/self → /proc/<pid> and to
-   *  surface readlink("/proc/self") = "<pid>".  Defaults to 0 when
-   *  omitted (standalone spawn paths that don't allocate a kernel pid). */
+  /** Optional process kernel for WASI fd_close over kernel-managed descriptors. */
+  kernel?: ProcessKernel;
   pid?: number;
+  /**
+   * Allow pipe reads to return a Promise when the current module has a
+   * suspension mechanism. JSPI makes this true for every module; without JSPI,
+   * the loader enables it for modules that are Asyncify-instrumented.
+   */
+  canSuspendPipeReads?: boolean;
 }
 
 interface PreopenEntry {
@@ -122,11 +129,42 @@ function wasiWhenceToVfs(whence: number): SeekWhence {
   }
 }
 
+function normalizeVfsPath(path: string): string {
+  const parts: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join('/')}`;
+}
+
+function joinVfsPath(base: string, relativePath: string): string {
+  if (relativePath.startsWith('/')) {
+    return normalizeVfsPath(relativePath);
+  }
+  if (relativePath === '' || relativePath === '.') {
+    return base;
+  }
+  return normalizeVfsPath(base === '/' ? `/${relativePath}` : `${base}/${relativePath}`);
+}
+
+function parentPath(path: string): string {
+  const normalized = normalizeVfsPath(path);
+  if (normalized === '/') return '/';
+  const slash = normalized.lastIndexOf('/');
+  return slash <= 0 ? '/' : normalized.slice(0, slash);
+}
+
 export class WasiHost {
   private vfs: VfsLike;
   private fdTable: FdTable;
   private args: string[];
   private envPairs: string[];
+  private cwd: string;
   private preopens: PreopenEntry[];
   private memory: WebAssembly.Memory | null = null;
   private exitCode: number | null = null;
@@ -141,7 +179,9 @@ export class WasiHost {
 
   private cancelled = false;
   private deadlineMs: number = Infinity;
-  private readonly pid: number;
+  private kernel?: ProcessKernel;
+  private pid?: number;
+  private canSuspendPipeReads = false;
 
   constructor(options: WasiHostOptions) {
     this.vfs = options.vfs;
@@ -150,8 +190,11 @@ export class WasiHost {
     this.envPairs = Object.entries(options.env).map(
       ([k, v]) => `${k}=${v}`,
     );
+    this.cwd = normalizeVfsPath(options.cwd ?? '/');
     this.deadlineMs = options.deadlineMs ?? Infinity;
-    this.pid = options.pid ?? 0;
+    this.kernel = options.kernel;
+    this.pid = options.pid;
+    this.canSuspendPipeReads = options.canSuspendPipeReads ?? false;
     this.preopens = [];
 
     // Build I/O fd table: use provided ioFds or build from legacy options.
@@ -239,35 +282,8 @@ export class WasiHost {
     return this.ioFds;
   }
 
-  /** Public fd renumbering entrypoint for guest-side libc compatibility.
-   *
-   * POSIX `dup2(oldfd, newfd)` aliases `newfd` to the same open file
-   * description as `oldfd` and leaves `oldfd` open — unlike WASI
-   * `fd_renumber`, which closes the source.  The guest-compat shim calls
-   * here via `host_dup2`, so we must preserve the source side.  Copying
-   * the ioFds entry (instead of routing through `fdRenumber`) keeps
-   * `write(fromFd, ...)` working after `dup2`.
-   */
-  renumberFd(fromFd: number, toFd: number): number {
-    if (fromFd === toFd) {
-      if (this.ioFds.has(fromFd) || this.dirFds.has(fromFd) || this.fdTable.isOpen(fromFd)) {
-        return WASI_ESUCCESS;
-      }
-      return WASI_EBADF;
-    }
-    if (this.ioFds.has(fromFd)) {
-      const source = this.ioFds.get(fromFd)!;
-      if (this.ioFds.has(toFd)) {
-        this.ioFds.delete(toFd);
-      } else if (this.dirFds.has(toFd)) {
-        this.dirFds.delete(toFd);
-      } else if (this.fdTable.isOpen(toFd)) {
-        try { this.fdTable.close(toFd); } catch { /* ignore */ }
-      }
-      this.ioFds.set(toFd, source);
-      return WASI_ESUCCESS;
-    }
-    return this.fdRenumber(fromFd, toFd);
+  setCanSuspendPipeReads(enabled: boolean): void {
+    this.canSuspendPipeReads = enabled;
   }
 
   /** Signal cancellation — next syscall check will throw WasiExitError. */
@@ -296,10 +312,43 @@ export class WasiHost {
    * Non-zero exit codes are returned without throwing. Other errors
    * (e.g. traps) are re-thrown to the caller.
    */
-  start(instance: WebAssembly.Instance): number {
+  start(instance: WebAssembly.Instance, startFn?: () => unknown): number {
     this.setMemory(instance.exports.memory as WebAssembly.Memory);
     try {
-      (instance.exports._start as Function)();
+      (startFn ?? (instance.exports._start as Function))();
+      // Normal return from _start means exit code 0
+      this.exitCode = 0;
+      return 0;
+    } catch (e: unknown) {
+      if (e instanceof WasiExitError) {
+        return e.code;
+      }
+      // WASM trap (RuntimeError: unreachable) from a Rust panic.
+      // If stderr mentions "Broken pipe", treat as SIGPIPE (exit 141 = 128+13)
+      // instead of crashing — matches POSIX behavior.
+      if (e instanceof WebAssembly.RuntimeError) {
+        const stderr = this.getStderr();
+        if (stderr.includes('Broken pipe')) {
+          this.exitCode = 141;
+          return 141;
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Async variant of start() for Asyncify/JSPI-driven process entrypoints.
+   * Keeps the same exit-code and trap handling while allowing WASI imports
+   * such as fd_read to suspend and resume.
+   */
+  async startAsync(
+    instance: WebAssembly.Instance,
+    startFn?: () => unknown | Promise<unknown>,
+  ): Promise<number> {
+    this.setMemory(instance.exports.memory as WebAssembly.Memory);
+    try {
+      await (startFn ?? (instance.exports._start as Function))();
       // Normal return from _start means exit code 0
       this.exitCode = 0;
       return 0;
@@ -397,38 +446,39 @@ export class WasiHost {
 
   /**
    * Resolve a relative path from a directory fd to an absolute VFS path.
-   * Handles both preopened dirs and opened directory fds.  Also applies
-   * the /proc/self → /proc/<pid> rewrite (Linux's magic-symlink
-   * resolution): we don't store /proc/self as a real VFS symlink
-   * because the target is per-caller, so we substitute the caller's
-   * pid here at the syscall layer.  pathReadlink does its own check
-   * before this mapping so readlink("/proc/self") still returns the
-   * pid string instead of dereferencing into /proc/<pid>.
+   * Handles both preopened dirs and opened directory fds.
    */
   private resolvePath(dirFd: number, relativePath: string): string {
-    const joined = this.joinDirFd(dirFd, relativePath);
-    return this.mapProcSelf(joined);
-  }
-
-  /** Raw join without /proc/self mapping — used by pathReadlink to
-   *  detect /proc/self before it gets rewritten. */
-  private joinDirFd(dirFd: number, relativePath: string): string {
     const dirPath = this.dirFds.get(dirFd);
     if (dirPath === undefined) {
       throw new Error(`EBADF: not a directory fd: ${dirFd}`);
     }
-    if (dirPath === '/') {
-      return '/' + relativePath;
+
+    if (dirPath !== '/') {
+      return joinVfsPath(dirPath, relativePath);
     }
-    return dirPath + '/' + relativePath;
+    if (this.cwd === '/' || relativePath.startsWith('/')) {
+      return joinVfsPath('/', relativePath);
+    }
+    if (relativePath === '' || relativePath === '.') {
+      return this.cwd;
+    }
+
+    const cwdCandidate = joinVfsPath(this.cwd, relativePath);
+    const rootCandidate = joinVfsPath('/', relativePath);
+    if (this.pathExists(cwdCandidate)) return cwdCandidate;
+    if (this.pathExists(rootCandidate)) return rootCandidate;
+    if (this.pathExists(parentPath(cwdCandidate))) return cwdCandidate;
+    return rootCandidate;
   }
 
-  private mapProcSelf(absPath: string): string {
-    if (absPath === '/proc/self') return `/proc/${this.pid}`;
-    if (absPath.startsWith('/proc/self/')) {
-      return `/proc/${this.pid}/${absPath.slice('/proc/self/'.length)}`;
+  private pathExists(path: string): boolean {
+    try {
+      this.vfs.stat(path);
+      return true;
+    } catch {
+      return false;
     }
-    return absPath;
   }
 
   // ---- Syscall implementations ----
@@ -497,34 +547,14 @@ export class WasiHost {
     iovsPtr: number,
     iovsLen: number,
     nwrittenPtr: number,
-  ): number | Promise<number> {
+  ): number {
     this.checkDeadline();
     const view = this.getView();
     const bytes = this.getBytes();
     const iovecs = readIovecs(view, iovsPtr, iovsLen);
 
-    const target = this.ioFds.get(fd);
-
-    // Pipe writes get the async path so back-pressure works: when
-    // the pipe is full, writeAsync blocks until the reader drains
-    // (or returns -1 immediately if the read end has closed).  Sync
-    // pipe.write() returned 0 in the full-pipe case, which made
-    // wasi-libc spin in a busy loop with no progress and no chance
-    // for the reader to run on the JS event loop — `yes | head -3`
-    // would deadlock the moment the pipe filled up.
-    //
-    // Returning Promise<number> here is fine under JSPI: the
-    // Suspending-wrapped fd_write suspends the wasm stack until the
-    // Promise resolves. Without JSPI, many child tools are still plain
-    // wasm and cannot unwind here, so use the synchronous pipe path.
-    if (target && target.type === 'pipe_write') {
-      if (typeof WebAssembly.Suspending !== 'function') {
-        return this.fdWritePipeSync(target, iovecs, bytes, nwrittenPtr);
-      }
-      return this.fdWritePipe(target, iovecs, bytes, nwrittenPtr);
-    }
-
     let totalWritten = 0;
+    const target = this.ioFds.get(fd);
 
     for (const iov of iovecs) {
       const data = bytes.slice(iov.buf, iov.buf + iov.len);
@@ -545,9 +575,26 @@ export class WasiHost {
             totalWritten += data.byteLength;
             break;
           }
+          case 'pipe_write': {
+            const n = target.pipe.write(data);
+            if (n === -1) {
+              // EPIPE — read end closed
+              const viewAfter = this.getView();
+              viewAfter.setUint32(nwrittenPtr, totalWritten, true);
+              return WASI_EPIPE;
+            }
+            // Note: partial writes (n < data.byteLength) lose trailing bytes.
+            // Task 8 replaces this with JSPI async writes that block until fully written.
+            totalWritten += n;
+            break;
+          }
           case 'null': {
             // Discard data, report full write
             totalWritten += data.byteLength;
+            break;
+          }
+          case 'vfs_file': {
+            totalWritten += target.fdTable.write(target.fd, data);
             break;
           }
           case 'static':
@@ -572,87 +619,6 @@ export class WasiHost {
     return WASI_ESUCCESS;
   }
 
-  /**
-   * Async pipe write — blocks until every iovec's bytes are
-   * actually accepted by the pipe (or until the read end closes,
-   * which surfaces as EPIPE).  Pairs with the fdReadPipe helper
-   * so producers and consumers can handshake naturally instead of
-   * busy-waiting on a full or empty pipe.
-   *
-   * writeAsync's contract is "returns how many bytes the pipe
-   * accepted in this round" (which can be a partial write when the
-   * reader drained some but not enough), so we loop internally
-   * until the iovec is fully consumed or EPIPE.  Without this loop
-   * a busybox-style large-buffer write (`yes hello` builds a 4 KiB
-   * buffer of repeated "hello\n" and writes it in one go) would
-   * silently drop the trailing bytes that a single drain didn't
-   * fit, then move on to the next iovec — the producer thinks it
-   * succeeded and never blocks again, but the consumer never sees
-   * a full record.
-   */
-  private async fdWritePipe(
-    target: Extract<import('./fd-target.js').FdTarget, { type: 'pipe_write' }>,
-    iovecs: Array<{ buf: number; len: number }>,
-    initialBytes: Uint8Array,
-    nwrittenPtr: number,
-  ): Promise<number> {
-    let totalWritten = 0;
-    // Snapshot each iovec into a host-owned buffer up front: wasm
-    // memory may be re-grown on reentry from the bridge / suspend
-    // path, invalidating any view we'd hold across awaits.
-    const chunks: Uint8Array[] = iovecs.map(iov =>
-      initialBytes.slice(iov.buf, iov.buf + iov.len),
-    );
-    for (let chunk of chunks) {
-      while (chunk.byteLength > 0) {
-        const n = await target.pipe.writeAsync(chunk);
-        if (n === -1) {
-          // EPIPE — read end closed mid-write.
-          const viewAfter = this.getView();
-          viewAfter.setUint32(nwrittenPtr, totalWritten, true);
-          return WASI_EPIPE;
-        }
-        if (n === 0) {
-          // Defensive: writeAsync should always make progress (it
-          // either fills space, blocks, or returns -1).  A 0 return
-          // would loop forever, so treat as EPIPE rather than
-          // hanging the wasm.
-          const viewAfter = this.getView();
-          viewAfter.setUint32(nwrittenPtr, totalWritten, true);
-          return WASI_EPIPE;
-        }
-        totalWritten += n;
-        chunk = chunk.subarray(n);
-      }
-    }
-    const viewAfter = this.getView();
-    viewAfter.setUint32(nwrittenPtr, totalWritten, true);
-    return WASI_ESUCCESS;
-  }
-
-  private fdWritePipeSync(
-    target: Extract<import('./fd-target.js').FdTarget, { type: 'pipe_write' }>,
-    iovecs: Array<{ buf: number; len: number }>,
-    initialBytes: Uint8Array,
-    nwrittenPtr: number,
-  ): number {
-    let totalWritten = 0;
-    for (const iov of iovecs) {
-      const data = initialBytes.slice(iov.buf, iov.buf + iov.len);
-      const n = target.pipe.write(data);
-      if (n === -1) {
-        const viewAfter = this.getView();
-        viewAfter.setUint32(nwrittenPtr, totalWritten, true);
-        return WASI_EPIPE;
-      }
-      totalWritten += n;
-      if (n < data.byteLength) break;
-    }
-    const viewAfter = this.getView();
-    viewAfter.setUint32(nwrittenPtr, totalWritten, true);
-    return WASI_ESUCCESS;
-  }
-
   private fdRead(
     fd: number,
     iovsPtr: number,
@@ -667,10 +633,11 @@ export class WasiHost {
     const target = this.ioFds.get(fd);
 
     // If the target is a pipe_read:
-    //   JSPI path — return a Promise; WASM suspends until data arrives.
-    //   Non-JSPI — read synchronously from buffered data; plain WASM can't await.
+    //   JSPI path — every module can suspend until data arrives.
+    //   Asyncify path — modules built with Asyncify can also suspend.
+    //   Unwrapped path — read synchronously from buffered data; plain WASM can't await.
     if (target && target.type === 'pipe_read') {
-      if (typeof WebAssembly.Suspending === 'function') {
+      if (this.canSuspendPipeReads || typeof WebAssembly.Suspending === 'function') {
         return this.fdReadPipe(target, iovecs, nreadPtr);
       }
       return this.fdReadPipeSync(target, iovecs, nreadPtr);
@@ -701,6 +668,21 @@ export class WasiHost {
           case 'null': {
             // /dev/null reads return EOF immediately
             break;
+          }
+          case 'vfs_file': {
+            const buf = new Uint8Array(iov.len);
+            const n = target.fdTable.read(target.fd, buf);
+            if (n > 0) {
+              const bytes = this.getBytes();
+              bytes.set(buf.subarray(0, n), iov.buf);
+              totalRead += n;
+            }
+            if (n < iov.len) {
+              const viewAfter = this.getView();
+              viewAfter.setUint32(nreadPtr, totalRead, true);
+              return WASI_ESUCCESS;
+            }
+            continue;
           }
           case 'buffer':
           case 'pipe_write': {
@@ -791,20 +773,22 @@ export class WasiHost {
   }
 
   private fdClose(fd: number): number {
-    // POSIX-style close: the guest can close any fd it holds, including
-    // stdio.  Returning EBADF here would break standard cleanup paths
-    // (jq, GNU coreutils, etc. all do `fclose(stdout)` at exit and
-    // treat a non-zero return as "writing output failed").
-    //
-    // For ioFds (stdio + custom kernel-wired fds) we just unregister
-    // the mapping — the underlying pipe / buffer is owned by the
-    // kernel and gets cleaned up when the process exits.  The
-    // important semantic is that subsequent fd_write on this fd
-    // returns EBADF, which falls out naturally since we removed the
-    // entry below.
     if (this.ioFds.has(fd)) {
-      this.ioFds.delete(fd);
-      return WASI_ESUCCESS;
+      if (this.kernel && this.pid !== undefined) {
+        return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+      }
+      return WASI_EBADF;
+    }
+
+    if (this.kernel && this.pid !== undefined) {
+      const target = this.kernel.getFdTarget(this.pid, fd);
+      if (target?.type === 'vfs_file') {
+        return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+      }
+    }
+
+    if (this.kernel && this.pid !== undefined && fd >= KERNEL_FD_BASE) {
+      return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
     }
 
     try {
@@ -1077,6 +1061,9 @@ export class WasiHost {
       }
 
       const fd = this.fdTable.open(absPath, mode);
+      if (this.kernel && this.pid !== undefined) {
+        this.kernel.setFdTarget(this.pid, fd, createVfsFileTarget(this.fdTable, fd));
+      }
       const view = this.getView();
       view.setUint32(fdPtr, fd, true);
       return WASI_ESUCCESS;
@@ -1223,15 +1210,8 @@ export class WasiHost {
     this.checkDeadline();
     try {
       const relativePath = this.readString(pathPtr, pathLen);
-      // Special-case /proc/self before mapping: Linux's readlink
-      // returns the pid as the symlink target, so report that
-      // directly instead of letting resolvePath rewrite it (after
-      // which it would point at a real directory, not a symlink).
-      const rawPath = this.joinDirFd(dirFd, relativePath);
-      const target =
-        rawPath === '/proc/self'
-          ? String(this.pid)
-          : this.vfs.readlink(this.mapProcSelf(rawPath));
+      const absPath = this.resolvePath(dirFd, relativePath);
+      const target = this.vfs.readlink(absPath);
       const encoded = this.encoder.encode(target);
       const bytes = this.getBytes();
       const view = this.getView();
@@ -1362,67 +1342,29 @@ export class WasiHost {
     }
   }
 
-  /**
-   * path_link — POSIX hard link via VFS.link().  Both old_path
-   * (resolved against old_dir_fd) and new_path (against new_dir_fd)
-   * end up referring to the same FileInode object, so writes
-   * through either name show up at the other.  old_flags currently
-   * ignored: we follow symlinks at the leaf (vfs.link's default),
-   * which matches typical Linux behavior unless AT_SYMLINK_FOLLOW
-   * is explicitly cleared.
-   */
-  private pathLink(
-    oldDirFd: number,
-    _oldFlags: number,
-    oldPathPtr: number,
-    oldPathLen: number,
-    newDirFd: number,
-    newPathPtr: number,
-    newPathLen: number,
-  ): number {
-    this.checkDeadline();
-    try {
-      const oldRelative = this.readString(oldPathPtr, oldPathLen);
-      const newRelative = this.readString(newPathPtr, newPathLen);
-      const oldAbs = this.resolvePath(oldDirFd, oldRelative);
-      const newAbs = this.resolvePath(newDirFd, newRelative);
-      if (typeof this.vfs.link !== 'function') {
-        return WASI_ENOTSUP;
-      }
-      this.vfs.link(oldAbs, newAbs);
-      return WASI_ESUCCESS;
-    } catch (err) {
-      if (err instanceof VfsError) {
-        return vfsErrnoToWasi(err.errno);
-      }
-      return fdErrorToWasi(err);
-    }
+  private pathLink(): number {
+    return WASI_ENOTSUP;
   }
 
   private fdRenumber(fromFd: number, toFd: number): number {
-    if (fromFd === toFd) {
-      if (this.ioFds.has(fromFd) || this.dirFds.has(fromFd) || this.fdTable.isOpen(fromFd)) {
-        return WASI_ESUCCESS;
+    const ioTarget = this.ioFds.get(fromFd);
+    if (ioTarget) {
+      this.ioFds.set(toFd, ioTarget);
+      if (this.kernel && this.pid !== undefined) {
+        try {
+          this.kernel.dup2(this.pid, fromFd, toFd);
+        } catch {
+          // The local ioFds map is authoritative for this WasiHost.
+        }
       }
-      return WASI_EBADF;
-    }
-
-    if (this.ioFds.has(fromFd)) {
-      const source = this.ioFds.get(fromFd)!;
-      if (this.ioFds.has(toFd)) {
-        this.ioFds.delete(toFd);
-      } else if (this.dirFds.has(toFd)) {
-        this.dirFds.delete(toFd);
-      } else if (this.fdTable.isOpen(toFd)) {
-        try { this.fdTable.close(toFd); } catch { /* ignore */ }
-      }
-      this.ioFds.set(toFd, source);
-      this.ioFds.delete(fromFd);
       return WASI_ESUCCESS;
     }
 
     if (this.ioFds.has(toFd)) {
       this.ioFds.delete(toFd);
+      if (this.kernel && this.pid !== undefined) {
+        this.kernel.closeFd(this.pid, toFd);
+      }
     }
 
     // Handle dirFd sources

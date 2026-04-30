@@ -53,6 +53,10 @@ path = "src/bin/cpconf.rs"
 name = "cargo-codepod"
 path = "src/bin/cargo-codepod.rs"
 
+[[bin]]
+name = "maturin-codepod"
+path = "src/bin/maturin-codepod.rs"
+
 [lib]
 path = "src/lib.rs"
 

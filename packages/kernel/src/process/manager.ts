@@ -8,20 +8,18 @@
 
 import type { PlatformAdapter } from '../platform/adapter.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
-import { S_TOOL } from '../vfs/inode.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
+import { AsyncifyAsyncBridge } from '../async-bridge.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
-import type { ExtensionHandler } from '../extension/types.js';
 import { NativeModuleRegistry } from './native-modules.js';
 
 export class ProcessManager {
   private vfs: VfsLike;
   private adapter: PlatformAdapter;
   private registry: Map<string, string> = new Map();
-  private hostCommands: Map<string, { handler: ExtensionHandler; description?: string }> = new Map();
   private moduleCache: Map<string, WebAssembly.Module> = new Map();
   private networkBridge: NetworkBridgeLike | null;
   private currentHost: WasiHost | null = null;
@@ -39,9 +37,7 @@ export class ProcessManager {
     this.nativeModules = new NativeModuleRegistry();
   }
 
-  /** Register a tool name to a .wasm file path.
-   *  Also creates an executable tool file at /usr/bin/<name> so that
-   *  symlinks (e.g. `ln -s python3 /usr/bin/python`) resolve naturally. */
+  /** Register a tool name to a .wasm file path. */
   /** Register a native Python module WASM (loaded for _codepod.native_call bridge). */
   async registerNativeModule(name: string, wasmBytes: Uint8Array): Promise<void> {
     await this.nativeModules.loadModule(name, wasmBytes);
@@ -49,69 +45,28 @@ export class ProcessManager {
 
   registerTool(name: string, wasmPath: string): void {
     this.registry.set(name, wasmPath);
-    // Create tool stub in /usr/bin — content is the wasm path, marked with S_TOOL.
-    // S_TOOL is a high bit that chmod cannot set or clear, so sandbox users
-    // cannot forge tool files. /usr/bin is 0o555 so writes are also blocked.
-    try {
-      this.vfs.withWriteAccess(() => {
-        this.vfs.writeFile(
-          `/usr/bin/${name}`,
-          new TextEncoder().encode(wasmPath),
-        );
-        this.vfs.chmod(`/usr/bin/${name}`, S_TOOL | 0o555);
-      });
-    } catch {
-      // VFS may not have /usr/bin yet (e.g. VfsProxy in worker) — non-fatal
-    }
   }
 
   /**
-   * Register a multicall binary — one wasm that ships many applets,
-   * dispatched by argv[0] (BusyBox is the canonical example).
+   * Register a multicall binary and make each applet resolve to that binary.
    *
-   * Does three things:
-   *   1. Registers the multicall name itself (`registerTool('busybox',
-   *      busyboxPath)`) so `busybox <applet>` works.
-   *   2. Points each applet name at the same wasm in the registry —
-   *      crucially, this OVERRIDES any prior single-binary registration
-   *      (e.g. our Rust `grep.wasm`) so the shell resolves `grep` to
-   *      busybox.wasm from now on.  The Rust standalones still exist
-   *      on disk but become inert — they can be stripped in a follow-
-   *      up commit once we're confident in busybox parity.
-   *   3. Replaces /usr/bin/<applet> tool-stub files with symlinks to
-   *      /usr/bin/<name> so commands like `/usr/bin/grep foo` (absolute
-   *      path) follow the symlink and the kernel-side spawn populates
-   *      argv[0] with "grep" — the multicall dispatcher in busybox
-   *      reads argv[0] to pick the right applet.
-   *
-   * Behaves identically to `busybox --install -s` from the guest's
-   * perspective, but happens at sandbox creation so users don't have
-   * to run the install step themselves.
+   * The VFS links mirror `busybox --install -s`: `/usr/bin/<applet>` points at
+   * `/usr/bin/<name>`, while the registry override keeps bare command dispatch
+   * on the multicall wasm even if a standalone applet wasm was scanned earlier.
    */
   registerMulticallTool(name: string, wasmPath: string, applets: string[]): void {
     this.registerTool(name, wasmPath);
 
-    for (const applet of applets) {
-      this.registry.set(applet, wasmPath);
-    }
-
-    // VfsProxy in worker mode doesn't expose withWriteAccess / symlink
-    // yet; feature-detect rather than try/catch so genuine failures
-    // mid-loop (e.g. a real symlink error on applet #5) surface
-    // instead of silently leaving applets #6–N un-symlinked.  Without
-    // VFS write access the registry overrides above still resolve
-    // correctly via resolveTool — symlinks are a UX nicety, not load-
-    // bearing for dispatch.
-    const vfsLike = this.vfs as { withWriteAccess?: unknown };
-    if (typeof vfsLike.withWriteAccess !== 'function') return;
     this.vfs.withWriteAccess(() => {
       for (const applet of applets) {
-        const appletPath = `/usr/bin/${applet}`;
-        // Replace any prior tool stub (registerTool may have written
-        // one earlier in registerTools' scan).  Failing to unlink is
-        // fine — the path may not exist yet.
-        try { this.vfs.unlink(appletPath); } catch { /* ok */ }
-        this.vfs.symlink(`/usr/bin/${name}`, appletPath);
+        this.registry.set(applet, wasmPath);
+        const linkPath = `/usr/bin/${applet}`;
+        try {
+          this.vfs.unlink(linkPath);
+        } catch {
+          // No pre-existing standalone stub.
+        }
+        this.vfs.symlink(`/usr/bin/${name}`, linkPath);
       }
     });
   }
@@ -123,29 +78,6 @@ export class ProcessManager {
     const wasmBytes = this.vfs.readFile(wasmPath);
     const module = await WebAssembly.compile(wasmBytes as BufferSource);
     this.moduleCache.set(wasmPath, module);
-  }
-
-  /** Register a host command (TypeScript handler) that looks like an executable.
-   *  Also creates a tool stub in /usr/bin so the shell can discover it. */
-  registerHostCommand(name: string, handler: ExtensionHandler, description?: string): void {
-    this.hostCommands.set(name, { handler, description });
-    // Create tool stub in /usr/bin like WASM tools
-    try {
-      this.vfs.withWriteAccess(() => {
-        this.vfs.writeFile(
-          `/usr/bin/${name}`,
-          new TextEncoder().encode(`host:${name}`),
-        );
-        this.vfs.chmod(`/usr/bin/${name}`, S_TOOL | 0o555);
-      });
-    } catch {
-      // VFS may not have /usr/bin yet — non-fatal
-    }
-  }
-
-  /** Get a host command entry by name, or undefined if not registered. */
-  getHostCommand(name: string): { handler: ExtensionHandler; description?: string } | undefined {
-    return this.hostCommands.get(name);
   }
 
   /** Return the names of all registered tools. */
@@ -163,9 +95,9 @@ export class ProcessManager {
     this.extensionHandler = handler;
   }
 
-  /** Check if a tool name is registered (WASM tool or host command). */
+  /** Check if a tool name is registered. */
   hasTool(name: string): boolean {
-    return this.registry.has(name) || this.hostCommands.has(name);
+    return this.registry.has(name);
   }
 
   /** Check if a tool is allowed by the security policy. */
@@ -181,14 +113,16 @@ export class ProcessManager {
     const direct = this.registry.get(name);
     if (direct !== undefined) return direct;
 
-    // VFS PATH fallback: check /usr/bin/<name> (stat follows symlinks).
-    // Only files with the S_TOOL flag are valid tool stubs — this flag
-    // cannot be set via chmod, so sandbox users cannot forge tool files.
-    for (const dir of ['/usr/bin', '/bin']) {
+    // VFS fallback: absolute/slash paths are resolved directly; bare names use
+    // the protected PATH-like tool roots. stat/readFile follow symlinks.
+    const candidatePaths = name.includes('/')
+      ? [name]
+      : ['/usr/extensions', '/usr/bin', '/bin'].map(dir => `${dir}/${name}`);
+
+    for (const filePath of candidatePaths) {
       try {
-        const filePath = `${dir}/${name}`;
         const st = this.vfs.stat(filePath); // follows symlinks
-        if (!(st.permissions & S_TOOL)) continue; // not a tool file
+        if (st.type !== 'file' || !(st.permissions & 0o111)) continue;
         // Read the resolved file's content — it contains the wasm path
         const content = new TextDecoder().decode(this.vfs.readFile(filePath));
         if (content && this.moduleCache.has(content)) return content;
@@ -256,6 +190,7 @@ export class ProcessManager {
       args: [command, ...opts.args],
       env: opts.env,
       preopens: { '/': '/' },
+      cwd: opts.cwd ?? '/',
       stdin: stdinData,
       stdoutLimit: opts.stdoutLimit,
       stderrLimit: opts.stderrLimit,
@@ -283,6 +218,7 @@ export class ProcessManager {
     const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
 
     let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
+    const setjmpBridge = needsSetjmpBridge(module) ? new AsyncifyAsyncBridge() : null;
 
     if (needsCodepod) {
       let memRef: WebAssembly.Memory | null = null;
@@ -298,11 +234,14 @@ export class ProcessManager {
 
       imports.codepod = createKernelImports({
         memory: memoryProxy,
-        wasiHost: host,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,
       });
+      if (setjmpBridge) {
+        imports.codepod.host_setjmp = setjmpBridge.hostSetjmp as unknown as WebAssembly.ImportValue;
+        imports.codepod.host_longjmp = setjmpBridge.hostLongjmp as unknown as WebAssembly.ImportValue;
+      }
     }
 
     const instance = await this.adapter.instantiate(module, imports);
@@ -311,6 +250,9 @@ export class ProcessManager {
     if (setMemoryRef) {
       setMemoryRef(instance.exports.memory as WebAssembly.Memory);
     }
+    const startFn = setjmpBridge && initAsyncifyBridge(setjmpBridge, instance)
+      ? setjmpBridge.wrapExportSync(instance.exports._start as () => number)
+      : undefined;
 
     // Check exported memory against limit
     if (opts.memoryBytes !== undefined) {
@@ -345,7 +287,7 @@ export class ProcessManager {
 
     this.currentHost = host;
     const startTime = performance.now();
-    const exitCode = host.start(instance);
+    const exitCode = host.start(instance, startFn);
     const executionTimeMs = performance.now() - startTime;
     this.currentHost = null;
 
@@ -407,16 +349,6 @@ export class ProcessManager {
       };
     }
 
-    // Check host commands first (TS handlers)
-    const hostCmd = this.hostCommands.get(command);
-    if (hostCmd) {
-      // Host commands are async but spawnSync needs sync results.
-      // This path is used by the Worker extension proxy which is already sync.
-      // For now, return not-found so the caller can try other paths.
-      // Host commands are primarily handled by spawnAsyncProcess.
-      return { exit_code: 127, stdout: '', stderr: `${command}: host command not available in sync mode\n` };
-    }
-
     let wasmPath: string;
     try {
       wasmPath = this.resolveTool(command);
@@ -434,6 +366,7 @@ export class ProcessManager {
       args: [command, ...args],
       env,
       preopens: { '/': '/' },
+      cwd,
       stdin,
       stdoutLimit: opts?.stdoutLimit,
       stderrLimit: opts?.stderrLimit,
@@ -461,6 +394,7 @@ export class ProcessManager {
     const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
 
     let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
+    const setjmpBridge = needsSetjmpBridge(module) ? new AsyncifyAsyncBridge() : null;
 
     if (needsCodepod) {
       let memRef: WebAssembly.Memory | null = null;
@@ -476,11 +410,14 @@ export class ProcessManager {
 
       imports.codepod = createKernelImports({
         memory: memoryProxy,
-        wasiHost: host,
         networkBridge: this.networkBridge ?? undefined,
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,
       });
+      if (setjmpBridge) {
+        imports.codepod.host_setjmp = setjmpBridge.hostSetjmp as unknown as WebAssembly.ImportValue;
+        imports.codepod.host_longjmp = setjmpBridge.hostLongjmp as unknown as WebAssembly.ImportValue;
+      }
     }
 
     // Synchronous instantiation (works because Module is already compiled)
@@ -517,9 +454,12 @@ export class ProcessManager {
     if (setMemoryRef) {
       setMemoryRef(instance.exports.memory as WebAssembly.Memory);
     }
+    const startFn = setjmpBridge && initAsyncifyBridge(setjmpBridge, instance)
+      ? setjmpBridge.wrapExportSync(instance.exports._start as () => number)
+      : undefined;
 
     this.currentHost = host;
-    const exitCode = host.start(instance);
+    const exitCode = host.start(instance, startFn);
     this.currentHost = null;
 
     const stdoutTruncated = host.isStdoutTruncated();
@@ -534,6 +474,63 @@ export class ProcessManager {
       } : {}),
     };
   }
+}
+
+function needsSetjmpBridge(module: WebAssembly.Module): boolean {
+  const imports = WebAssembly.Module.imports(module);
+  const exports = WebAssembly.Module.exports(module);
+  const importsSetjmp = imports.some((imp) =>
+    imp.module === 'codepod' &&
+    (imp.name === 'host_setjmp' || imp.name === 'host_longjmp')
+  );
+  if (!importsSetjmp) return false;
+  return [
+    'asyncify_start_unwind',
+    'asyncify_stop_unwind',
+    'asyncify_start_rewind',
+    'asyncify_stop_rewind',
+    'asyncify_get_state',
+  ].every((name) => exports.some((exp) => exp.kind === 'function' && exp.name === name));
+}
+
+function initAsyncifyBridge(
+  bridge: AsyncifyAsyncBridge,
+  instance: WebAssembly.Instance,
+): boolean {
+  const exports = instance.exports;
+  const hasAsyncifyState =
+    typeof exports.asyncify_start_unwind === 'function' &&
+    typeof exports.asyncify_stop_unwind === 'function' &&
+    typeof exports.asyncify_start_rewind === 'function' &&
+    typeof exports.asyncify_stop_rewind === 'function' &&
+    typeof exports.asyncify_get_state === 'function';
+  if (!hasAsyncifyState) return false;
+
+  const memory = exports.memory as WebAssembly.Memory;
+  const addrExport = exports.codepod_asyncify_buf_addr as (() => number) | undefined;
+  const sizeExport = exports.codepod_asyncify_buf_size as (() => number) | undefined;
+  const alloc = exports.__alloc as ((size: number) => number) | undefined;
+
+  let dataAddr: number;
+  let dataSize: number;
+  if (typeof addrExport === 'function' && typeof sizeExport === 'function') {
+    dataAddr = addrExport();
+    dataSize = sizeExport();
+  } else if (typeof alloc === 'function') {
+    dataSize = 65536;
+    dataAddr = alloc(dataSize);
+  } else {
+    throw new Error('asyncify requires codepod_asyncify_buf_addr/size or __alloc exports');
+  }
+
+  if (dataSize < 16) {
+    throw new Error(`asyncify buffer is too small: ${dataSize}`);
+  }
+  const view = new DataView(memory.buffer);
+  view.setUint32(dataAddr, dataAddr + 8, true);
+  view.setUint32(dataAddr + 4, dataAddr + dataSize, true);
+  bridge.initFromInstance(instance, dataAddr, dataSize);
+  return true;
 }
 
 /** Drain all available bytes from a pipe read end into a single Uint8Array. */

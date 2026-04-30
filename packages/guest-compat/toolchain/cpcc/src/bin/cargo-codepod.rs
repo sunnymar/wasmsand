@@ -100,7 +100,7 @@ fn main() -> Result<ExitCode> {
             };
             preserve::copy_to_preserve(out, Some(&dst))?;
         }
-        wasm_opt::maybe_run(out, &process_env.wasm_opt)?;
+        wasm_opt::maybe_run(out, &process_env.wasm_opt, false)?;
     }
 
     Ok(ExitCode::SUCCESS)

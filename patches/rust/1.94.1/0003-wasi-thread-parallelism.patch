@@ -1,0 +1,26 @@
+--- a/library/std/src/sys/thread/unix.rs
++++ b/library/std/src/sys/thread/unix.rs
+@@ -155,9 +155,14 @@
+             target_os = "aix",
+             target_vendor = "apple",
+             target_os = "cygwin",
++            target_os = "wasi",
+         ) => {
+             #[allow(unused_assignments)]
+             #[allow(unused_mut)]
++            #[cfg(target_os = "wasi")]
++            const _SC_NPROCESSORS_ONLN: libc::c_int = 84;
++            #[cfg(not(target_os = "wasi"))]
++            const _SC_NPROCESSORS_ONLN: libc::c_int = libc::_SC_NPROCESSORS_ONLN;
+             let mut quota = usize::MAX;
+
+             #[cfg(any(target_os = "android", target_os = "linux"))]
+@@ -179,7 +184,7 @@
+                     }
+                 }
+             }
+-            match unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) } {
++            match unsafe { libc::sysconf(_SC_NPROCESSORS_ONLN) } {
+                 -1 => Err(io::Error::last_os_error()),
+                 0 => Err(io::Error::UNKNOWN_THREAD_COUNT),
+                 cpus => {

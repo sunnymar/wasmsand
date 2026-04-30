@@ -1,0 +1,48 @@
+--- a/library/std/src/sys/thread/mod.rs
++++ b/library/std/src/sys/thread/mod.rs
+@@ -96,12 +96,13 @@
+         mod wasip1;
+         pub use wasip1::{DEFAULT_MIN_STACK_SIZE, sleep, yield_now};
+         #[cfg(target_feature = "atomics")]
+-        pub use wasip1::{Thread, available_parallelism};
++        pub use wasip1::Thread;
++        pub use wasip1::available_parallelism;
+         #[expect(dead_code)]
+         mod unsupported;
+         pub use unsupported::{current_os_id, set_name};
+         #[cfg(not(target_feature = "atomics"))]
+-        pub use unsupported::{Thread, available_parallelism};
++        pub use unsupported::Thread;
+     }
+     all(target_os = "wasi", any(target_env = "p2", target_env = "p3")) => {
+         mod wasip2;
+--- a/library/std/src/sys/thread/wasip1.rs
++++ b/library/std/src/sys/thread/wasip1.rs
+@@ -1,11 +1,8 @@
+ #![forbid(unsafe_op_in_unsafe_fn)]
+
+-#[cfg(target_feature = "atomics")]
+ use crate::io;
+ use crate::mem;
+-#[cfg(target_feature = "atomics")]
+ use crate::num::NonZero;
+-#[cfg(target_feature = "atomics")]
+ use crate::sys::os;
+ #[cfg(target_feature = "atomics")]
+ use crate::thread::ThreadInit;
+@@ -14,7 +11,6 @@
+ use crate::{cmp, ptr};
+
+ // Add a few symbols not in upstream `libc` just yet.
+-#[cfg(target_feature = "atomics")]
+ mod libc {
+     pub use libc::*;
+
+@@ -133,7 +129,6 @@
+     }
+ }
+
+-#[cfg(target_feature = "atomics")]
+ pub fn available_parallelism() -> io::Result<NonZero<usize>> {
+     match unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) } {
+         -1 => Err(io::Error::last_os_error()),
