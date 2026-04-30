@@ -12,6 +12,8 @@ export type FdTarget =
       type: 'socket';
       socket: SocketHandle | null;
       refs: number;
+      readShutdown?: boolean;
+      writeShutdown?: boolean;
       send: (socket: SocketHandle, dataB64: string) => SocketBackendResult;
       recv: (socket: SocketHandle, maxBytes: number) => SocketBackendResult;
       close: (socket: SocketHandle) => void;

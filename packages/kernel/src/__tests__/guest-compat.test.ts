@@ -487,6 +487,40 @@ describe('Guest compatibility canaries', () => {
     expect(requests).toContainEqual({ op: 'recv', socket: handle, max_bytes: 4 });
   });
 
+  it('routes Rust std::net::TcpStream shutdown through WASI socket shutdown', async () => {
+    const requests: Record<string, unknown>[] = [];
+    const socketBackend: SocketBackend = {
+      connect(req) {
+        requests.push({ op: 'connect', ...req });
+        return { ok: true, socket: 404 };
+      },
+      send(socket, dataB64) {
+        requests.push({ op: 'send', socket, data_b64: dataB64 });
+        return { ok: true, bytes_sent: atob(dataB64).length };
+      },
+      recv(socket, maxBytes) {
+        requests.push({ op: 'recv', socket, max_bytes: maxBytes });
+        return { ok: true, data_b64: '' };
+      },
+      close(socket) {
+        requests.push({ op: 'close', socket });
+        return { ok: true };
+      },
+    };
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      socketBackend,
+    });
+
+    const result = await sandbox.run('std-net-shutdown-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('shutdown=both');
+    expect(requests).toContainEqual({ op: 'connect', host: '127.0.0.1', port: 9, tls: false });
+    expect(requests).toContainEqual({ op: 'close', socket: 404 });
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,

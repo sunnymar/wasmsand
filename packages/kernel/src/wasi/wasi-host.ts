@@ -21,6 +21,7 @@ import {
   WASI_EIO,
   WASI_EINVAL,
   WASI_ENOSYS,
+  WASI_ENOTSOCK,
   WASI_ENOTSUP,
   WASI_EPIPE,
   WASI_ESUCCESS,
@@ -438,7 +439,7 @@ export class WasiHost {
         sock_accept: this.stub.bind(this),
         sock_recv: this.stub.bind(this),
         sock_send: this.stub.bind(this),
-        sock_shutdown: this.stub.bind(this),
+        sock_shutdown: this.sockShutdown.bind(this),
         clock_res_get: this.clockResGet.bind(this),
       },
     };
@@ -617,6 +618,7 @@ export class WasiHost {
           }
           case 'socket': {
             if (target.socket === null) return WASI_EBADF;
+            if (target.writeShutdown) return WASI_EPIPE;
             const result = target.send(target.socket, bytesToBase64(data));
             if (!result.ok) return WASI_EIO;
             totalWritten += result.bytes_sent ?? data.byteLength;
@@ -711,6 +713,7 @@ export class WasiHost {
           }
           case 'socket': {
             if (target.socket === null) return WASI_EBADF;
+            if (target.readShutdown) break;
             const result = target.recv(target.socket, iov.len);
             if (!result.ok) return WASI_EIO;
             const data = result.data_b64 !== undefined
@@ -1389,6 +1392,34 @@ export class WasiHost {
 
   private pathLink(): number {
     return WASI_ENOTSUP;
+  }
+
+  private sockShutdown(fd: number, flags: number): number {
+    const WASI_SDFLAGS_RD = 1;
+    const WASI_SDFLAGS_WR = 2;
+    const validFlags = WASI_SDFLAGS_RD | WASI_SDFLAGS_WR;
+    if (flags === 0 || (flags & ~validFlags) !== 0) {
+      return WASI_EINVAL;
+    }
+
+    const target = this.ioFds.get(fd);
+    if (!target) return WASI_EBADF;
+    if (target.type !== 'socket') return WASI_ENOTSOCK;
+    if (target.socket === null) return WASI_EBADF;
+
+    if ((flags & WASI_SDFLAGS_RD) !== 0) {
+      target.readShutdown = true;
+    }
+    if ((flags & WASI_SDFLAGS_WR) !== 0) {
+      target.writeShutdown = true;
+    }
+    if ((flags & validFlags) === validFlags) {
+      const socket = target.socket;
+      target.socket = null;
+      target.close(socket);
+    }
+
+    return WASI_ESUCCESS;
   }
 
   private fdRenumber(fromFd: number, toFd: number): number {
