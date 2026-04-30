@@ -2,6 +2,34 @@ import type { NetworkBridgeLike } from './bridge.js';
 
 export type SocketHandle = number;
 
+export interface SocketPortMapping {
+  sandboxHost: '0.0.0.0';
+  sandboxPort: number;
+  hostPort: number;
+}
+
+export interface SocketListenRequest {
+  host: '127.0.0.1' | 'localhost' | '0.0.0.0';
+  port: number;
+  backlog: number;
+  mapping?: SocketPortMapping;
+}
+
+export interface SocketListenPolicy {
+  /**
+   * Allow future sandbox-local loopback listeners. This does not expose host
+   * ports and is still unsupported until the in-kernel listener registry exists.
+   */
+  allowLoopback?: boolean;
+  /** Explicit host-exposed port mappings, Docker-style. */
+  portMappings?: SocketPortMapping[];
+  /**
+   * Final authorization hook for a future listen() call. Current runtime code
+   * stores the hook but still rejects listen because server sockets are deferred.
+   */
+  onListen?: (request: SocketListenRequest) => boolean | Promise<boolean>;
+}
+
 export type SocketBackendResult =
   | { ok: true; data?: string; bytes_sent?: number; data_b64?: string }
   | { ok: false; error: string };

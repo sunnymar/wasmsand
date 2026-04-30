@@ -18,7 +18,7 @@
  */
 
 import type { NetworkBridgeLike } from '../network/bridge.js';
-import type { SocketBackend } from '../network/socket-backend.js';
+import type { SocketBackend, SocketListenPolicy } from '../network/socket-backend.js';
 import { createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { NativeModuleRegistry } from '../process/native-modules.js';
@@ -47,6 +47,9 @@ export interface KernelImportsOptions {
 
   /** Fake sandbox-local IPv4 address reported by getsockname()/socket_addr(). */
   socketLocalHost?: string;
+
+  /** Prepared policy surface for future bind/listen/accept support. */
+  serverSockets?: SocketListenPolicy;
 
   /**
    * Extension registry for host_extension_invoke (used by Python WASM).
@@ -521,6 +524,24 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         const msg = e instanceof Error ? e.message : String(e);
         return writeJson(memory, outPtr, outCap, { ok: false, error: msg });
       }
+    },
+
+    // host_socket_bind(req_ptr, req_len, out_ptr, out_cap) -> i32
+    // Prepared for future server sockets. Runtime support is intentionally deferred.
+    host_socket_bind(_reqPtr: number, _reqLen: number, outPtr: number, outCap: number): number {
+      return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not implemented' });
+    },
+
+    // host_socket_listen(req_ptr, req_len, out_ptr, out_cap) -> i32
+    // Prepared for future server sockets. Runtime support is intentionally deferred.
+    host_socket_listen(_reqPtr: number, _reqLen: number, outPtr: number, outCap: number): number {
+      return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not implemented' });
+    },
+
+    // host_socket_accept(req_ptr, req_len, out_ptr, out_cap) -> i32
+    // Prepared for future server sockets. Runtime support is intentionally deferred.
+    host_socket_accept(_reqPtr: number, _reqLen: number, outPtr: number, outCap: number): number {
+      return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not implemented' });
     },
 
     // host_socket_addr(req_ptr, req_len, out_ptr, out_cap) -> i32
