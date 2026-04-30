@@ -452,6 +452,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         refs: 1,
         send: (socket, dataB64) => socketBackend?.send(socket, dataB64) ?? { ok: false, error: 'networking not configured' },
         recv: (socket, maxBytes) => socketBackend?.recv(socket, maxBytes) ?? { ok: false, error: 'networking not configured' },
+        setNoDelay: (socket, enabled) => socketBackend?.setNoDelay?.(socket, enabled) ?? { ok: false, error: 'TCP_NODELAY not supported by socket backend' },
         close: (socket) => {
           socketBackend?.close(socket);
         },
@@ -479,6 +480,11 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           host: req.host, port: req.port, tls: req.tls ?? false,
         });
         if (result.ok) {
+          if (target.noDelay) {
+            const optionResult = target.setNoDelay?.(result.socket, true)
+              ?? { ok: false, error: 'TCP_NODELAY not supported by socket backend' };
+            if (!optionResult.ok) return writeJson(memory, outPtr, outCap, optionResult);
+          }
           target.socket = result.socket;
           target.peerHost = typeof req.host === 'string' ? req.host : '0.0.0.0';
           target.peerPort = typeof req.port === 'number' ? req.port : 0;
@@ -564,6 +570,42 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         }
         const result = socketBackend.recv(target.socket, req.max_bytes ?? 65536);
         return writeJson(memory, outPtr, outCap, result);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return writeJson(memory, outPtr, outCap, { ok: false, error: msg });
+      }
+    },
+
+    // host_socket_option(req_ptr, req_len, out_ptr, out_cap) -> i32
+    // Applies or reports socket option state owned by the kernel.
+    // Request JSON: { fd, option, value? }
+    // Response JSON: { ok: true, value? } or { ok: false, error }
+    host_socket_option(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+      try {
+        const req = JSON.parse(readString(memory, reqPtr, reqLen));
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a socket fd: ${req.fd}` });
+        }
+        if (req.option !== 'no_delay') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `unsupported socket option: ${req.option}` });
+        }
+        if (!('value' in req)) {
+          return writeJson(memory, outPtr, outCap, { ok: true, value: target.noDelay ? 1 : 0 });
+        }
+        if (typeof req.value !== 'boolean') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'socket option value must be boolean' });
+        }
+        if (target.socket !== null) {
+          const result = target.setNoDelay?.(target.socket, req.value)
+            ?? { ok: false, error: 'TCP_NODELAY not supported by socket backend' };
+          if (!result.ok) return writeJson(memory, outPtr, outCap, result);
+        }
+        target.noDelay = req.value;
+        return writeJson(memory, outPtr, outCap, { ok: true });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         return writeJson(memory, outPtr, outCap, { ok: false, error: msg });

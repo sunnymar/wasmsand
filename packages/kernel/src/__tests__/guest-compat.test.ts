@@ -614,6 +614,34 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('take_error=none');
   });
 
+  it('routes Rust std::net::TcpStream nodelay through libcodepod socket options', async () => {
+    const requests: unknown[] = [];
+    const socketBackend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 909 }),
+      send: (_socket, dataB64) => ({ ok: true, bytes_sent: atob(dataB64).length }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+      setNoDelay: (socket, enabled) => {
+        requests.push({ op: 'setNoDelay', socket, enabled });
+        return { ok: true };
+      },
+    };
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      socketBackend,
+    });
+
+    const result = await sandbox.run('std-net-nodelay-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('nodelay=ok');
+    expect(requests).toEqual([
+      { op: 'setNoDelay', socket: 909, enabled: true },
+      { op: 'setNoDelay', socket: 909, enabled: false },
+    ]);
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,

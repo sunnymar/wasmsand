@@ -79,6 +79,9 @@ int codepod_host_socket_recv(int req_ptr, int req_len, int out_ptr, int out_cap)
 __attribute__((import_module("codepod"), import_name("host_socket_addr")))
 int codepod_host_socket_addr(int req_ptr, int req_len, int out_ptr, int out_cap);
 
+__attribute__((import_module("codepod"), import_name("host_socket_option")))
+int codepod_host_socket_option(int req_ptr, int req_len, int out_ptr, int out_cap);
+
 __attribute__((import_module("codepod"), import_name("host_socket_close")))
 int codepod_host_socket_close(int req_ptr, int req_len);
 

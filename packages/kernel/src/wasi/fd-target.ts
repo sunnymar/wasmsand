@@ -16,10 +16,12 @@ export type FdTarget =
       peerPort?: number;
       localHost?: string;
       localPort?: number;
+      noDelay?: boolean;
       readShutdown?: boolean;
       writeShutdown?: boolean;
       send: (socket: SocketHandle, dataB64: string) => SocketBackendResult;
       recv: (socket: SocketHandle, maxBytes: number) => SocketBackendResult;
+      setNoDelay?: (socket: SocketHandle, enabled: boolean) => SocketBackendResult;
       close: (socket: SocketHandle) => void;
     }
   | { type: 'static'; data: Uint8Array; offset: number }

@@ -21,6 +21,7 @@ const KERNEL_IMPORTS_BASELINE = [
   "host_socket_send",
   "host_socket_recv",
   "host_socket_addr",
+  "host_socket_option",
   "host_socket_close",
   "host_extension_invoke",
   "host_native_invoke",
@@ -51,8 +52,6 @@ const SHELL_IMPORTS_BASELINE = [
 
 function shellImports() {
   return createShellImports({
-    vfs: {} as never,
-    mgr: {} as never,
     memory: new WebAssembly.Memory({ initial: 1 }),
   });
 }

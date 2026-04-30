@@ -156,4 +156,84 @@ describe('socket fd host imports', () => {
     expect(typeof addr.local_port).toBe('number');
     expect(addr.local_port as number).toBeGreaterThanOrEqual(49152);
   });
+
+  it('applies and reports TCP_NODELAY through connected socket fds', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const requests: Record<string, unknown>[] = [];
+    const backend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 99 }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+      setNoDelay(socket, enabled) {
+        requests.push({ op: 'setNoDelay', socket, enabled });
+        return { ok: true };
+      },
+    };
+    const imports = createKernelImports({ memory, kernel, socketBackend: backend });
+
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const connectReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      host: 'example.test',
+      port: 443,
+      tls: false,
+    }));
+    (imports.host_socket_connect as (...args: number[]) => number)(16, connectReqLen, 256, 4096);
+
+    const setReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      option: 'no_delay',
+      value: true,
+    }));
+    const setLen = (imports.host_socket_option as (...args: number[]) => number)(16, setReqLen, 512, 4096);
+    expect(readJson(memory, 512, setLen)).toEqual({ ok: true });
+    expect(requests).toContainEqual({ op: 'setNoDelay', socket: 99, enabled: true });
+
+    const getReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      option: 'no_delay',
+    }));
+    const getLen = (imports.host_socket_option as (...args: number[]) => number)(16, getReqLen, 512, 4096);
+    expect(readJson(memory, 512, getLen)).toEqual({ ok: true, value: 1 });
+  });
+
+  it('applies pre-connect TCP_NODELAY when the socket connects', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const requests: Record<string, unknown>[] = [];
+    const backend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 101 }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+      setNoDelay(socket, enabled) {
+        requests.push({ op: 'setNoDelay', socket, enabled });
+        return { ok: true };
+      },
+    };
+    const imports = createKernelImports({ memory, kernel, socketBackend: backend });
+
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const setReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      option: 'no_delay',
+      value: true,
+    }));
+    const setLen = (imports.host_socket_option as (...args: number[]) => number)(16, setReqLen, 512, 4096);
+    expect(readJson(memory, 512, setLen)).toEqual({ ok: true });
+    expect(requests).toEqual([]);
+
+    const connectReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      host: 'example.test',
+      port: 443,
+      tls: false,
+    }));
+    const connectLen = (imports.host_socket_connect as (...args: number[]) => number)(16, connectReqLen, 256, 4096);
+
+    expect(readJson(memory, 256, connectLen)).toEqual({ ok: true });
+    expect(requests).toEqual([{ op: 'setNoDelay', socket: 101, enabled: true }]);
+  });
 });

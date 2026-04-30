@@ -289,6 +289,17 @@ export class NetworkBridge implements NetworkBridgeLike {
         });
       }
 
+      function handleSetNoDelay(req) {
+        const sock = sockets.get(req.socket_id);
+        if (!sock) { writeErr('set_no_delay: invalid socket_id'); return; }
+        if (typeof sock.setNoDelay !== 'function') {
+          writeErr('set_no_delay: socket does not support TCP_NODELAY');
+          return;
+        }
+        sock.setNoDelay(!!req.enabled);
+        writeOk({ ok: true });
+      }
+
       function handleClose(req) {
         const sock = sockets.get(req.socket_id);
         if (!sock) { writeErr('close: invalid socket_id'); return; }
@@ -315,6 +326,7 @@ export class NetworkBridge implements NetworkBridgeLike {
               case 'connect': await handleConnect(req); break;
               case 'send': await handleSend(req); break;
               case 'recv': await handleRecv(req); break;
+              case 'set_no_delay': handleSetNoDelay(req); break;
               case 'close': handleClose(req); break;
               default: writeErr('unknown op: ' + op); break;
             }

@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +19,8 @@
 
 #define CODEPOD_SO_REUSEADDR 0x0004
 #define CODEPOD_SO_ERROR 0x1007
+#define CODEPOD_IPPROTO_TCP 6
+#define CODEPOD_TCP_NODELAY 1
 
 CODEPOD_DECLARE_MARKER(socket);
 CODEPOD_DECLARE_MARKER(connect);
@@ -517,8 +520,6 @@ ssize_t recvfrom(
 }
 
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen) {
-  (void)sockfd;
-
   if (!optval || optlen < (socklen_t)sizeof(int)) {
     errno = EINVAL;
     return -1;
@@ -528,13 +529,38 @@ int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t
     return 0;
   }
 
+  if ((level == IPPROTO_TCP || level == CODEPOD_IPPROTO_TCP)
+      && (optname == TCP_NODELAY || optname == CODEPOD_TCP_NODELAY)) {
+    char req[160];
+    char resp[CODEPOD_SOCKET_RESP_CAP];
+    int enabled = (*(const int *)optval) != 0;
+    int req_len = snprintf(
+      req,
+      sizeof(req),
+      "{\"fd\":%d,\"option\":\"no_delay\",\"value\":%s}",
+      sockfd,
+      enabled ? "true" : "false"
+    );
+    int n;
+
+    if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    n = codepod_host_socket_option((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
+    if (n <= 0 || !parse_json_ok(resp, (size_t)n)) {
+      errno = EOPNOTSUPP;
+      return -1;
+    }
+    return 0;
+  }
+
   errno = EOPNOTSUPP;
   return -1;
 }
 
 static int codepod_getsockopt_impl(int sockfd, int level, int optname, void *optval, socklen_t *optlen) {
   int value = 0;
-  (void)sockfd;
 
   if (!optval || !optlen || *optlen < (socklen_t)sizeof(int)) {
     errno = EINVAL;
@@ -557,8 +583,26 @@ static int codepod_getsockopt_impl(int sockfd, int level, int optname, void *opt
         return -1;
     }
   } else {
-    errno = EOPNOTSUPP;
-    return -1;
+    if ((level == IPPROTO_TCP || level == CODEPOD_IPPROTO_TCP)
+        && (optname == TCP_NODELAY || optname == CODEPOD_TCP_NODELAY)) {
+      char req[128];
+      char resp[CODEPOD_SOCKET_RESP_CAP];
+      int req_len = snprintf(req, sizeof(req), "{\"fd\":%d,\"option\":\"no_delay\"}", sockfd);
+      int n;
+
+      if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
+        errno = EOVERFLOW;
+        return -1;
+      }
+      n = codepod_host_socket_option((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
+      if (n <= 0 || !parse_json_ok(resp, (size_t)n) || parse_json_int(resp, (size_t)n, "value", &value) != 0) {
+        errno = EOPNOTSUPP;
+        return -1;
+      }
+    } else {
+      errno = EOPNOTSUPP;
+      return -1;
+    }
   }
 
   memcpy(optval, &value, sizeof(value));

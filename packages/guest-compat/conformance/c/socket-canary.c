@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -51,6 +52,20 @@ int main(void) {
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_len) != 0 ||
       socket_type != SOCK_STREAM) {
     emit("getsockopt", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+  yes = 1;
+  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) != 0) {
+    emit("setsockopt_tcp_nodelay", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+  yes = 0;
+  socket_type_len = sizeof(yes);
+  if (getsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, &socket_type_len) != 0 ||
+      yes != 1) {
+    emit("getsockopt_tcp_nodelay", 1);
     freeaddrinfo(res);
     return 1;
   }
