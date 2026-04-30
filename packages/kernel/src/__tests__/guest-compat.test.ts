@@ -341,6 +341,20 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout).toContain('cwd-stdout="marker.txt\\n"');
   });
 
+  it('runs Rust std::process::Command spawn with piped stdio', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-process-spawn-stdio-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      'status=Some(0) stdout="spawn-stdin\\n" stderr=""',
+    );
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
