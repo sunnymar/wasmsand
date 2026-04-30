@@ -6,13 +6,14 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-#ifndef SO_REUSEADDR
-#define SO_REUSEADDR 0x0004
-#endif
+#undef SOL_SOCKET
+#define SOL_SOCKET 0
 
-#ifndef SO_ERROR
+#undef SO_REUSEADDR
+#define SO_REUSEADDR 0x0004
+
+#undef SO_ERROR
 #define SO_ERROR 0x1007
-#endif
 
 int socket(int domain, int type, int protocol);
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);

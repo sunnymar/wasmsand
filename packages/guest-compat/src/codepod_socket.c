@@ -16,6 +16,9 @@
 #define SO_ERROR 0x1007
 #endif
 
+#define CODEPOD_SO_REUSEADDR 0x0004
+#define CODEPOD_SO_ERROR 0x1007
+
 CODEPOD_DECLARE_MARKER(socket);
 CODEPOD_DECLARE_MARKER(connect);
 CODEPOD_DECLARE_MARKER(getpeername);
@@ -515,11 +518,18 @@ ssize_t recvfrom(
 
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen) {
   (void)sockfd;
-  (void)level;
-  (void)optname;
-  (void)optval;
-  (void)optlen;
-  return 0;
+
+  if (!optval || optlen < (socklen_t)sizeof(int)) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if (level == SOL_SOCKET && (optname == SO_REUSEADDR || optname == CODEPOD_SO_REUSEADDR)) {
+    return 0;
+  }
+
+  errno = EOPNOTSUPP;
+  return -1;
 }
 
 static int codepod_getsockopt_impl(int sockfd, int level, int optname, void *optval, socklen_t *optlen) {
@@ -537,12 +547,18 @@ static int codepod_getsockopt_impl(int sockfd, int level, int optname, void *opt
         value = SOCK_STREAM;
         break;
       case SO_ERROR:
+#if CODEPOD_SO_ERROR != SO_ERROR
+      case CODEPOD_SO_ERROR:
+#endif
         value = 0;
         break;
       default:
-        value = 0;
-        break;
+        errno = EOPNOTSUPP;
+        return -1;
     }
+  } else {
+    errno = EOPNOTSUPP;
+    return -1;
   }
 
   memcpy(optval, &value, sizeof(value));
