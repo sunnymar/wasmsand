@@ -35,6 +35,10 @@ fn build_clang_invocation(
     user_args: &[String],
 ) -> Vec<OsString> {
     let mut argv: Vec<OsString> = Vec::new();
+    if let Some(inc) = env.include.as_ref() {
+        argv.push("-I".into());
+        argv.push(inc.clone().into_os_string());
+    }
     argv.push(format!("--sysroot={}", sdk.sysroot().display()).into());
     argv.push("--target=wasm32-wasip1".into());
     argv.push("-O2".into());
@@ -50,10 +54,6 @@ fn build_clang_invocation(
     argv.push("-std=gnu23".into());
     argv.push("-Wall".into());
     argv.push("-Wextra".into());
-    if let Some(inc) = env.include.as_ref() {
-        argv.push("-isystem".into());
-        argv.push(inc.clone().into_os_string());
-    }
     for a in user_args {
         argv.push(a.into());
     }

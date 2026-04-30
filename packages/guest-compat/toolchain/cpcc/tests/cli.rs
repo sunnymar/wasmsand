@@ -82,7 +82,7 @@ fn invoking_clang_respects_env_sdk() {
 }
 
 #[test]
-fn dry_run_injects_compat_archive_and_isystem() {
+fn dry_run_injects_compat_archive_and_include_first() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     fs::create_dir_all(root.join("bin")).unwrap();
@@ -107,7 +107,11 @@ fn dry_run_injects_compat_archive_and_isystem() {
         .output()
         .unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("-isystem /fake/include"), "{stdout}");
+    assert!(stdout.contains("-I /fake/include"), "{stdout}");
+    assert!(
+        stdout.find("-I /fake/include").unwrap() < stdout.find("--sysroot=").unwrap(),
+        "compat headers must precede the WASI sysroot headers: {stdout}",
+    );
     assert!(stdout.contains("-Wl,--whole-archive"), "{stdout}");
     assert!(
         stdout.contains("/fake/libcodepod_guest_compat.a"),
