@@ -64,6 +64,27 @@ int codepod_host_waitpid(int pid, int out_ptr, int out_cap);
 __attribute__((import_module("codepod"), import_name("host_waitpid_nohang")))
 int codepod_host_waitpid_nohang(int pid);
 
+__attribute__((import_module("codepod"), import_name("host_socket_open")))
+int codepod_host_socket_open(int domain, int type, int protocol);
+
+__attribute__((import_module("codepod"), import_name("host_socket_connect")))
+int codepod_host_socket_connect(int req_ptr, int req_len, int out_ptr, int out_cap);
+
+__attribute__((import_module("codepod"), import_name("host_socket_send")))
+int codepod_host_socket_send(int req_ptr, int req_len, int out_ptr, int out_cap);
+
+__attribute__((import_module("codepod"), import_name("host_socket_recv")))
+int codepod_host_socket_recv(int req_ptr, int req_len, int out_ptr, int out_cap);
+
+__attribute__((import_module("codepod"), import_name("host_socket_addr")))
+int codepod_host_socket_addr(int req_ptr, int req_len, int out_ptr, int out_cap);
+
+__attribute__((import_module("codepod"), import_name("host_socket_close")))
+int codepod_host_socket_close(int req_ptr, int req_len);
+
+const char *codepod_netdb_host_for_addr(uint32_t addr_be);
+uint32_t codepod_netdb_addr_for_host(const char *host);
+
 int codepod_json_call(const char *json, char **out, size_t *out_len);
 
 #endif

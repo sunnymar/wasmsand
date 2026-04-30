@@ -20,6 +20,7 @@ const KERNEL_IMPORTS_BASELINE = [
   "host_socket_connect",
   "host_socket_send",
   "host_socket_recv",
+  "host_socket_addr",
   "host_socket_close",
   "host_extension_invoke",
   "host_native_invoke",

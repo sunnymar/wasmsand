@@ -12,6 +12,10 @@ export type FdTarget =
       type: 'socket';
       socket: SocketHandle | null;
       refs: number;
+      peerHost?: string;
+      peerPort?: number;
+      localHost?: string;
+      localPort?: number;
       readShutdown?: boolean;
       writeShutdown?: boolean;
       send: (socket: SocketHandle, dataB64: string) => SocketBackendResult;

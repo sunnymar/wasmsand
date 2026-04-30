@@ -45,6 +45,9 @@ export interface KernelImportsOptions {
   /** Backend for fd-based POSIX socket imports. Defaults to a NetworkBridge adapter. */
   socketBackend?: SocketBackend;
 
+  /** Fake sandbox-local IPv4 address reported by getsockname()/socket_addr(). */
+  socketLocalHost?: string;
+
   /**
    * Extension registry for host_extension_invoke (used by Python WASM).
    * The shell no longer calls host_extension_invoke — it routes everything
@@ -98,6 +101,8 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
   const { memory } = opts;
   const callerPid = opts.callerPid ?? 0;
   const socketBackend = opts.socketBackend ?? (opts.networkBridge ? createNetworkBridgeSocketBackend(opts.networkBridge) : undefined);
+  const socketLocalHost = opts.socketLocalHost ?? '10.0.2.15';
+  const socketLocalPortForFd = (fd: number) => 49152 + (Math.max(0, fd - 3) % 16384);
 
   return {
     // ── Process management (new) ──
@@ -475,9 +480,40 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         });
         if (result.ok) {
           target.socket = result.socket;
+          target.peerHost = typeof req.host === 'string' ? req.host : '0.0.0.0';
+          target.peerPort = typeof req.port === 'number' ? req.port : 0;
+          target.localHost = socketLocalHost;
+          target.localPort = socketLocalPortForFd(req.fd);
           return writeJson(memory, outPtr, outCap, { ok: true });
         }
         return writeJson(memory, outPtr, outCap, result);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return writeJson(memory, outPtr, outCap, { ok: false, error: msg });
+      }
+    },
+
+    // host_socket_addr(req_ptr, req_len, out_ptr, out_cap) -> i32
+    // Reports sandbox-visible socket address metadata.
+    // Request JSON: { fd }
+    // Response JSON: { ok, peer_host, peer_port, local_host, local_port } or { ok: false, error }
+    host_socket_addr(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+      try {
+        const req = JSON.parse(readString(memory, reqPtr, reqLen));
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket' || target.socket === null) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a connected socket fd: ${req.fd}` });
+        }
+        return writeJson(memory, outPtr, outCap, {
+          ok: true,
+          peer_host: target.peerHost ?? '0.0.0.0',
+          peer_port: target.peerPort ?? 0,
+          local_host: target.localHost ?? socketLocalHost,
+          local_port: target.localPort ?? socketLocalPortForFd(req.fd),
+        });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         return writeJson(memory, outPtr, outCap, { ok: false, error: msg });

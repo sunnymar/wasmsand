@@ -214,6 +214,25 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('{"case":"socket_surface","exit":0}');
   });
 
+  it('reports POSIX peer and local socket addresses through socket.h', async () => {
+    const socketBackend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 606 }),
+      send: (_socket, dataB64) => ({ ok: true, bytes_sent: atob(dataB64).length }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+    };
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      socketBackend,
+    });
+
+    const result = await sandbox.run('socket-address-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('socket-address=ok');
+  });
+
   it('links Rust POSIX socket FFI calls through libcodepod', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
@@ -555,6 +574,25 @@ describe('Guest compatibility canaries', () => {
     expect(requests).toContainEqual({ op: 'send', socket: 505, data_b64: btoa('one') });
     expect(requests).toContainEqual({ op: 'send', socket: 505, data_b64: btoa('two') });
     expect(requests.filter((req) => req.op === 'close')).toEqual([{ op: 'close', socket: 505 }]);
+  });
+
+  it('reports Rust std::net::TcpStream socket_addr through libcodepod getsockname', async () => {
+    const socketBackend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 707 }),
+      send: (_socket, dataB64) => ({ ok: true, bytes_sent: atob(dataB64).length }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+    };
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      socketBackend,
+    });
+
+    const result = await sandbox.run('std-net-socket-addr-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^local=10\.0\.2\.15:\d+$/);
   });
 
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {

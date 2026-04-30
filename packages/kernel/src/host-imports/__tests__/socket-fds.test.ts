@@ -122,4 +122,38 @@ describe('socket fd host imports', () => {
     expect(new TextDecoder().decode(bytes.subarray(600, 604))).toBe('pong');
     expect(requests.at(-1)).toEqual({ op: 'recv', socket: handle, max_bytes: 8 });
   });
+
+  it('reports peer and local socket addresses for connected socket fds', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const backend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 88 }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+    };
+    const imports = createKernelImports({ memory, kernel, socketBackend: backend });
+
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const connectReqLen = writeString(memory, 16, JSON.stringify({
+      fd,
+      host: 'example.test',
+      port: 443,
+      tls: false,
+    }));
+    (imports.host_socket_connect as (...args: number[]) => number)(16, connectReqLen, 256, 4096);
+
+    const addrReqLen = writeString(memory, 16, JSON.stringify({ fd }));
+    const addrLen = (imports.host_socket_addr as (...args: number[]) => number)(16, addrReqLen, 512, 4096);
+
+    const addr = readJson(memory, 512, addrLen) as Record<string, unknown>;
+    expect(addr).toMatchObject({
+      ok: true,
+      peer_host: 'example.test',
+      peer_port: 443,
+      local_host: '10.0.2.15',
+    });
+    expect(typeof addr.local_port).toBe('number');
+    expect(addr.local_port as number).toBeGreaterThanOrEqual(49152);
+  });
 });
