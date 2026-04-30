@@ -383,6 +383,18 @@ describe('Guest compatibility canaries', () => {
     );
   });
 
+  it('routes Rust std::net::TcpStream connect through libcodepod sockets', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-net-connect-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('kind=ConnectionRefused');
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
