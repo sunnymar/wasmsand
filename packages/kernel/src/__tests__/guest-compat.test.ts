@@ -8,8 +8,9 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
+import type { SocketBackend, SocketHandle } from '../network/socket-backend.js';
 
-const FIXTURES = resolve(import.meta.dirname, '../platform/__tests__/fixtures');
+const FIXTURES = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
 const HAS_BUSYBOX_FIXTURE = existsSync(resolve(FIXTURES, 'busybox.wasm'));
 
 describe('Guest compatibility canaries', () => {
@@ -393,6 +394,42 @@ describe('Guest compatibility canaries', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('kind=ConnectionRefused');
+  });
+
+  it('routes Rust std::net::TcpStream read/write through socket fd I/O', async () => {
+    const handle: SocketHandle = 101;
+    const requests: Record<string, unknown>[] = [];
+    const socketBackend: SocketBackend = {
+      connect(req) {
+        requests.push({ op: 'connect', ...req });
+        return { ok: true, socket: handle };
+      },
+      send(socket, dataB64) {
+        requests.push({ op: 'send', socket, data_b64: dataB64 });
+        return { ok: true, bytes_sent: 4 };
+      },
+      recv(socket, maxBytes) {
+        requests.push({ op: 'recv', socket, max_bytes: maxBytes });
+        return { ok: true, data_b64: btoa('pong') };
+      },
+      close(socket) {
+        requests.push({ op: 'close', socket });
+        return { ok: true };
+      },
+    };
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      socketBackend,
+    });
+
+    const result = await sandbox.run('std-net-stream-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('reply=pong');
+    expect(requests).toContainEqual({ op: 'connect', host: '127.0.0.1', port: 9, tls: false });
+    expect(requests).toContainEqual({ op: 'send', socket: handle, data_b64: btoa('ping') });
+    expect(requests).toContainEqual({ op: 'recv', socket: handle, max_bytes: 4 });
   });
 
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {

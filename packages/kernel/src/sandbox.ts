@@ -29,6 +29,7 @@ import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge } from './network/bridge.js';
+import type { SocketBackend } from './network/socket-backend.js';
 import { getSocketShimSource, getSslShimSource, buildSiteCustomizeSource, getRequestsShimSource } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
@@ -82,6 +83,8 @@ export interface SandboxOptions {
   runCommandHandler?: RunCommandHandler;
   /** Network policy for guest programs. If omitted, network access is disabled. */
   network?: NetworkPolicy;
+  /** Optional socket backend override. Primarily used by tests and alternate embeddings. */
+  socketBackend?: SocketBackend;
   /** Security policy and limits. */
   security?: SecurityOptions;
   /** Persistence configuration. Default mode is 'ephemeral' (no persistence). */
@@ -124,6 +127,7 @@ interface SandboxParts {
   bootWasmPath: string;
   mgr: ProcessManager;
   bridge?: NetworkBridge;
+  socketBackend?: SocketBackend;
   networkPolicy?: NetworkPolicy;
   security?: SecurityOptions;
   workerExecutor?: WorkerExecutor;
@@ -151,6 +155,7 @@ export class Sandbox {
   private mgr: ProcessManager;
   private envSnapshots: Map<string, Map<string, string>> = new Map();
   private bridge: NetworkBridge | null = null;
+  private socketBackend: SocketBackend | undefined;
   private networkPolicy: NetworkPolicy | undefined;
   private security: SecurityOptions | undefined;
   readonly sessionId: string;
@@ -176,6 +181,7 @@ export class Sandbox {
     this.bootWasmPath = parts.bootWasmPath;
     this.mgr = parts.mgr;
     this.bridge = parts.bridge ?? null;
+    this.socketBackend = parts.socketBackend;
     this.networkPolicy = parts.networkPolicy;
     this.security = parts.security;
     this.sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -274,6 +280,7 @@ export class Sandbox {
       mgr,
       processes,
       bridge,
+      socketBackend: options.socketBackend,
       extensionRegistry,
       runCommandHandler: options.runCommandHandler,
       getSandbox: () => sandboxRef,
@@ -481,6 +488,7 @@ export class Sandbox {
       vfs, kernel, processes, bootProcess, env, timeoutMs, adapter,
       wasmDir: options.wasmDir, bootWasmPath,
       mgr, bridge, networkPolicy: options.network,
+      socketBackend: options.socketBackend,
       security: options.security, workerExecutor,
       extensionRegistry, storage: options.storage,
       bootArgv, bootImports: options.bootImports,
@@ -663,6 +671,7 @@ export class Sandbox {
     mgr: ProcessManager;
     processes: Map<number, Process>;
     bridge?: NetworkBridge;
+    socketBackend?: SocketBackend;
     extensionRegistry: ExtensionRegistry;
     runCommandHandler?: RunCommandHandler;
     getSandbox: () => Sandbox | undefined;
@@ -677,6 +686,7 @@ export class Sandbox {
       mgr,
       processes,
       bridge,
+      socketBackend,
       extensionRegistry,
       runCommandHandler,
       getSandbox,
@@ -729,6 +739,7 @@ export class Sandbox {
           callerPid: pid,
           kernel,
           networkBridge: bridge,
+          socketBackend,
           extensionRegistry,
           nativeModules: mgr.nativeModules,
           runCommand: async (cmd, stdin) => {
@@ -1120,6 +1131,7 @@ export class Sandbox {
       mgr: this.mgr,
       processes: this.processes,
       bridge: this.bridge ?? undefined,
+      socketBackend: this.socketBackend,
       extensionRegistry: this.extensionRegistry ?? new ExtensionRegistry(),
       runCommandHandler: this.runCommandHandler,
       getSandbox: () => this,
@@ -1303,6 +1315,7 @@ export class Sandbox {
       mgr: childMgr,
       processes: childProcesses,
       bridge,
+      socketBackend: this.socketBackend,
       extensionRegistry: this.extensionRegistry ?? new ExtensionRegistry(),
       runCommandHandler: this.runCommandHandler,
       getSandbox: () => childRef,
@@ -1342,6 +1355,7 @@ export class Sandbox {
       wasmDir: this.wasmDir,
       bootWasmPath: this.bootWasmPath,
       mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
+      socketBackend: this.socketBackend,
       security: this.security, workerExecutor: childWorkerExecutor,
       extensionRegistry: this.extensionRegistry ?? undefined,
       storage: this.storage ?? undefined,
