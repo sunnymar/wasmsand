@@ -432,6 +432,25 @@ describe('Guest compatibility canaries', () => {
     expect(requests).toContainEqual({ op: 'recv', socket: handle, max_bytes: 4 });
   });
 
+  it('reports Rust std::net::TcpStream peer_addr for connected streams', async () => {
+    const socketBackend: SocketBackend = {
+      connect: () => ({ ok: true, socket: 202 }),
+      send: (_socket, dataB64) => ({ ok: true, bytes_sent: atob(dataB64).length }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+    };
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      socketBackend,
+    });
+
+    const result = await sandbox.run('std-net-peer-addr-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('peer=127.0.0.1:9');
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
