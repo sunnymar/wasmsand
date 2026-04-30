@@ -355,6 +355,20 @@ describe('Guest compatibility canaries', () => {
     );
   });
 
+  it('reads Rust std::process child stdout after wait', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('std-process-child-stdout-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      'status=Some(0) stdout="child-stdout"',
+    );
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
