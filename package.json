@@ -6,6 +6,8 @@
   ],
   "scripts": {
     "test": "deno task build:ts && deno test -A --no-check packages/kernel packages/sdk-server packages/mcp-server",
+    "test:engines": "bash scripts/check-runtime-engines.sh",
+    "test:bash-link": "bash scripts/check-bash-libcodepod-link.sh",
     "build": "bun run build:rust && bun run build:ts",
     "build:ts": "cd packages/kernel && tsup",
     "build:rust": "cargo build --target wasm32-wasip1 --release",
