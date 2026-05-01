@@ -175,6 +175,13 @@ describe('curl/libcurl conformance', () => {
     expect(result.stdout).toContain('hello curl');
   });
 
+  it('mbedTLS version canary runs in the sandbox', async () => {
+    const { sandbox } = await createSandbox();
+    const result = await sandbox.run('mbedtls-version-canary');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Mbed TLS');
+  });
+
   it.skip('socket-forced libcurl canary uses socket backend when available', () => {
     // Deferred until deterministic in-sandbox HTTP listener exists.
   });
