@@ -184,6 +184,13 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
     expect(result.stdout.trim()).toBe('hello');
   });
 
+  it('passes argv to external commands', async () => {
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
+    const result = await sandbox.run('printenv PATH');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('/usr/extensions:/bin:/usr/bin');
+  });
+
   it('destroy prevents further use', async () => {
     sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter() });
     sandbox.destroy();
@@ -199,10 +206,10 @@ describe('Sandbox', { sanitizeResources: false, sanitizeOps: false }, () => {
   });
 
   it('VFS size limit enforces ENOSPC', async () => {
-    // Init overhead is dominated by file/libmagic's magic.mgc (~10MB) plus
-    // the shell wasm installed at /bin/bash (~1.4MB). Pick a limit that fits
-    // init + first file (40KB) but not the second (10MB).
-    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 13_500_000 });
+    // Init installs real WASM executables into /bin and /usr/bin; current
+    // fixture bytes are ~188.1MB. This limit leaves enough room for the
+    // first 40KB write, but not for the second 200KB write.
+    sandbox = await Sandbox.create({ wasmDir: WASM_DIR, adapter: new NodeAdapter(), fsLimitBytes: 188_150_000 });
     sandbox.writeFile('/tmp/a.txt', new Uint8Array(40_000));
     expect(() => {
       sandbox.writeFile('/tmp/b.txt', new Uint8Array(10_000_000));
