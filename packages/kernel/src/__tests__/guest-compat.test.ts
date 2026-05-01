@@ -704,6 +704,20 @@ describe('Guest compatibility canaries', () => {
     expect(requests).toEqual([]);
   });
 
+  it('runs Rust std::net::TcpListener through libcodepod sockets', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      network: { allowedHosts: ['127.0.0.1', 'localhost'] },
+      serverSockets: { allowLoopback: true },
+    });
+
+    const result = await sandbox.run('std-net-listener-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('std-net-listener=ok');
+  });
+
   it('spawns a tool via absolute path to its /usr/bin stub', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,

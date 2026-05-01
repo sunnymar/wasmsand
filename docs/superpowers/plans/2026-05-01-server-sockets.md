@@ -1161,7 +1161,7 @@ git commit -m "feat(socket): support POSIX bind listen accept"
 - Create: `patches/rust/1.95.0/0018-wasi-net-listener.patch`
 - Modify: `packages/orchestrator/src/__tests__/guest-compat.test.ts`
 
-- [ ] **Step 1: Add Rust listener canary**
+- [x] **Step 1: Add Rust listener canary**
 
 Create `packages/guest-compat/conformance/rust/std-net-listener-canary/Cargo.toml`:
 
@@ -1178,55 +1178,35 @@ Create `packages/guest-compat/conformance/rust/std-net-listener-canary/src/main.
 
 ```rust
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
-use std::process::Command;
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 
-fn client(port: u16) {
-    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    let mut stream = TcpStream::connect(addr).expect("connect loopback listener");
-    stream.write_all(b"ping").expect("write ping");
-    let mut buf = [0_u8; 4];
-    stream.read_exact(&mut buf).expect("read pong");
-    assert_eq!(&buf, b"pong");
-}
-
-fn server() {
+fn main() {
     let port = 18082;
-    let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
-        .expect("bind loopback listener");
-    let me = std::env::current_exe().expect("current exe");
-    let mut child = Command::new(me)
-        .arg("client")
-        .arg(port.to_string())
-        .spawn()
-        .expect("spawn client");
+    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let listener = TcpListener::bind(addr).expect("bind loopback listener");
+    let mut client = TcpStream::connect(addr).expect("connect loopback listener");
+    client.write_all(b"ping").expect("write ping");
+
     let (mut stream, peer) = listener.accept().expect("accept client");
-    assert_eq!(peer.ip(), &Ipv4Addr::LOCALHOST);
+    assert_eq!(peer.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
     let mut buf = [0_u8; 4];
     stream.read_exact(&mut buf).expect("read ping");
     assert_eq!(&buf, b"ping");
     stream.write_all(b"pong").expect("write pong");
-    let status = child.wait().expect("wait client");
-    assert!(status.success());
-    println!("std-net-listener=ok");
-}
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) == Some("client") {
-      let port = args[2].parse::<u16>().unwrap();
-      client(port);
-    } else {
-      server();
-    }
+    let mut reply = [0_u8; 4];
+    client.read_exact(&mut reply).expect("read pong");
+    assert_eq!(&reply, b"pong");
+
+    println!("std-net-listener=ok");
 }
 ```
 
-- [ ] **Step 2: Wire canary build**
+- [x] **Step 2: Wire canary build**
 
 In `packages/guest-compat/Makefile`, add `std-net-listener-canary` beside the other Rust std net canaries and copy its `.wasm` fixture.
 
-- [ ] **Step 3: Run canary build and capture failure**
+- [x] **Step 3: Run canary build and capture failure**
 
 Run:
 
@@ -1236,7 +1216,7 @@ source scripts/dev-init.sh && make -C packages/guest-compat rust-std-canaries
 
 Expected: fails before Step 4 because stock `wasm32-wasip1` `TcpListener::bind` is still unsupported by the current Codepod Rust std patch stack.
 
-- [ ] **Step 4: Patch Rust std listener APIs**
+- [x] **Step 4: Patch Rust std listener APIs**
 
 Create listener patches for all supported Rust versions (`1.93.0`, `1.94.1`, `1.95.0`). Each patch targets `library/std/src/sys/net/connection/wasip1.rs` after the existing Codepod TCP patches have been applied.
 
@@ -1373,7 +1353,7 @@ diff -u /tmp/wasip1-before-listener-1.95.0.rs /tmp/rust-src-1.95.0/library/std/s
 
 These listener patches must use the guest libc symbols from `libcodepod.a`. They must not add a Rust-only host import path.
 
-- [ ] **Step 5: Add guest test**
+- [x] **Step 5: Add guest test**
 
 In `packages/orchestrator/src/__tests__/guest-compat.test.ts`, add:
 
@@ -1391,14 +1371,15 @@ it('runs Rust std::net::TcpListener through Codepod std patches', async () => {
 });
 ```
 
-- [ ] **Step 6: Verify Rust versions**
+- [x] **Step 6: Verify Rust versions**
 
 Run:
 
 ```bash
 source scripts/dev-init.sh && ./scripts/check-rust-std-matrix.sh
 source scripts/dev-init.sh && make -C packages/guest-compat rust-std-canaries
-cp packages/guest-compat/build/std-net-listener-canary.wasm packages/orchestrator/src/platform/__tests__/fixtures/std-net-listener-canary.wasm
+CPCC_ARCHIVE="$PWD/packages/guest-compat/build/libcodepod.a" CPCC_NO_WASM_OPT=1 CODEPOD_RUST_STD="$PWD/packages/guest-compat/build/rust-std/1.94.1" CARGO_TARGET_DIR="$PWD/target/rust-std-canaries/1.94.1-listener" RUSTUP_TOOLCHAIN=1.94.1 target/release/cargo-codepod codepod build --release --manifest-path packages/guest-compat/conformance/rust/std-net-listener-canary/Cargo.toml
+CPCC_ARCHIVE="$PWD/packages/guest-compat/build/libcodepod.a" CPCC_NO_WASM_OPT=1 CODEPOD_RUST_STD="$PWD/packages/guest-compat/build/rust-std/1.95.0" CARGO_TARGET_DIR="$PWD/target/rust-std-canaries/1.95.0-listener" RUSTUP_TOOLCHAIN=1.95.0 target/release/cargo-codepod codepod build --release --manifest-path packages/guest-compat/conformance/rust/std-net-listener-canary/Cargo.toml
 source scripts/dev-init.sh && deno test -A --no-check packages/orchestrator/src/__tests__/guest-compat.test.ts
 git diff --check -- packages/guest-compat/conformance/rust/std-net-listener-canary packages/guest-compat/Makefile packages/orchestrator/src/__tests__/guest-compat.test.ts patches/rust
 ```
