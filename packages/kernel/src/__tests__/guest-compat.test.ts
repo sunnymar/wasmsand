@@ -214,6 +214,20 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('{"case":"socket_surface","exit":0}');
   });
 
+  it('runs C POSIX socket listener through bind/listen/accept', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      network: { allowedHosts: ['127.0.0.1', 'localhost'] },
+      serverSockets: { allowLoopback: true },
+    });
+
+    const result = await sandbox.run('socket-listen-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('socket-listen=ok');
+  });
+
   it('reports POSIX peer and local socket addresses through socket.h', async () => {
     const socketBackend: SocketBackend = {
       connect: () => ({ ok: true, socket: 606 }),

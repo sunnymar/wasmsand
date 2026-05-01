@@ -623,7 +623,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_socket_accept(req_ptr, req_len, out_ptr, out_cap) -> i32
     // Polls one accepted connection from a listening socket fd.
-    host_socket_accept(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+    async host_socket_accept(reqPtr: number, reqLen: number, outPtr: number, outCap: number): Promise<number> {
       if (!socketBackend?.accept) {
         return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not supported by this backend' });
       }
@@ -636,7 +636,13 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         if (!target || target.type !== 'socket' || target.listener == null) {
           return writeJson(memory, outPtr, outCap, { ok: false, error: `not a listening socket fd: ${req.fd}` });
         }
-        const accepted = socketBackend.accept(target.listener);
+        let accepted = socketBackend.accept(target.listener);
+        let attempts = 0;
+        while (!accepted.ok && 'wouldBlock' in accepted && accepted.wouldBlock === true) {
+          if (++attempts > 100000) return writeJson(memory, outPtr, outCap, accepted);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          accepted = socketBackend.accept(target.listener);
+        }
         if (!accepted.ok) return writeJson(memory, outPtr, outCap, accepted);
         if (!opts.kernel) {
           return writeJson(memory, outPtr, outCap, { ok: false, error: 'kernel not configured' });

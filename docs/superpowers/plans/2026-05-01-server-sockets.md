@@ -843,8 +843,9 @@ git commit -m "feat(socket): implement node listener backend"
 - Create: `packages/guest-compat/conformance/c/socket-listen-canary.c`
 - Modify: `packages/guest-compat/Makefile`
 - Modify: `packages/orchestrator/src/__tests__/guest-compat.test.ts`
+- Modify: `packages/orchestrator/src/process/loader.ts`
 
-- [ ] **Step 1: Add runtime import declarations**
+- [x] **Step 1: Add runtime import declarations**
 
 In `packages/guest-compat/src/codepod_runtime.h`, add:
 
@@ -859,7 +860,7 @@ __attribute__((import_module("codepod"), import_name("host_socket_accept")))
 int codepod_host_socket_accept(int req_ptr, int req_len, int out_ptr, int out_cap);
 ```
 
-- [ ] **Step 2: Replace `bind` shim**
+- [x] **Step 2: Replace `bind` shim**
 
 In `packages/guest-compat/src/codepod_socket.c`, replace the current `bind` body with:
 
@@ -915,7 +916,7 @@ static int codepod_sockaddr_to_host_port(
 }
 ```
 
-- [ ] **Step 3: Replace `listen` shim**
+- [x] **Step 3: Replace `listen` shim**
 
 Replace `listen` with:
 
@@ -941,7 +942,7 @@ int listen(int sockfd, int backlog) {
 }
 ```
 
-- [ ] **Step 4: Replace `accept` shim**
+- [x] **Step 4: Replace `accept` shim**
 
 Replace `codepod_accept_impl` with:
 
@@ -995,7 +996,7 @@ static int codepod_accept_impl(int sockfd, struct sockaddr *addr, socklen_t *add
 }
 ```
 
-- [ ] **Step 5: Add C listen canary**
+- [x] **Step 5: Add C listen canary**
 
 Create `packages/guest-compat/conformance/c/socket-listen-canary.c`:
 
@@ -1085,7 +1086,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-- [ ] **Step 6: Update existing socket canary expectations**
+- [x] **Step 6: Update existing socket canary expectations**
 
 In `packages/guest-compat/conformance/c/socket-canary.c`, keep the unsupported checks only for unmapped `0.0.0.0` or invalid policy. Replace the current `bind/listen/accept` unsupported block with:
 
@@ -1107,7 +1108,7 @@ In `packages/guest-compat/conformance/c/socket-canary.c`, keep the unsupported c
   }
 ```
 
-- [ ] **Step 7: Wire Makefile and guest test**
+- [x] **Step 7: Wire Makefile and guest test**
 
 In `packages/guest-compat/Makefile`, add `socket-listen-canary.wasm` to the C canary targets next to `socket-canary.wasm`.
 
@@ -1127,7 +1128,7 @@ it('runs C POSIX socket listener through bind/listen/accept', async () => {
 });
 ```
 
-- [ ] **Step 8: Build and run C canaries**
+- [x] **Step 8: Build and run C canaries**
 
 Run:
 

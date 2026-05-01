@@ -347,6 +347,27 @@ static int codepod_fill_sockaddr_from_host(
   return 0;
 }
 
+static int codepod_sockaddr_to_host_port(
+  const struct sockaddr *addr,
+  socklen_t addrlen,
+  char *host,
+  size_t host_cap,
+  int *port
+) {
+  const struct sockaddr_in *in;
+  if (!addr || addrlen < sizeof(struct sockaddr_in) || addr->sa_family != AF_INET) {
+    errno = EAFNOSUPPORT;
+    return -1;
+  }
+  in = (const struct sockaddr_in *)addr;
+  if (!inet_ntop(AF_INET, &in->sin_addr, host, host_cap)) {
+    errno = EINVAL;
+    return -1;
+  }
+  *port = (int)ntohs(in->sin_port);
+  return 0;
+}
+
 static int codepod_sockname_impl(
   int sockfd,
   struct sockaddr *addr,
@@ -392,30 +413,97 @@ int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
 
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   CODEPOD_MARKER_CALL(bind);
-  (void)sockfd;
-  (void)addr;
-  (void)addrlen;
-  errno = EOPNOTSUPP;
-  return -1;
+  char host[INET_ADDRSTRLEN];
+  int port;
+  char req[256];
+  char resp[CODEPOD_SOCKET_RESP_CAP];
+  int req_len;
+  int n;
+
+  if (codepod_sockaddr_to_host_port(addr, addrlen, host, sizeof(host), &port) != 0) {
+    return -1;
+  }
+  req_len = snprintf(req, sizeof(req), "{\"fd\":%d,\"host\":\"%s\",\"port\":%d}", sockfd, host, port);
+  if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+  n = codepod_host_socket_bind((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
+  if (n <= 0 || !parse_json_ok(resp, (size_t)n)) {
+    errno = EOPNOTSUPP;
+    return -1;
+  }
+  return 0;
 }
 
 int listen(int sockfd, int backlog) {
   CODEPOD_MARKER_CALL(listen);
-  (void)sockfd;
-  (void)backlog;
-  errno = EOPNOTSUPP;
-  return -1;
+  char req[128];
+  char resp[CODEPOD_SOCKET_RESP_CAP];
+  int req_len;
+  int n;
+
+  req_len = snprintf(req, sizeof(req), "{\"fd\":%d,\"backlog\":%d}", sockfd, backlog);
+  if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+  n = codepod_host_socket_listen((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
+  if (n <= 0 || !parse_json_ok(resp, (size_t)n)) {
+    errno = EOPNOTSUPP;
+    return -1;
+  }
+  return 0;
 }
 
 static int codepod_accept_impl(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
   CODEPOD_MARKER_CALL(accept);
-  (void)sockfd;
-  if (addrlen) {
-    *addrlen = 0;
+  char req[128];
+  char resp[CODEPOD_SOCKET_RESP_CAP];
+  char peer_host[64];
+  int peer_port = 0;
+  int accepted_fd = -1;
+  int req_len;
+  int n;
+  int attempts = 0;
+
+  req_len = snprintf(req, sizeof(req), "{\"fd\":%d}", sockfd);
+  if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
+    errno = EOVERFLOW;
+    return -1;
   }
-  (void)addr;
-  errno = EOPNOTSUPP;
-  return -1;
+  for (;;) {
+    n = codepod_host_socket_accept((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
+    if (n <= 0) {
+      errno = EOPNOTSUPP;
+      return -1;
+    }
+    if (parse_json_ok(resp, (size_t)n)) break;
+    if (json_contains(resp, (size_t)n, "\"wouldBlock\":true") ||
+        json_contains(resp, (size_t)n, "\"would_block\":true")) {
+      if (++attempts > 100000) {
+        errno = EAGAIN;
+        return -1;
+      }
+      codepod_host_yield();
+      continue;
+    }
+    errno = EOPNOTSUPP;
+    return -1;
+  }
+  if (parse_json_int(resp, (size_t)n, "fd", &accepted_fd) != 0) {
+    return -1;
+  }
+  if (addr && addrlen && *addrlen >= sizeof(struct sockaddr_in)) {
+    if (parse_json_string_field(resp, (size_t)n, "peer_host", peer_host, sizeof(peer_host)) != 0 ||
+        parse_json_int(resp, (size_t)n, "peer_port", &peer_port) != 0 ||
+        codepod_fill_sockaddr_from_host(addr, addrlen, peer_host, peer_port) != 0) {
+      return -1;
+    }
+  } else if (addrlen) {
+    *addrlen = sizeof(struct sockaddr_in);
+  }
+  return accepted_fd;
 }
 
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {

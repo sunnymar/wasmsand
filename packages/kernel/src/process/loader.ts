@@ -121,6 +121,7 @@ export async function loadProcess(
     "host_yield",
     "host_network_fetch",
     "host_register_tool",
+    "host_socket_accept",
     "host_extension_invoke",
     "host_run_command",
   ], asyncifyBridge);

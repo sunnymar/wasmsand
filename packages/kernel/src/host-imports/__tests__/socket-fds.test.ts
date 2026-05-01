@@ -362,7 +362,7 @@ describe('socket fd host imports', () => {
     expect(requests).toEqual([]);
   });
 
-  it('accepts a listener connection and allocates a connected socket fd', () => {
+  it('accepts a listener connection and allocates a connected socket fd', async () => {
     const memory = new WebAssembly.Memory({ initial: 1 });
     const kernel = new ProcessKernel();
     const backend: SocketBackend = {
@@ -394,7 +394,7 @@ describe('socket fd host imports', () => {
     (imports.host_socket_listen as (...args: number[]) => number)(16, listenLen, 256, 4096);
 
     const acceptLen = writeString(memory, 16, JSON.stringify({ fd }));
-    const out = (imports.host_socket_accept as (...args: number[]) => number)(16, acceptLen, 256, 4096);
+    const out = await (imports.host_socket_accept as (...args: number[]) => Promise<number>)(16, acceptLen, 256, 4096);
     const accepted = readJson(memory, 256, out) as { ok: true; fd: number };
 
     expect(accepted.ok).toBe(true);

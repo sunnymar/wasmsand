@@ -9,6 +9,9 @@ int codepod_host_run_command(int req_ptr, int req_len, int out_ptr, int out_cap)
 __attribute__((import_module("codepod"), import_name("host_dup2")))
 int codepod_host_dup2(int src_fd, int dst_fd);
 
+__attribute__((import_module("codepod"), import_name("host_yield")))
+void codepod_host_yield(void);
+
 __attribute__((import_module("codepod"), import_name("host_file_lock")))
 int codepod_host_file_lock(int fd, int operation);
 
@@ -69,6 +72,15 @@ int codepod_host_socket_open(int domain, int type, int protocol);
 
 __attribute__((import_module("codepod"), import_name("host_socket_connect")))
 int codepod_host_socket_connect(int req_ptr, int req_len, int out_ptr, int out_cap);
+
+__attribute__((import_module("codepod"), import_name("host_socket_bind")))
+int codepod_host_socket_bind(int req_ptr, int req_len, int out_ptr, int out_cap);
+
+__attribute__((import_module("codepod"), import_name("host_socket_listen")))
+int codepod_host_socket_listen(int req_ptr, int req_len, int out_ptr, int out_cap);
+
+__attribute__((import_module("codepod"), import_name("host_socket_accept")))
+int codepod_host_socket_accept(int req_ptr, int req_len, int out_ptr, int out_cap);
 
 __attribute__((import_module("codepod"), import_name("host_socket_send")))
 int codepod_host_socket_send(int req_ptr, int req_len, int out_ptr, int out_cap);

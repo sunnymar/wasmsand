@@ -104,23 +104,24 @@ int main(void) {
     return 1;
   }
 
-  errno = 0;
-  if (bind(fd, res->ai_addr, res->ai_addrlen) != -1 || errno != EOPNOTSUPP) {
-    emit("bind", 1);
-    freeaddrinfo(res);
-    return 1;
-  }
-  errno = 0;
-  if (listen(fd, 1) != -1 || errno != EOPNOTSUPP) {
-    emit("listen", 1);
-    freeaddrinfo(res);
-    return 1;
-  }
-  errno = 0;
-  if (accept(fd, NULL, NULL) != -1 || errno != EOPNOTSUPP) {
-    emit("accept", 1);
-    freeaddrinfo(res);
-    return 1;
+  {
+    struct sockaddr_in unsupported;
+    memset(&unsupported, 0, sizeof(unsupported));
+    unsupported.sin_family = AF_INET;
+    unsupported.sin_port = htons(6553);
+    inet_pton(AF_INET, "0.0.0.0", &unsupported.sin_addr);
+    errno = 0;
+    if (bind(fd, (struct sockaddr *)&unsupported, sizeof(unsupported)) != 0) {
+      emit("bind_intent", 1);
+      freeaddrinfo(res);
+      return 1;
+    }
+    errno = 0;
+    if (listen(fd, 1) != -1 || errno != EOPNOTSUPP) {
+      emit("listen_policy", 1);
+      freeaddrinfo(res);
+      return 1;
+    }
   }
 
   if (connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
