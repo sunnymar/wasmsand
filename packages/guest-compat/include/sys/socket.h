@@ -12,6 +12,9 @@
 #undef SO_REUSEADDR
 #define SO_REUSEADDR 0x0004
 
+#undef SO_KEEPALIVE
+#define SO_KEEPALIVE 9
+
 #undef SO_ERROR
 #define SO_ERROR 0x1007
 

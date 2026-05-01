@@ -16,12 +16,22 @@
 #ifndef SO_ERROR
 #define SO_ERROR 0x1007
 #endif
+#ifndef SO_KEEPALIVE
+#define SO_KEEPALIVE 9
+#endif
 #ifndef MSG_PEEK
 #define MSG_PEEK 0x02
+#endif
+#ifndef SOL_IP
+#define SOL_IP 0
+#endif
+#ifndef IP_BIND_ADDRESS_NO_PORT
+#define IP_BIND_ADDRESS_NO_PORT 24
 #endif
 
 #define CODEPOD_SO_REUSEADDR 0x0004
 #define CODEPOD_SO_ERROR 0x1007
+#define CODEPOD_SO_KEEPALIVE 9
 #define CODEPOD_MSG_PEEK 0x02
 #define CODEPOD_IPPROTO_TCP 6
 #define CODEPOD_TCP_NODELAY 1
@@ -645,7 +655,13 @@ int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t
     return -1;
   }
 
-  if (level == SOL_SOCKET && (optname == SO_REUSEADDR || optname == CODEPOD_SO_REUSEADDR)) {
+  if (level == SOL_SOCKET
+      && (optname == SO_REUSEADDR || optname == CODEPOD_SO_REUSEADDR
+          || optname == SO_KEEPALIVE || optname == CODEPOD_SO_KEEPALIVE)) {
+    return 0;
+  }
+
+  if (level == SOL_IP && optname == IP_BIND_ADDRESS_NO_PORT) {
     return 0;
   }
 

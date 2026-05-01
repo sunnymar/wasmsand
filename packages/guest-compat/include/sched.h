@@ -19,6 +19,7 @@ typedef struct {
 int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask);
 int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t *mask);
 int sched_getcpu(void);
+int sched_yield(void);
 
 /* POSIX scheduling — wasi-libc has no <sched.h> beyond CPU sets, but
  * <spawn.h> needs `struct sched_param` for posix_spawnattr_setschedparam.

@@ -6,7 +6,7 @@
 
 **Architecture:** First make the host fetch ABI curl-capable: manual redirects, byte-preserving browser fetch, and transport-vs-HTTP error semantics. Then add `packages/c-ports/curl` as an upstream-pin C port for curl 8.19.0, patch libcurl with a Codepod network mode and fetch transport, and validate both CLI and library surfaces through sandbox tests.
 
-**Tech Stack:** Deno tests, TypeScript kernel/network bridge, `cpcc`/`cpar`/`cpranlib`, `wasi-sdk`, curl/libcurl 8.19.0, static `libcurl.a`, C canaries, Codepod `libcodepod.a`/transitional `libcodepod_guest_compat.a`.
+**Tech Stack:** Deno tests, TypeScript kernel/network bridge, `cpcc`/`cpar`/`cpranlib`, `wasi-sdk`, curl/libcurl 8.19.0, static `libcurl.a`, C canaries, Codepod `libcodepod.a`.
 
 ---
 
@@ -18,13 +18,13 @@ Upstream pin: curl `8.19.0`. The official curl download page currently lists `cu
 
 Existing c-port policy: `packages/c-ports/README.md` requires an upstream git submodule, patches in `patches/*.patch`, and an out-of-tree `build/work` copy.
 
-Current transitional archive path in c-port Makefiles:
+Current Codepod guest-compat archive path:
 
 ```make
-GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod_guest_compat.a
+GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod.a
 ```
 
-Use that path until the archive rename is complete elsewhere. Do not block this port on the rename.
+Use that path for curl. Older c-ports may still have stale archive names; do not copy those into this port.
 
 ---
 
@@ -651,7 +651,7 @@ BUILD_DIR := build
 WORK_DIR := $(BUILD_DIR)/work
 CANARY_DIR := canaries
 GUEST_COMPAT_INCLUDE := $(abspath ../../guest-compat/include)
-GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod_guest_compat.a
+GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod.a
 
 CPCC := $(REPO_ROOT)/target/release/cpcc
 CPAR := $(REPO_ROOT)/target/release/cpar
@@ -682,7 +682,7 @@ $(WORK_DIR)/configure.ac: submodule-init
 	if [ -d $(PATCHES_DIR) ] && ls $(PATCHES_DIR)/*.patch >/dev/null 2>&1; then \
 		for p in $(PATCHES_DIR)/*.patch; do \
 			echo "==> Applying $$p"; \
-			git -C $(WORK_DIR) apply --whitespace=nowarn $(abspath $$p); \
+			patch -d $(WORK_DIR) -p1 < $(abspath $$p); \
 		done; \
 	fi
 	touch $(WORK_DIR)/configure.ac
@@ -706,6 +706,7 @@ $(WORK_DIR)/Makefile: $(WORK_DIR)/configure ensure-toolchain ensure-compat
 			--enable-static \
 			--disable-threaded-resolver \
 			--disable-verbose \
+			--disable-docs \
 			--disable-manual \
 			--disable-libcurl-option \
 			--without-ssl \
@@ -740,7 +741,7 @@ $(BUILD_DIR)/curl.wasm: $(WORK_DIR)/Makefile ensure-compat
 		CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
 		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
 			VERSION="$(CURL_VERSION)" \
-			src/curl
+			all
 	cp $(WORK_DIR)/src/curl $(BUILD_DIR)/curl.wasm
 
 $(BUILD_DIR)/libcurl-fetch-canary.wasm: $(WORK_DIR)/Makefile $(CANARY_DIR)/libcurl-fetch-canary.c

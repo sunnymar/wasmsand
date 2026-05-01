@@ -8,6 +8,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -67,6 +68,21 @@ int main(void) {
     freeaddrinfo(res);
     return 1;
   }
+  if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &yes, sizeof(yes)) != 0) {
+    emit("setsockopt_keepalive", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+#ifdef IP_BIND_ADDRESS_NO_PORT
+  if (setsockopt(fd, SOL_IP, IP_BIND_ADDRESS_NO_PORT, &yes, sizeof(yes)) != 0) {
+    emit("setsockopt_ip_bind_address_no_port", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+#endif
+#ifndef POLLPRI
+#error "POLLPRI must be available for curl-compatible poll headers"
+#endif
   int socket_type = 0;
   socklen_t socket_type_len = sizeof(socket_type);
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_len) != 0 ||
