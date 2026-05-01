@@ -1,0 +1,128 @@
+diff --git a/include/curl/curl.h b/include/curl/curl.h
+index 209716b..f0a3792 100644
+--- a/include/curl/curl.h
++++ b/include/curl/curl.h
+@@ -930,0 +931,6 @@ typedef enum {
++typedef enum {
++  CURLCODEPOD_NETWORK_AUTO = 0,
++  CURLCODEPOD_NETWORK_FETCH = 1,
++  CURLCODEPOD_NETWORK_SOCKET = 2
++} curl_codepod_network;
++
+@@ -2260,0 +2267,3 @@ typedef enum {
++  /* Codepod-only: select runtime network backend. Value is curl_codepod_network. */
++  CURLOPT(CURLOPT_CODEPOD_NETWORK, CURLOPTTYPE_LONG, 329),
++
+diff --git a/lib/easyoptions.c b/lib/easyoptions.c
+index 4c0b4f0..e61de70 100644
+--- a/lib/easyoptions.c
++++ b/lib/easyoptions.c
+@@ -50,0 +51 @@ const struct curl_easyoption Curl_easyopts[] = {
++  { "CODEPOD_NETWORK", CURLOPT_CODEPOD_NETWORK, CURLOT_LONG, 0 },
+@@ -388 +389 @@ int Curl_easyopts_check(void)
+-  return (CURLOPT_LASTENTRY % 10000) != (328 + 1);
++  return (CURLOPT_LASTENTRY % 10000) != (329 + 1);
+diff --git a/lib/setopt.c b/lib/setopt.c
+index 84f3e02..9af2673 100644
+--- a/lib/setopt.c
++++ b/lib/setopt.c
+@@ -966,0 +967,5 @@ static CURLcode setopt_long_net(struct Curl_easy *data, CURLoption option,
++  case CURLOPT_CODEPOD_NETWORK:
++    if(arg < CURLCODEPOD_NETWORK_AUTO || arg > CURLCODEPOD_NETWORK_SOCKET)
++      return CURLE_BAD_FUNCTION_ARGUMENT;
++    s->codepod_network = arg;
++    break;
+diff --git a/lib/url.c b/lib/url.c
+index ec0457b..f82eb67 100644
+--- a/lib/url.c
++++ b/lib/url.c
+@@ -363,0 +364 @@ void Curl_init_userdefined(struct Curl_easy *data)
++  set->codepod_network = CURLCODEPOD_NETWORK_AUTO;
+@@ -455,0 +457,16 @@ void Curl_init_userdefined(struct Curl_easy *data)
++long Curl_codepod_network_mode(const struct Curl_easy *data)
++{
++  const char *env = curl_getenv("CODEPOD_CURL_NETWORK");
++  long mode = data->set.codepod_network;
++  if(env) {
++    if(!strcmp(env, "auto"))
++      mode = CURLCODEPOD_NETWORK_AUTO;
++    else if(!strcmp(env, "fetch"))
++      mode = CURLCODEPOD_NETWORK_FETCH;
++    else if(!strcmp(env, "socket"))
++      mode = CURLCODEPOD_NETWORK_SOCKET;
++    free((void *)env);
++  }
++  return mode;
++}
++
+diff --git a/lib/url.h b/lib/url.h
+index c4cd762..911e217 100644
+--- a/lib/url.h
++++ b/lib/url.h
+@@ -36,0 +37 @@ void Curl_freeset(struct Curl_easy *data);
++long Curl_codepod_network_mode(const struct Curl_easy *data);
+diff --git a/lib/urldata.h b/lib/urldata.h
+index 5ae1480..d78e98c 100644
+--- a/lib/urldata.h
++++ b/lib/urldata.h
+@@ -1338,0 +1339 @@ struct UserDefined {
++  long codepod_network; /* Codepod runtime network backend */
+diff --git a/src/config2setopts.c b/src/config2setopts.c
+index 20d87a0..301dcf8 100644
+--- a/src/config2setopts.c
++++ b/src/config2setopts.c
+@@ -860,0 +861 @@ CURLcode config2setopts(struct OperationConfig *config,
++  my_setopt_long(curl, CURLOPT_CODEPOD_NETWORK, config->codepod_network);
+diff --git a/src/tool_cfgable.c b/src/tool_cfgable.c
+index 3f9dd1b..4a80b42 100644
+--- a/src/tool_cfgable.c
++++ b/src/tool_cfgable.c
+@@ -48,0 +49 @@ struct OperationConfig *config_alloc(void)
++  config->codepod_network = CURLCODEPOD_NETWORK_AUTO;
+diff --git a/src/tool_cfgable.h b/src/tool_cfgable.h
+index 4af31b8..c2201d8 100644
+--- a/src/tool_cfgable.h
++++ b/src/tool_cfgable.h
+@@ -179,0 +180 @@ struct OperationConfig {
++  long codepod_network;
+diff --git a/src/tool_getparam.c b/src/tool_getparam.c
+index e6e6419..61de6c4 100644
+--- a/src/tool_getparam.c
++++ b/src/tool_getparam.c
+@@ -96,0 +97 @@ static const struct LongShort aliases[]= {
++  {"codepod-network",            ARG_STRG, ' ', C_CODEPOD_NETWORK},
+@@ -1074,0 +1076,16 @@ static ParameterError set_rate(const char *nextarg)
++static ParameterError parse_codepod_network(struct OperationConfig *config,
++                                            const char *nextarg)
++{
++  if(curl_strequal(nextarg, "auto"))
++    config->codepod_network = CURLCODEPOD_NETWORK_AUTO;
++  else if(curl_strequal(nextarg, "fetch"))
++    config->codepod_network = CURLCODEPOD_NETWORK_FETCH;
++  else if(curl_strequal(nextarg, "socket"))
++    config->codepod_network = CURLCODEPOD_NETWORK_SOCKET;
++  else {
++    errorf("--codepod-network must be auto, fetch, or socket");
++    return PARAM_BAD_USE;
++  }
++  return PARAM_OK;
++}
++
+@@ -2384,0 +2402,3 @@ static ParameterError opt_string(struct OperationConfig *config,
++  case C_CODEPOD_NETWORK: /* --codepod-network */
++    err = parse_codepod_network(config, nextarg);
++    break;
+diff --git a/src/tool_getparam.h b/src/tool_getparam.h
+index e3cbe54..411eed6 100644
+--- a/src/tool_getparam.h
++++ b/src/tool_getparam.h
+@@ -47,0 +48 @@ typedef enum {
++  C_CODEPOD_NETWORK,
+diff --git a/src/tool_listhelp.c b/src/tool_listhelp.c
+index 864771b..5236533 100644
+--- a/src/tool_listhelp.c
++++ b/src/tool_listhelp.c
+@@ -75,0 +76,3 @@ const struct helptxt helptext[] = {
++  { "    --codepod-network <mode>",
++    "Select Codepod network backend",
++    CURLHELP_CONNECTION },
