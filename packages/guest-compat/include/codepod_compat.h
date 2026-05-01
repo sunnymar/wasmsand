@@ -37,4 +37,12 @@ int codepod_system(const char *cmd);
 FILE *codepod_popen(const char *cmd, const char *mode);
 int codepod_pclose(FILE *stream);
 
+int codepod_fetch_text(
+  const char *url,
+  const char *method,
+  const char *headers_json,
+  const char *body,
+  char **out_body
+);
+
 #endif

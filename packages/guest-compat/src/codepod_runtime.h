@@ -15,6 +15,9 @@ void codepod_host_yield(void);
 __attribute__((import_module("codepod"), import_name("host_file_lock")))
 int codepod_host_file_lock(int fd, int operation);
 
+__attribute__((import_module("codepod"), import_name("host_network_fetch")))
+int codepod_host_network_fetch(int req_ptr, int req_len, int out_ptr, int out_cap);
+
 /* Process identity / signalling — codepod's process kernel owns the
  * sandbox's PID space and tracks parent links and process state.  These
  * imports route guest libc calls (getpid/getppid/kill) to the kernel,

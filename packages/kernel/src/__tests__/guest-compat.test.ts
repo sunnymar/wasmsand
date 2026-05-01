@@ -8,10 +8,41 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { NodeAdapter } from '../platform/node-adapter.js';
+import type { NetworkBridgeLike, SyncFetchResult, SyncRequestResult } from '../network/bridge.ts';
 import type { SocketBackend, SocketHandle } from '../network/socket-backend.js';
 
 const FIXTURES = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
 const HAS_BUSYBOX_FIXTURE = existsSync(resolve(FIXTURES, 'busybox.wasm'));
+
+class StaticFetchBridge implements NetworkBridgeLike {
+  requests: Array<{
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: string | null;
+    redirect?: 'follow' | 'manual';
+  }> = [];
+
+  fetchSync(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    body?: string,
+    redirect?: 'follow' | 'manual',
+  ): SyncFetchResult {
+    this.requests.push({ url, method, headers, body, redirect });
+    return {
+      status: 200,
+      headers: {},
+      body: 'fetch-canary-ok',
+      body_base64: 'ZmV0Y2gtY2FuYXJ5LW9r',
+    };
+  }
+
+  requestSync(): SyncRequestResult {
+    return { ok: false, error: 'not used' };
+  }
+}
 
 describe('Guest compatibility canaries', () => {
   let sandbox: Sandbox | null = null;
@@ -262,6 +293,28 @@ describe('Guest compatibility canaries', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('socket-address=ok');
+  });
+
+  it('routes C host_network_fetch through codepod_fetch_text', async () => {
+    const networkBridge = new StaticFetchBridge();
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      network: { allowedHosts: ['example.test'] },
+      networkBridge,
+    });
+
+    const result = await sandbox.run('fetch-canary https://example.test/data');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('fetch-canary-ok');
+    expect(networkBridge.requests).toEqual([{
+      url: 'https://example.test/data',
+      method: 'GET',
+      headers: {},
+      body: null,
+      redirect: 'manual',
+    }]);
   });
 
   it('links Rust POSIX socket FFI calls through libcodepod', async () => {

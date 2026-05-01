@@ -25,6 +25,7 @@ LIB_OBJS := \
   $(BUILD_DIR)/codepod_command.o \
   $(BUILD_DIR)/codepod_dup.o \
   $(BUILD_DIR)/codepod_exec.o \
+  $(BUILD_DIR)/codepod_fetch.o \
   $(BUILD_DIR)/codepod_fs.o \
   $(BUILD_DIR)/codepod_mktemp.o \
   $(BUILD_DIR)/codepod_netdb.o \
@@ -40,7 +41,7 @@ LIB_OBJS := \
   $(BUILD_DIR)/codepod_unistd.o \
   $(BUILD_DIR)/codepod_version.o
 
-CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp pipe spawn spawn-wait resource exec socket socket-address socket-listen socket-listen-denied
+CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp pipe spawn spawn-wait resource exec socket socket-address socket-listen socket-listen-denied fetch
 CANARIES := $(addprefix $(BUILD_DIR)/,$(addsuffix -canary.wasm,$(CANARY_NAMES)))
 
 .PHONY: all lib canaries copy-fixtures clean ensure-toolchain
