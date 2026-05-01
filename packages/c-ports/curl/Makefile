@@ -8,6 +8,14 @@ WORK_DIR := $(BUILD_DIR)/work
 CANARY_DIR := canaries
 GUEST_COMPAT_INCLUDE := $(abspath ../../guest-compat/include)
 GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod.a
+MBEDTLS_DIR := $(REPO_ROOT)/packages/c-ports/mbedtls
+MBEDTLS_PREFIX := $(MBEDTLS_DIR)/build/prefix
+MBEDTLS_INCLUDE := $(MBEDTLS_PREFIX)/include
+MBEDTLS_LIB := $(MBEDTLS_PREFIX)/lib
+MBEDTLS_ARCHIVES := \
+	$(MBEDTLS_LIB)/libmbedtls.a \
+	$(MBEDTLS_LIB)/libmbedx509.a \
+	$(MBEDTLS_LIB)/libmbedcrypto.a
 
 CPCC := $(REPO_ROOT)/target/release/cpcc
 CPAR := $(REPO_ROOT)/target/release/cpar
@@ -16,7 +24,7 @@ CPRANLIB := $(REPO_ROOT)/target/release/cpranlib
 WASI_EMULATED_CFLAGS := -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS
 WASI_EMULATED_LDFLAGS := -lwasi-emulated-mman -lwasi-emulated-process-clocks -Wl,-u,__main_argc_argv
 
-.PHONY: all submodule-init worktree configure build canaries copy-fixtures clean ensure-toolchain ensure-compat
+.PHONY: all submodule-init worktree configure build canaries copy-fixtures clean ensure-toolchain ensure-compat ensure-mbedtls
 
 all: $(BUILD_DIR)/curl.wasm $(BUILD_DIR)/libcurl-fetch-canary.wasm $(BUILD_DIR)/libcurl-socket-canary.wasm
 
@@ -32,6 +40,9 @@ ensure-toolchain:
 ensure-compat:
 	$(MAKE) -C $(REPO_ROOT)/packages/guest-compat lib
 
+ensure-mbedtls:
+	$(MAKE) -C $(MBEDTLS_DIR) lib
+
 $(WORK_DIR)/configure.ac: submodule-init
 	mkdir -p $(WORK_DIR)
 	rsync -a --delete --exclude='.git' $(UPSTREAM)/ $(WORK_DIR)/
@@ -46,14 +57,14 @@ $(WORK_DIR)/configure.ac: submodule-init
 $(WORK_DIR)/configure: $(WORK_DIR)/configure.ac
 	cd $(WORK_DIR) && autoreconf -fi
 
-$(WORK_DIR)/Makefile: $(WORK_DIR)/configure ensure-toolchain ensure-compat
+$(WORK_DIR)/Makefile: $(WORK_DIR)/configure ensure-toolchain ensure-compat ensure-mbedtls
 	cd $(WORK_DIR) && \
 		CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
 		CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
 		CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
 		CPCC_USE_SETJMP=1 \
-		CFLAGS="$(WASI_EMULATED_CFLAGS) -O2" \
-		LDFLAGS="$(WASI_EMULATED_LDFLAGS)" \
+		CFLAGS="$(WASI_EMULATED_CFLAGS) -I$(MBEDTLS_INCLUDE) -O2" \
+		LDFLAGS="-L$(MBEDTLS_LIB) $(WASI_EMULATED_LDFLAGS)" \
 		ac_cv_func_fork=no \
 		ac_cv_func_vfork=no \
 		./configure \
@@ -66,7 +77,7 @@ $(WORK_DIR)/Makefile: $(WORK_DIR)/configure ensure-toolchain ensure-compat
 			--disable-docs \
 			--disable-manual \
 			--disable-libcurl-option \
-			--without-ssl \
+			--with-mbedtls="$(MBEDTLS_PREFIX)" \
 			--without-zlib \
 			--without-brotli \
 			--without-zstd \
@@ -114,6 +125,7 @@ $(BUILD_DIR)/libcurl-fetch-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/lib
 		-o $@ \
 		$(CANARY_DIR)/libcurl-fetch-canary.c \
 		$(WORK_DIR)/lib/.libs/libcurl.a \
+		$(MBEDTLS_ARCHIVES) \
 		$(WASI_EMULATED_LDFLAGS)
 
 $(BUILD_DIR)/libcurl-socket-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/libcurl-socket-canary.c ensure-compat
@@ -128,6 +140,7 @@ $(BUILD_DIR)/libcurl-socket-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/li
 		-o $@ \
 		$(CANARY_DIR)/libcurl-socket-canary.c \
 		$(WORK_DIR)/lib/.libs/libcurl.a \
+		$(MBEDTLS_ARCHIVES) \
 		$(WASI_EMULATED_LDFLAGS)
 
 copy-fixtures: all
