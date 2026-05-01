@@ -44,7 +44,7 @@
 - Modify: `packages/orchestrator/src/network/socket-backend.ts`
 - Test: `packages/orchestrator/src/host-imports/__tests__/socket-listen-policy.test.ts`
 
-- [ ] **Step 1: Write the failing type-level test**
+- [x] **Step 1: Write the failing type-level test**
 
 Replace the current “without enabling listen” expectation in `packages/orchestrator/src/host-imports/__tests__/socket-listen-policy.test.ts` with a backend that records `listen` calls:
 
@@ -104,7 +104,7 @@ it('authorizes loopback listen and stores listener handle on the socket fd', () 
 });
 ```
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run:
 
@@ -114,7 +114,7 @@ source scripts/dev-init.sh && deno test -A --no-check packages/orchestrator/src/
 
 Expected: fails because `SocketBackend` has no `listen`/`accept`/`closeListener` members and `host_socket_bind/listen` still return “server sockets are not implemented”.
 
-- [ ] **Step 3: Extend the backend types**
+- [x] **Step 3: Extend the backend types**
 
 In `packages/orchestrator/src/network/socket-backend.ts`, add listener handles and request/result types:
 
@@ -160,7 +160,7 @@ export interface SocketBackend {
 
 Do not delete the existing `SocketListenPolicy`; it remains the kernel-facing policy object.
 
-- [ ] **Step 4: Run type-check**
+- [x] **Step 4: Run type-check**
 
 Run:
 

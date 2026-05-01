@@ -1,6 +1,7 @@
 import type { NetworkBridgeLike } from './bridge.js';
 
 export type SocketHandle = number;
+export type SocketListenerHandle = number;
 
 export interface SocketPortMapping {
   sandboxHost: '0.0.0.0';
@@ -9,6 +10,13 @@ export interface SocketPortMapping {
 }
 
 export interface SocketListenRequest {
+  host: '127.0.0.1' | 'localhost' | '0.0.0.0';
+  port: number;
+  backlog: number;
+  mapping?: SocketPortMapping;
+}
+
+export interface SocketListenBackendRequest {
   host: '127.0.0.1' | 'localhost' | '0.0.0.0';
   port: number;
   backlog: number;
@@ -34,11 +42,31 @@ export type SocketBackendResult =
   | { ok: true; data?: string; bytes_sent?: number; data_b64?: string }
   | { ok: false; error: string };
 
+export type SocketListenBackendResult =
+  | { ok: true; listener: SocketListenerHandle; host: string; port: number }
+  | { ok: false; error: string };
+
+export type SocketAcceptBackendResult =
+  | {
+      ok: true;
+      socket: SocketHandle;
+      peerHost: string;
+      peerPort: number;
+      localHost: string;
+      localPort: number;
+    }
+  | { ok: false; wouldBlock: true; error: 'accept would block' }
+  | { ok: false; error: string };
+
 export interface SocketBackend {
   connect(req: { host: string; port: number; tls: boolean }): { ok: true; socket: SocketHandle } | { ok: false; error: string };
   send(socket: SocketHandle, dataB64: string): SocketBackendResult;
   recv(socket: SocketHandle, maxBytes: number): SocketBackendResult;
   setNoDelay?(socket: SocketHandle, enabled: boolean): SocketBackendResult;
+  listen?(req: SocketListenBackendRequest): SocketListenBackendResult;
+  /** Polls for one accepted socket. Must not block the bridge request loop. */
+  accept?(listener: SocketListenerHandle): SocketAcceptBackendResult;
+  closeListener?(listener: SocketListenerHandle): SocketBackendResult;
   close(socket: SocketHandle): SocketBackendResult;
 }
 
