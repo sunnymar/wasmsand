@@ -124,4 +124,17 @@ describe('curl/libcurl conformance', () => {
     expect(result.stdout).toContain('status=200');
     expect(result.stdout).toContain('hello curl');
   });
+
+  it.skip('socket-forced libcurl canary uses socket backend when available', () => {
+    // Deferred until deterministic in-sandbox HTTP listener exists.
+  });
+
+  it('socket-forced curl fails without falling back to fetch when socket backend is unavailable', async () => {
+    const { sandbox, bridge } = await createSandbox();
+    const result = await sandbox.run('curl --codepod-network=socket http://example.test/data');
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain('fetch-used');
+    expect(result.stderr.toLowerCase()).toContain('connect');
+    expect(bridge.requests).toEqual([]);
+  });
 });
