@@ -23,3 +23,6 @@
 [submodule "packages/c-ports/coreutils/upstream"]
 	path = packages/c-ports/coreutils/upstream
 	url = https://github.com/coreutils/coreutils.git
+[submodule "packages/c-ports/curl/upstream"]
+	path = packages/c-ports/curl/upstream
+	url = https://github.com/curl/curl.git
