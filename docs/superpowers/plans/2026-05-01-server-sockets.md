@@ -825,7 +825,7 @@ git diff --check -- packages/orchestrator/src/network/socket-backend.ts packages
 
 Expected: all pass.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add packages/orchestrator/src/network/socket-backend.ts packages/orchestrator/src/network/bridge.ts packages/orchestrator/src/network/__tests__/bridge.test.ts
@@ -1141,7 +1141,7 @@ git diff --check -- packages/guest-compat/src/codepod_socket.c packages/guest-co
 
 Expected: guest compat passes including `socket-listen-canary`.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/guest-compat/src/codepod_socket.c packages/guest-compat/src/codepod_runtime.h packages/guest-compat/conformance/c/socket-canary.c packages/guest-compat/conformance/c/socket-listen-canary.c packages/guest-compat/Makefile packages/orchestrator/src/__tests__/guest-compat.test.ts packages/orchestrator/src/platform/__tests__/fixtures/socket-listen-canary.wasm
@@ -1518,7 +1518,7 @@ git diff --check -- packages/orchestrator/src/network/__tests__/bridge.test.ts p
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/orchestrator/src/network/__tests__/bridge.test.ts packages/orchestrator/src/__tests__/guest-compat.test.ts packages/orchestrator/src/network/bridge.ts packages/guest-compat/conformance/c/socket-listen-denied-canary.c packages/guest-compat/conformance/c/socket-canary.c packages/guest-compat/Makefile packages/orchestrator/src/platform/__tests__/fixtures/socket-listen-denied-canary.wasm
@@ -1533,7 +1533,7 @@ git commit -m "test(socket): cover mapped listener policy"
 - Modify: `docs/superpowers/specs/2026-04-29-bash-on-libcodepod-design.md`
 - Modify: `docs/superpowers/plans/2026-05-01-server-sockets.md`
 
-- [ ] **Step 1: Update socket status in spec**
+- [x] **Step 1: Update socket status in spec**
 
 In `docs/superpowers/specs/2026-04-29-bash-on-libcodepod-design.md`, replace the server-socket deferral language with:
 
@@ -1545,7 +1545,7 @@ the runtime backend must authorize the final `listen()` call. Backends without
 listener support return `EOPNOTSUPP`.
 ```
 
-- [ ] **Step 2: Run final acceptance**
+- [x] **Step 2: Run final acceptance**
 
 Run:
 
@@ -1563,11 +1563,11 @@ Expected:
 - Guest C and Rust canaries build.
 - Runtime engines smoke still passes with the existing Bun async gaps documented by the script.
 
-- [ ] **Step 3: Mark this plan complete**
+- [x] **Step 3: Mark this plan complete**
 
 In this file, change every task checkbox that passed from `[ ]` to `[x]`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-04-29-bash-on-libcodepod-design.md docs/superpowers/plans/2026-05-01-server-sockets.md
