@@ -12,7 +12,7 @@
 
 ## Design Decisions
 
-- Server socket support is backend-backed, not a fake in-kernel TCP stack. Blocking `accept()` and `recv()` already require a runtime bridge; the Node bridge can block safely in its worker while the guest waits.
+- Server socket support is backend-backed, not a fake in-kernel TCP stack. The backend `accept` operation is a nonblocking poll so the single-SAB bridge request loop can continue servicing loopback `connect` requests. POSIX blocking semantics are implemented above that poll surface by the C/Rust socket shim paths.
 - Sandbox-visible local address remains fake metadata. Accepted loopback sockets report `127.0.0.1:<sandboxPort>`. Connected outbound sockets report `10.0.2.15:<ephemeral>`. The host’s actual IP is never reported.
 - Listening on `127.0.0.1` or `localhost` is allowed only when `serverSockets.allowLoopback === true`.
 - Listening on `0.0.0.0` is allowed only when `serverSockets.portMappings` contains the sandbox port and `serverSockets.onListen` does not reject it. The first implementation binds the host listener to `127.0.0.1:<hostPort>` unless the mapping later grows an explicit host bind address.
@@ -142,6 +142,7 @@ export type SocketAcceptBackendResult =
       localHost: string;
       localPort: number;
     }
+  | { ok: false; wouldBlock: true; error: 'accept would block' }
   | { ok: false; error: string };
 
 export interface SocketBackend {
@@ -150,6 +151,7 @@ export interface SocketBackend {
   recv(socket: SocketHandle, maxBytes: number): SocketBackendResult;
   setNoDelay?(socket: SocketHandle, enabled: boolean): SocketBackendResult;
   listen?(req: SocketListenBackendRequest): SocketListenBackendResult;
+  /** Polls for one accepted socket. Must not block the bridge request loop. */
   accept?(listener: SocketListenerHandle): SocketAcceptBackendResult;
   closeListener?(listener: SocketListenerHandle): SocketBackendResult;
   close(socket: SocketHandle): SocketBackendResult;
@@ -193,9 +195,19 @@ Append these tests to `packages/orchestrator/src/host-imports/__tests__/socket-l
 it('rejects loopback listen when allowLoopback is not enabled', () => {
   const memory = new WebAssembly.Memory({ initial: 1 });
   const kernel = new ProcessKernel();
+  const backend: SocketBackend = {
+    connect: () => ({ ok: false, error: 'not used' }),
+    send: () => ({ ok: true, bytes_sent: 0 }),
+    recv: () => ({ ok: true, data_b64: '' }),
+    close: () => ({ ok: true }),
+    listen: () => { throw new Error('policy denial must happen before backend.listen'); },
+    accept: () => ({ ok: false, error: 'not used' }),
+    closeListener: () => ({ ok: true }),
+  };
   const imports = createKernelImports({
     memory,
     kernel,
+    socketBackend: backend,
     serverSockets: { allowLoopback: false },
   });
   const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
@@ -433,9 +445,6 @@ Replace `host_socket_listen` with:
 
 ```ts
 host_socket_listen(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
-  if (!socketBackend?.listen) {
-    return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not supported by this backend' });
-  }
   try {
     const req = JSON.parse(readString(memory, reqPtr, reqLen));
     if (typeof req.fd !== 'number') {
@@ -450,6 +459,9 @@ host_socket_listen(reqPtr: number, reqLen: number, outPtr: number, outCap: numbe
     const backlog = typeof req.backlog === 'number' && req.backlog > 0 ? req.backlog : 128;
     const auth = authorizeListen(serverSockets, host, port, backlog);
     if (!auth.ok) return writeJson(memory, outPtr, outCap, auth);
+    if (!socketBackend?.listen) {
+      return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not supported by this backend' });
+    }
     const result = socketBackend.listen({ host, port, backlog, mapping: auth.mapping });
     if (!result.ok) return writeJson(memory, outPtr, outCap, result);
     target.listener = result.listener;
@@ -579,11 +591,13 @@ it('routes sandbox loopback connect to a backend listener', async () => {
     expect(listen.ok).toBe(true);
     if (!listen.ok) throw new Error(listen.error);
 
-    const acceptedPromise = Promise.resolve().then(() => backend.accept!(listen.listener));
+    const emptyAccept = backend.accept!(listen.listener);
+    expect(emptyAccept).toEqual({ ok: false, wouldBlock: true, error: 'accept would block' });
+
     const client = backend.connect({ host: '127.0.0.1', port: 18081, tls: false });
     expect(client.ok).toBe(true);
     if (!client.ok) throw new Error(client.error);
-    const accepted = await acceptedPromise;
+    const accepted = backend.accept!(listen.listener);
     expect(accepted.ok).toBe(true);
     if (!accepted.ok) throw new Error(accepted.error);
 
@@ -609,7 +623,7 @@ Run:
 source scripts/dev-init.sh && deno test -A --no-check packages/orchestrator/src/network/__tests__/bridge.test.ts
 ```
 
-Expected: fails because `createNetworkBridgeSocketBackend` does not implement `listen` and the worker has no `listen`/`accept` operations.
+Expected: fails because `createNetworkBridgeSocketBackend` does not implement `listen` and the worker has no `listen`/nonblocking `accept` operations.
 
 - [ ] **Step 3: Add bridge adapter methods**
 
@@ -640,6 +654,9 @@ listen(req) {
 
 accept(listener) {
   const result = bridge.requestSync({ op: 'accept', listener_id: listener });
+  if (!result.ok && result.would_block === true) {
+    return { ok: false, wouldBlock: true, error: 'accept would block' };
+  }
   if (!result.ok || typeof result.socket_id !== 'number') {
     return {
       ok: false,
@@ -713,7 +730,6 @@ async function handleListen(req) {
   const listenerId = nextListenerId++;
   const server = net.createServer();
   const pending = [];
-  const waiters = [];
   server.on('connection', (sock) => {
     const socketId = nextSocketId++;
     sockets.set(socketId, sock);
@@ -724,36 +740,44 @@ async function handleListen(req) {
       local_host: req.host === '0.0.0.0' ? '10.0.2.15' : '127.0.0.1',
       local_port: req.port,
     };
-    const waiter = waiters.shift();
-    if (waiter) waiter(item);
-    else pending.push(item);
-  });
-  server.on('error', (err) => {
-    const waiter = waiters.shift();
-    if (waiter) waiter({ error: 'listen: ' + err.message });
+    pending.push(item);
   });
   const hostPort = req.mapping && req.host === '0.0.0.0' ? req.mapping.hostPort : 0;
   const bindHost = '127.0.0.1';
   return new Promise((resolve) => {
-    server.listen({ host: bindHost, port: hostPort, backlog: req.backlog || 128 }, () => {
+    let settled = false;
+    function finishOk() {
+      if (settled) return;
+      settled = true;
+      server.off('error', finishErr);
       const address = server.address();
       const actualPort = typeof address === 'object' && address ? address.port : hostPort;
-      listeners.set(listenerId, { server, pending, waiters });
-      loopbackRoutes.set(routeKey(req.host, req.port), { host: bindHost, port: actualPort });
-      if (req.host === 'localhost') loopbackRoutes.set(routeKey('127.0.0.1', req.port), { host: bindHost, port: actualPort });
+      listeners.set(listenerId, { server, pending, actualPort });
+      loopbackRoutes.set(routeKey(req.host, req.port), { host: bindHost, port: actualPort, listenerId });
+      if (req.host === 'localhost') loopbackRoutes.set(routeKey('127.0.0.1', req.port), { host: bindHost, port: actualPort, listenerId });
       writeOk({ ok: true, listener_id: listenerId, host: req.host, port: req.port });
       resolve();
+    }
+    function finishErr(err) {
+      if (settled) return;
+      settled = true;
+      writeErr('listen: ' + err.message);
+      resolve();
+    }
+    server.once('error', finishErr);
+    server.listen({ host: bindHost, port: hostPort, backlog: req.backlog || 128 }, () => {
+      finishOk();
     });
   });
 }
 ```
 
-- [ ] **Step 7: Implement `handleAccept` and close listener**
+- [ ] **Step 7: Implement nonblocking `handleAccept` and close listener**
 
 Add in the worker string:
 
 ```js
-async function handleAccept(req) {
+function handleAccept(req) {
   const listener = listeners.get(req.listener_id);
   if (!listener) { writeErr('accept: invalid listener_id'); return; }
   if (listener.pending.length > 0) {
@@ -761,21 +785,7 @@ async function handleAccept(req) {
     writeOk({ ok: true, ...item });
     return;
   }
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      const idx = listener.waiters.indexOf(done);
-      if (idx >= 0) listener.waiters.splice(idx, 1);
-      writeErr('accept: timed out');
-      resolve();
-    }, 30000);
-    function done(item) {
-      clearTimeout(timer);
-      if (item.error) writeErr(item.error);
-      else writeOk({ ok: true, ...item });
-      resolve();
-    }
-    listener.waiters.push(done);
-  });
+  writeOk({ ok: false, would_block: true, error: 'accept would block' });
 }
 
 function handleCloseListener(req) {
@@ -784,11 +794,13 @@ function handleCloseListener(req) {
   listener.server.close();
   listeners.delete(req.listener_id);
   for (const [key, route] of loopbackRoutes.entries()) {
-    if (route.port === listener.server.address()?.port) loopbackRoutes.delete(key);
+    if (route.listenerId === req.listener_id) loopbackRoutes.delete(key);
   }
   writeOk({ ok: true });
 }
 ```
+
+`accept` is deliberately a poll operation. It must never wait for a future connection inside the bridge worker because `requestSync` has a single shared SAB request slot; a blocking `accept` would prevent the worker from processing the `connect` request that satisfies it. Blocking POSIX semantics are implemented above the backend by retrying `host_socket_accept` from the C/Rust shim path when the socket is in blocking mode.
 
 - [ ] **Step 8: Register worker operations**
 
@@ -796,7 +808,7 @@ In the worker switch, add:
 
 ```js
 case 'listen': await handleListen(req); break;
-case 'accept': await handleAccept(req); break;
+case 'accept': handleAccept(req); break;
 case 'close_listener': handleCloseListener(req); break;
 ```
 
@@ -942,14 +954,27 @@ static int codepod_accept_impl(int sockfd, struct sockaddr *addr, socklen_t *add
   int accepted_fd = -1;
   int req_len;
   int n;
+  int attempts = 0;
 
   req_len = snprintf(req, sizeof(req), "{\"fd\":%d}", sockfd);
   if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
     errno = EOVERFLOW;
     return -1;
   }
-  n = codepod_host_socket_accept((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
-  if (n <= 0 || !parse_json_ok(resp, (size_t)n)) {
+  for (;;) {
+    n = codepod_host_socket_accept((int)(intptr_t)req, req_len, (int)(intptr_t)resp, (int)sizeof(resp));
+    if (n <= 0) {
+      errno = EOPNOTSUPP;
+      return -1;
+    }
+    if (parse_json_ok(resp, (size_t)n)) break;
+    if (strstr(resp, "\"wouldBlock\":true") || strstr(resp, "\"would_block\":true")) {
+      if (++attempts > 100000) {
+        errno = EAGAIN;
+        return -1;
+      }
+      continue;
+    }
     errno = EOPNOTSUPP;
     return -1;
   }
@@ -1207,31 +1232,144 @@ Run:
 source scripts/dev-init.sh && make -C packages/guest-compat rust-std-canaries
 ```
 
-Expected: if current Rust std patches already route `TcpListener`, build passes; otherwise build or runtime fails with the first unsupported listener API.
+Expected: fails before Step 4 because stock `wasm32-wasip1` `TcpListener::bind` is still unsupported by the current Codepod Rust std patch stack.
 
 - [ ] **Step 4: Patch Rust std listener APIs**
 
-Create listener patches for all supported Rust versions (`1.93.0`, `1.94.1`, `1.95.0`) in the same style as the existing `TcpStream` patches:
+Create listener patches for all supported Rust versions (`1.93.0`, `1.94.1`, `1.95.0`). Each patch targets `library/std/src/sys/net/connection/wasip1.rs` after the existing Codepod TCP patches have been applied.
 
 ```bash
-cp patches/rust/1.95.0/0017-wasi-net-peek.patch /tmp/codepod-net-listener-reference.patch
-rg "struct TcpListener|impl TcpListener|fn bind|fn accept|TcpStream" rust-src/library/std/src/sys/net/connection/wasip1.rs
+cp /tmp/rust-src-1.93.0/library/std/src/sys/net/connection/wasip1.rs /tmp/wasip1-before-listener-1.93.0.rs
+cp /tmp/rust-src-1.94.1/library/std/src/sys/net/connection/wasip1.rs /tmp/wasip1-before-listener-1.94.1.rs
+cp /tmp/rust-src-1.95.0/library/std/src/sys/net/connection/wasip1.rs /tmp/wasip1-before-listener-1.95.0.rs
 ```
 
-The patch target is `library/std/src/sys/net/connection/wasip1.rs` for each Rust source tree. Add Codepod-backed implementations for the existing listener entrypoints in that file. The code must call through the same Codepod net helper module used by the `TcpStream` patches in that Rust version:
+Add the following extern declarations to the existing `unsafe extern "C"` block, keeping the existing `socket`, `connect`, `close`, `dup`, `recv`, `getsockname`, and `getaddrinfo` entries:
 
 ```rust
-pub fn bind(addr: io::Result<&SocketAddr>) -> io::Result<TcpListener> {
-    let addr = addr?;
-    codepod_net::tcp_listener_bind(addr)
+fn bind(fd: i32, addr: *const CodepodSockAddr, addr_len: CodepodSockLen) -> i32;
+fn listen(fd: i32, backlog: i32) -> i32;
+fn accept(fd: i32, addr: *mut CodepodSockAddr, addr_len: *mut CodepodSockLen) -> i32;
+```
+
+Add these helper functions beside `tcp_connect_addr`, `sockaddr_in_to_addr`, and the other Codepod socket helpers:
+
+```rust
+fn socket_addr_to_sockaddr_in(addr: &SocketAddr) -> io::Result<CodepodSockAddrIn> {
+    let SocketAddr::V4(addr) = addr else {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "IPv6 sockets are not supported by Codepod wasm32-wasip1 yet",
+        ));
+    };
+    Ok(CodepodSockAddrIn {
+        sin_family: CODEPOD_AF_INET as CodepodSaFamily,
+        sin_port: addr.port().to_be(),
+        sin_addr: CodepodInAddr {
+            s_addr: u32::from_ne_bytes(addr.ip().octets()),
+        },
+    })
 }
 
-pub fn accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
-    codepod_net::tcp_listener_accept(listener)
+fn tcp_listener_bind_addr(addr: &SocketAddr) -> io::Result<TcpListener> {
+    let raw = socket_addr_to_sockaddr_in(addr)?;
+    let fd = unsafe { socket(CODEPOD_AF_INET, CODEPOD_SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let bind_rc = unsafe {
+        bind(
+            fd,
+            &raw as *const CodepodSockAddrIn as *const CodepodSockAddr,
+            mem::size_of::<CodepodSockAddrIn>() as CodepodSockLen,
+        )
+    };
+    if bind_rc != 0 {
+        let err = io::Error::last_os_error();
+        unsafe { close(fd) };
+        return Err(err);
+    }
+
+    let listen_rc = unsafe { listen(fd, 128) };
+    if listen_rc != 0 {
+        let err = io::Error::last_os_error();
+        unsafe { close(fd) };
+        return Err(err);
+    }
+
+    Ok(TcpListener { inner: unsafe { Socket::from_raw_fd(fd as RawFd) } })
+}
+
+fn tcp_listener_accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
+    let mut raw = CodepodSockAddrIn {
+        sin_family: 0,
+        sin_port: 0,
+        sin_addr: CodepodInAddr { s_addr: 0 },
+    };
+    let mut len = mem::size_of::<CodepodSockAddrIn>() as CodepodSockLen;
+    let fd = unsafe {
+        accept(
+            listener.as_inner().as_inner().as_raw_fd() as i32,
+            &mut raw as *mut CodepodSockAddrIn as *mut CodepodSockAddr,
+            &mut len as *mut CodepodSockLen,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let peer = sockaddr_in_to_addr(&raw);
+    Ok((
+        TcpStream {
+            inner: unsafe { Socket::from_raw_fd(fd as RawFd) },
+            peer_addr: Some(peer),
+        },
+        peer,
+    ))
 }
 ```
 
-Add the matching helper functions beside the existing `tcp_connect`, `tcp_recv`, `tcp_local_addr`, and `tcp_nodelay` helpers in each version’s Codepod std patch. The helper implementation converts `SocketAddr` into the guest `sockaddr` layout, calls `bind`, `listen`, or `accept` through the patched libc socket symbols, and converts accepted peer addresses back into `SocketAddr`. Do not add a second networking abstraction or a Rust-only host import path.
+Replace the `TcpListener` methods in `impl TcpListener`:
+
+```rust
+pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+    super::each_addr(addr, tcp_listener_bind_addr)
+}
+
+pub fn socket_addr(&self) -> io::Result<SocketAddr> {
+    let mut raw = CodepodSockAddrIn {
+        sin_family: 0,
+        sin_port: 0,
+        sin_addr: CodepodInAddr { s_addr: 0 },
+    };
+    let mut len = mem::size_of::<CodepodSockAddrIn>() as CodepodSockLen;
+    let rc = unsafe {
+        getsockname(
+            self.socket().as_raw_fd() as i32,
+            &mut raw as *mut CodepodSockAddrIn as *mut CodepodSockAddr,
+            &mut len as *mut CodepodSockLen,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(sockaddr_in_to_addr(&raw))
+}
+
+pub fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
+    tcp_listener_accept(self)
+}
+```
+
+Generate the patch files with:
+
+```bash
+diff -u /tmp/wasip1-before-listener-1.93.0.rs /tmp/rust-src-1.93.0/library/std/src/sys/net/connection/wasip1.rs > patches/rust/1.93.0/0018-wasip1-net-listener.patch
+diff -u /tmp/wasip1-before-listener-1.94.1.rs /tmp/rust-src-1.94.1/library/std/src/sys/net/connection/wasip1.rs > patches/rust/1.94.1/0018-wasi-net-listener.patch
+diff -u /tmp/wasip1-before-listener-1.95.0.rs /tmp/rust-src-1.95.0/library/std/src/sys/net/connection/wasip1.rs > patches/rust/1.95.0/0018-wasi-net-listener.patch
+```
+
+These listener patches must use the guest libc symbols from `libcodepod.a`. They must not add a Rust-only host import path.
 
 - [ ] **Step 5: Add guest test**
 
