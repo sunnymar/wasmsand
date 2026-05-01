@@ -85,6 +85,31 @@ describe('curl/libcurl conformance', () => {
     expect(bridge.requests[0].redirect).toBe('manual');
   });
 
+  it('fetch-forced curl HTTPS GET prints response body', async () => {
+    const { sandbox, bridge } = await createSandbox();
+    const result = await sandbox.run('curl --codepod-network=fetch https://example.test/data');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('hello curl');
+    expect(bridge.requests[0]).toMatchObject({
+      url: 'https://example.test/data',
+      method: 'GET',
+      redirect: 'manual',
+    });
+  });
+
+  it('auto curl HTTPS uses fetch when sockets are unavailable', async () => {
+    const { sandbox, bridge } = await createSandbox();
+    const result = await sandbox.run('curl https://example.test/data');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('hello curl');
+    expect(bridge.requests).toHaveLength(1);
+    expect(bridge.requests[0]).toMatchObject({
+      url: 'https://example.test/data',
+      method: 'GET',
+      redirect: 'manual',
+    });
+  });
+
   it('fetch-forced curl POST sends request body', async () => {
     const { sandbox, bridge } = await createSandbox();
     const result = await sandbox.run("curl --codepod-network=fetch -d 'a=1' http://example.test/post");
@@ -102,9 +127,26 @@ describe('curl/libcurl conformance', () => {
     expect(Array.from(bytes)).toEqual([0, 1, 2]);
   });
 
+  it('fetch-forced curl HTTPS writes binary response to VFS', async () => {
+    const { sandbox } = await createSandbox();
+    const result = await sandbox.run(
+      'curl --codepod-network=fetch -o /tmp/https.bin https://example.test/binary',
+    );
+    expect(result.exitCode).toBe(0);
+    expect(Array.from(sandbox.readFile('/tmp/https.bin'))).toEqual([0, 1, 2]);
+  });
+
   it('fetch-forced curl without -L exposes redirects', async () => {
     const { sandbox } = await createSandbox();
     const result = await sandbox.run('curl --codepod-network=fetch -I http://example.test/redirect');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('302');
+    expect(result.stdout.toLowerCase()).toContain('location:');
+  });
+
+  it('fetch-forced curl HTTPS exposes manual redirects', async () => {
+    const { sandbox } = await createSandbox();
+    const result = await sandbox.run('curl --codepod-network=fetch -I https://example.test/redirect');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('302');
     expect(result.stdout.toLowerCase()).toContain('location:');
@@ -120,6 +162,14 @@ describe('curl/libcurl conformance', () => {
   it('libcurl fetch canary runs through direct library API', async () => {
     const { sandbox } = await createSandbox();
     const result = await sandbox.run('libcurl-fetch-canary http://example.test/data');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('status=200');
+    expect(result.stdout).toContain('hello curl');
+  });
+
+  it('libcurl fetch canary supports HTTPS URLs', async () => {
+    const { sandbox } = await createSandbox();
+    const result = await sandbox.run('libcurl-fetch-canary https://example.test/data');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status=200');
     expect(result.stdout).toContain('hello curl');

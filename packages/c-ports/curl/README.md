@@ -23,6 +23,12 @@ curl --codepod-network=auto|fetch|socket URL
 Later library tests will use `CURLOPT_CODEPOD_NETWORK` or
 `CODEPOD_CURL_NETWORK`.
 
+## HTTPS
+
+Fetch mode supports `https://` through `codepod.host_network_fetch`; TLS is
+handled by the host/browser fetch implementation. Socket-mode HTTPS requires
+the mbedTLS task in the TLS extension plan.
+
 ## Build
 
 ```bash
