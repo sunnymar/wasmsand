@@ -9,7 +9,7 @@
  * since it cannot block in a browser main thread.
  */
 
-import type { SyncFetchResult, SyncRequestResult, NetworkBridgeLike } from './bridge.js';
+import type { FetchRedirectMode, NetworkBridgeLike, SyncFetchResult, SyncRequestResult } from './bridge.js';
 import { NetworkGateway } from './gateway.js';
 import type { NetworkPolicy } from './gateway.js';
 
@@ -24,7 +24,13 @@ export class BrowserNetworkBridge implements NetworkBridgeLike {
     return { status: 0, body: '', headers: {}, error: 'fetchSync not available in browser — use fetchAsync via JSPI' };
   }
 
-  async fetchAsync(url: string, method: string, headers: Record<string, string>, body?: string): Promise<SyncFetchResult> {
+  async fetchAsync(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    body?: string,
+    redirect: FetchRedirectMode = 'follow',
+  ): Promise<SyncFetchResult> {
     // Check gateway policy
     const access = this.gateway.checkAccess(url, method);
     if (!access.allowed) {
@@ -36,15 +42,23 @@ export class BrowserNetworkBridge implements NetworkBridgeLike {
         method,
         headers,
         body: body || undefined,
+        redirect,
       });
 
-      const respBody = await resp.text();
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      const respBody = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const body_base64 = btoa(binary);
       const respHeaders: Record<string, string> = {};
       resp.headers.forEach((v, k) => { respHeaders[k] = v; });
 
       return {
         status: resp.status,
         body: respBody,
+        body_base64,
         headers: respHeaders,
       };
     } catch (e: unknown) {

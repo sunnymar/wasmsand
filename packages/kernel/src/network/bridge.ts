@@ -29,6 +29,8 @@ export interface SyncFetchResult {
   error?: string;
 }
 
+export type FetchRedirectMode = 'follow' | 'manual';
+
 /** Generic sync request/response for any bridge operation. */
 export interface SyncRequestResult {
   ok: boolean;
@@ -37,9 +39,21 @@ export interface SyncRequestResult {
 
 /** Minimal interface for network access from WASM host imports. */
 export interface NetworkBridgeLike {
-  fetchSync(url: string, method: string, headers: Record<string, string>, body?: string): SyncFetchResult;
+  fetchSync(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    body?: string,
+    redirect?: FetchRedirectMode,
+  ): SyncFetchResult;
   /** Async fetch — used in the browser where Atomics.wait() isn't available on the main thread. */
-  fetchAsync?(url: string, method: string, headers: Record<string, string>, body?: string): Promise<SyncFetchResult>;
+  fetchAsync?(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    body?: string,
+    redirect?: FetchRedirectMode,
+  ): Promise<SyncFetchResult>;
   /** Send a generic operation (connect/send/recv/close) through the bridge. */
   requestSync(op: Record<string, unknown>): SyncRequestResult;
 }
@@ -140,6 +154,7 @@ export class NetworkBridge implements NetworkBridgeLike {
           writeResponse(JSON.stringify({ status: 403, body: '', headers: {}, error: access.reason }), ${STATUS_ERROR});
           return;
         }
+        const manualRedirect = req.redirect === 'manual';
         const MAX_REDIRECTS = 5;
         const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
         let currentUrl = req.url;
@@ -177,6 +192,7 @@ export class NetworkBridge implements NetworkBridgeLike {
             body: currentBody,
             redirect: 'manual',
           });
+          if (manualRedirect) break;
           if (!REDIRECT_STATUSES.has(resp.status)) break;
           const location = resp.headers.get('location');
           if (!location) break;
@@ -475,7 +491,13 @@ export class NetworkBridge implements NetworkBridgeLike {
    * Synchronous fetch -- blocks the calling thread until the worker completes.
    * Safe to call from WASI host functions.
    */
-  fetchSync(url: string, method: string, headers: Record<string, string>, body?: string): SyncFetchResult {
+  fetchSync(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    body?: string,
+    redirect?: FetchRedirectMode,
+  ): SyncFetchResult {
     if (!this.worker) {
       return { status: 0, body: '', headers: {}, error: 'bridge not started' };
     }
@@ -489,7 +511,7 @@ export class NetworkBridge implements NetworkBridgeLike {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
 
-    const reqJson = JSON.stringify({ url, method, headers, body });
+    const reqJson = JSON.stringify({ url, method, headers, body, redirect });
     const reqEncoded = encoder.encode(reqJson);
     if (reqEncoded.byteLength > SAB_SIZE - 8) {
       return { status: 413, body: '', headers: {}, error: 'request too large' };

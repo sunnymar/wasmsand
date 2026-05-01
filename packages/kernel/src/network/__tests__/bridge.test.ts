@@ -34,6 +34,12 @@ describe('NetworkBridge', { sanitizeOps: false, sanitizeResources: false }, () =
         return;
       }
 
+      if (url.pathname === '/redirect') {
+        res.writeHead(302, { Location: '/data' });
+        res.end('redirect body');
+        return;
+      }
+
       if (url.pathname === '/echo-headers') {
         const headers = {};
         for (const [k, v] of Object.entries(req.headers)) {
@@ -153,6 +159,17 @@ describe('NetworkBridge', { sanitizeOps: false, sanitizeResources: false }, () =
       Uint8Array.from(atob(result.body_base64!), c => c.charCodeAt(0))
     );
     expect(decoded).toBe('bridge response');
+  });
+
+  it('can return manual redirects without following them', async () => {
+    const gateway = new NetworkGateway({ allowedHosts: ['127.0.0.1'] });
+    bridge = new NetworkBridge(gateway);
+    await bridge.start();
+
+    const result = bridge.fetchSync(`${baseUrl}/redirect`, 'GET', {}, undefined, 'manual');
+    expect(result.status).toBe(302);
+    expect(result.headers.location).toBe('/data');
+    expect(result.body).toBe('redirect body');
   });
 
   it('returns error for blocked hosts', async () => {

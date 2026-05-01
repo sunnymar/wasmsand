@@ -6,7 +6,7 @@
  * and waits synchronously for the response.
  */
 
-import type { SyncFetchResult, SyncRequestResult, NetworkBridgeLike } from './bridge.js';
+import type { FetchRedirectMode, NetworkBridgeLike, SyncFetchResult, SyncRequestResult } from './bridge.js';
 import type { NetworkGateway } from './gateway.js';
 
 const STATUS_IDLE = 0;
@@ -26,7 +26,13 @@ export class BridgeClient implements NetworkBridgeLike {
     this.gateway = gateway ?? null;
   }
 
-  fetchSync(url: string, method: string, headers: Record<string, string>, body?: string): SyncFetchResult {
+  fetchSync(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    body?: string,
+    redirect?: FetchRedirectMode,
+  ): SyncFetchResult {
     // Check gateway policy synchronously first
     if (this.gateway) {
       const access = this.gateway.checkAccess(url, method);
@@ -35,7 +41,7 @@ export class BridgeClient implements NetworkBridgeLike {
       }
     }
 
-    const reqJson = JSON.stringify({ url, method, headers, body });
+    const reqJson = JSON.stringify({ url, method, headers, body, redirect });
     const reqEncoded = this.encoder.encode(reqJson);
     if (reqEncoded.byteLength > this.uint8.byteLength - 8) {
       return { status: 413, body: '', headers: {}, error: 'request too large' };

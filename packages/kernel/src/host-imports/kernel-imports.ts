@@ -17,7 +17,7 @@
  *   - host_run_command: run a shell command and collect output (async/JSPI, Python subprocess)
  */
 
-import type { NetworkBridgeLike } from '../network/bridge.js';
+import type { FetchRedirectMode, NetworkBridgeLike } from '../network/bridge.js';
 import type { SocketBackend, SocketListenPolicy, SocketPortMapping } from '../network/socket-backend.js';
 import { createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
@@ -438,16 +438,18 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           method?: string;
           headers?: Record<string, string>;
           body?: string;
+          redirect?: FetchRedirectMode;
         };
         const url = req.url as string;
         const method = (req.method as string) ?? 'GET';
         const headers = (req.headers as Record<string, string>) ?? {};
         const body = req.body as string | undefined;
+        const redirect: FetchRedirectMode = req.redirect === 'manual' ? 'manual' : 'follow';
 
         // Use async fetch if available (browser), otherwise fall back to sync (SAB bridge)
         const result = opts.networkBridge.fetchAsync
-          ? await opts.networkBridge.fetchAsync(url, method, headers, body)
-          : opts.networkBridge.fetchSync(url, method, headers, body);
+          ? await opts.networkBridge.fetchAsync(url, method, headers, body, redirect)
+          : opts.networkBridge.fetchSync(url, method, headers, body, redirect);
         return writeJson(memory, outPtr, outCap, {
           ok: !result.error && result.status >= 200 && result.status < 400,
           status: result.status,

@@ -28,7 +28,7 @@ import { loadProcess, type LoaderContext } from './process/loader.js';
 import type { DirEntry, StatResult } from './vfs/inode.js';
 import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
-import { NetworkBridge } from './network/bridge.js';
+import { NetworkBridge, type NetworkBridgeLike } from './network/bridge.js';
 import type { SocketBackend, SocketListenPolicy } from './network/socket-backend.js';
 import { getSocketShimSource, getSslShimSource, buildSiteCustomizeSource, getRequestsShimSource } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
@@ -83,6 +83,8 @@ export interface SandboxOptions {
   runCommandHandler?: RunCommandHandler;
   /** Network policy for guest programs. If omitted, network access is disabled. */
   network?: NetworkPolicy;
+  /** Optional network bridge override. Primarily used by tests and alternate embeddings. */
+  networkBridge?: NetworkBridgeLike;
   /** Optional socket backend override. Primarily used by tests and alternate embeddings. */
   socketBackend?: SocketBackend;
   /** Prepared policy surface for future bind/listen/accept support. */
@@ -128,7 +130,7 @@ interface SandboxParts {
   wasmDir: string;
   bootWasmPath: string;
   mgr: ProcessManager;
-  bridge?: NetworkBridge;
+  bridge?: NetworkBridgeLike;
   socketBackend?: SocketBackend;
   serverSockets?: SocketListenPolicy;
   networkPolicy?: NetworkPolicy;
@@ -157,7 +159,7 @@ export class Sandbox {
   private bootWasmPath: string;
   private mgr: ProcessManager;
   private envSnapshots: Map<string, Map<string, string>> = new Map();
-  private bridge: NetworkBridge | null = null;
+  private bridge: NetworkBridgeLike | null = null;
   private socketBackend: SocketBackend | undefined;
   private serverSockets: SocketListenPolicy | undefined;
   private networkPolicy: NetworkPolicy | undefined;
@@ -221,7 +223,9 @@ export class Sandbox {
       fsLimitBytes,
       fileCount: options.security?.limits?.fileCount,
     });
-    const { bridge } = await Sandbox.createNetworkBridge(options.network);
+    const { bridge } = options.networkBridge
+      ? { bridge: options.networkBridge }
+      : await Sandbox.createNetworkBridge(options.network);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir, vfs);
 
@@ -557,6 +561,13 @@ export class Sandbox {
     return { gateway, bridge };
   }
 
+  private static getBridgeSab(bridge: NetworkBridgeLike | undefined): SharedArrayBuffer | undefined {
+    const bridgeWithSab = bridge as (NetworkBridgeLike & { getSab?: () => SharedArrayBuffer }) | undefined;
+    return typeof bridgeWithSab?.getSab === 'function'
+      ? bridgeWithSab.getSab()
+      : undefined;
+  }
+
   private static async registerTools(
     mgr: ProcessManager,
     adapter: PlatformAdapter,
@@ -677,7 +688,7 @@ export class Sandbox {
     kernel: ProcessKernel;
     mgr: ProcessManager;
     processes: Map<number, Process>;
-    bridge?: NetworkBridge;
+    bridge?: NetworkBridgeLike;
     socketBackend?: SocketBackend;
     serverSockets?: SocketListenPolicy;
     extensionRegistry: ExtensionRegistry;
@@ -844,7 +855,7 @@ export class Sandbox {
     tools: Map<string, string>,
     adapter: PlatformAdapter,
     security?: SecurityOptions,
-    bridge?: NetworkBridge,
+    bridge?: NetworkBridgeLike,
     networkPolicy?: NetworkPolicy,
     extensionRegistry?: ExtensionRegistry,
   ): Promise<WorkerExecutor | undefined> {
@@ -863,7 +874,7 @@ export class Sandbox {
       stderrBytes: security.limits?.stderrBytes,
       toolAllowlist: security.toolAllowlist,
       memoryBytes: security.limits?.memoryBytes,
-      bridgeSab: bridge?.getSab(),
+      bridgeSab: Sandbox.getBridgeSab(bridge),
       networkPolicy: networkPolicy ? {
         allowedHosts: networkPolicy.allowedHosts,
         blockedHosts: networkPolicy.blockedHosts,
@@ -1395,7 +1406,10 @@ export class Sandbox {
     // Fire-and-forget: dispose is async but destroy is sync
     this.persistenceManager?.dispose().catch(() => {});
     this.workerExecutor?.dispose();
-    this.bridge?.dispose();
+    const disposableBridge = this.bridge as (NetworkBridgeLike & { dispose?: () => void }) | null;
+    if (typeof disposableBridge?.dispose === 'function') {
+      disposableBridge.dispose();
+    }
     this.kernel.dispose();
   }
 
