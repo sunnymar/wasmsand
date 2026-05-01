@@ -18,7 +18,7 @@ WASI_EMULATED_LDFLAGS := -lwasi-emulated-mman -lwasi-emulated-process-clocks -Wl
 
 .PHONY: all submodule-init worktree configure build canaries copy-fixtures clean ensure-toolchain ensure-compat
 
-all: $(BUILD_DIR)/curl.wasm
+all: $(BUILD_DIR)/curl.wasm $(BUILD_DIR)/libcurl-fetch-canary.wasm $(BUILD_DIR)/libcurl-socket-canary.wasm
 
 submodule-init:
 	@if [ ! -f $(UPSTREAM)/configure.ac ]; then \
@@ -100,8 +100,36 @@ $(BUILD_DIR)/curl.wasm: $(WORK_DIR)/Makefile ensure-compat
 			all
 	cp $(WORK_DIR)/src/curl $(BUILD_DIR)/curl.wasm
 
+$(BUILD_DIR)/libcurl-fetch-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/libcurl-fetch-canary.c ensure-compat
+	CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
+	CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
+	$(CPCC) \
+		-I$(WORK_DIR)/include \
+		-I$(WORK_DIR)/lib \
+		-I$(GUEST_COMPAT_INCLUDE) \
+		$(WASI_EMULATED_CFLAGS) \
+		-o $@ \
+		$(CANARY_DIR)/libcurl-fetch-canary.c \
+		$(WORK_DIR)/lib/.libs/libcurl.a \
+		$(WASI_EMULATED_LDFLAGS)
+
+$(BUILD_DIR)/libcurl-socket-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/libcurl-socket-canary.c ensure-compat
+	CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
+	CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
+	$(CPCC) \
+		-I$(WORK_DIR)/include \
+		-I$(WORK_DIR)/lib \
+		-I$(GUEST_COMPAT_INCLUDE) \
+		$(WASI_EMULATED_CFLAGS) \
+		-o $@ \
+		$(CANARY_DIR)/libcurl-socket-canary.c \
+		$(WORK_DIR)/lib/.libs/libcurl.a \
+		$(WASI_EMULATED_LDFLAGS)
+
 copy-fixtures: all
 	cp $(BUILD_DIR)/curl.wasm $(FIXTURES)/curl.wasm
+	cp $(BUILD_DIR)/libcurl-fetch-canary.wasm $(FIXTURES)/libcurl-fetch-canary.wasm
+	cp $(BUILD_DIR)/libcurl-socket-canary.wasm $(FIXTURES)/libcurl-socket-canary.wasm
 
 clean:
 	rm -rf $(BUILD_DIR)
