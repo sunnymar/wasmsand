@@ -2,6 +2,7 @@ import { describe, it, afterEach, beforeAll, afterAll } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { NetworkBridge } from '../bridge.js';
 import { NetworkGateway } from '../gateway.js';
+import { createNetworkBridgeSocketBackend } from '../socket-backend.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 
 /**
@@ -169,5 +170,35 @@ describe('NetworkBridge', { sanitizeOps: false, sanitizeResources: false }, () =
     await bridge.start();
     bridge.dispose();
     bridge.dispose(); // double dispose should not throw
+  });
+
+  it('routes sandbox loopback connect to a backend listener', async () => {
+    const gateway = new NetworkGateway({ allowedHosts: ['127.0.0.1', 'localhost'] });
+    bridge = new NetworkBridge(gateway);
+    await bridge.start();
+
+    const backend = createNetworkBridgeSocketBackend(bridge);
+    const listen = backend.listen!({ host: '127.0.0.1', port: 18081, backlog: 8 });
+    expect(listen.ok).toBe(true);
+    if (!listen.ok) throw new Error(listen.error);
+
+    const emptyAccept = backend.accept!(listen.listener);
+    expect(emptyAccept).toEqual({ ok: false, wouldBlock: true, error: 'accept would block' });
+
+    const client = backend.connect({ host: '127.0.0.1', port: 18081, tls: false });
+    expect(client.ok).toBe(true);
+    if (!client.ok) throw new Error(client.error);
+    const accepted = backend.accept!(listen.listener);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error(accepted.error);
+
+    expect(backend.send(client.socket, btoa('ping'))).toEqual({ ok: true, bytes_sent: 4 });
+    expect(backend.recv(accepted.socket, 4)).toEqual({ ok: true, data_b64: btoa('ping') });
+    expect(backend.send(accepted.socket, btoa('pong'))).toEqual({ ok: true, bytes_sent: 4 });
+    expect(backend.recv(client.socket, 4)).toEqual({ ok: true, data_b64: btoa('pong') });
+
+    backend.close(client.socket);
+    backend.close(accepted.socket);
+    backend.closeListener!(listen.listener);
   });
 });

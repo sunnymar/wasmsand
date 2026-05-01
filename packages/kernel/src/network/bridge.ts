@@ -93,10 +93,18 @@ export class NetworkBridge implements NetworkBridgeLike {
 
       // Socket state for full mode
       const sockets = new Map();
+      const listeners = new Map();
+      const loopbackRoutes = new Map();
       let nextSocketId = 1;
+      let nextListenerId = 1;
       let net = null;
       let tls = null;
       try { net = require('node:net'); tls = require('node:tls'); } catch {}
+
+      function routeKey(host, port) {
+        const normalized = host === 'localhost' ? '127.0.0.1' : host;
+        return normalized + ':' + port;
+      }
 
       function writeResponse(json, status) {
         const encoded = encoder.encode(json);
@@ -197,13 +205,22 @@ export class NetworkBridge implements NetworkBridgeLike {
         if (!net) { writeErr('sockets not available (no net module)'); return; }
         const access = checkHostAccess(req.host);
         if (!access.allowed) { writeErr(access.reason); return; }
+        const requestedKey = routeKey(req.host, req.port);
+        const routed = loopbackRoutes.get(requestedKey);
+        const host = routed ? routed.host : req.host;
+        const port = routed ? routed.port : req.port;
+        const routedListener = routed ? listeners.get(routed.listenerId) : null;
+        const acceptedReady = routedListener
+          ? new Promise((resolve) => { routedListener.connectWaiters.push(resolve); })
+          : Promise.resolve();
         const id = nextSocketId++;
         return new Promise((resolve) => {
           const connectFn = req.tls ? tls.connect : net.connect;
-          const opts = { host: req.host, port: req.port };
+          const opts = { host, port };
           if (req.tls) opts.servername = req.host;
-          const sock = connectFn(opts, () => {
+          const sock = connectFn(opts, async () => {
             sockets.set(id, sock);
+            await acceptedReady;
             writeOk({ ok: true, socket_id: id });
             resolve();
           });
@@ -220,6 +237,77 @@ export class NetworkBridge implements NetworkBridgeLike {
             }
           }, 30000);
         });
+      }
+
+      async function handleListen(req) {
+        if (!net) { writeErr('sockets not available (no net module)'); return; }
+        const listenerId = nextListenerId++;
+        const server = net.createServer();
+        const pending = [];
+        const connectWaiters = [];
+        server.on('connection', (sock) => {
+          const socketId = nextSocketId++;
+          sockets.set(socketId, sock);
+          const item = {
+            socket_id: socketId,
+            peer_host: sock.remoteAddress || '127.0.0.1',
+            peer_port: sock.remotePort || 0,
+            local_host: req.host === '0.0.0.0' ? '10.0.2.15' : '127.0.0.1',
+            local_port: req.port,
+          };
+          pending.push(item);
+          const waiter = connectWaiters.shift();
+          if (waiter) waiter();
+        });
+        const hostPort = req.mapping && req.host === '0.0.0.0' ? req.mapping.hostPort : 0;
+        const bindHost = '127.0.0.1';
+        return new Promise((resolve) => {
+          let settled = false;
+          function finishOk() {
+            if (settled) return;
+            settled = true;
+            server.off('error', finishErr);
+            const address = server.address();
+            const actualPort = typeof address === 'object' && address ? address.port : hostPort;
+            listeners.set(listenerId, { server, pending, connectWaiters, actualPort });
+            loopbackRoutes.set(routeKey(req.host, req.port), { host: bindHost, port: actualPort, listenerId });
+            if (req.host === 'localhost') loopbackRoutes.set(routeKey('127.0.0.1', req.port), { host: bindHost, port: actualPort, listenerId });
+            writeOk({ ok: true, listener_id: listenerId, host: req.host, port: req.port });
+            resolve();
+          }
+          function finishErr(err) {
+            if (settled) return;
+            settled = true;
+            writeErr('listen: ' + err.message);
+            resolve();
+          }
+          server.once('error', finishErr);
+          server.listen({ host: bindHost, port: hostPort, backlog: req.backlog || 128 }, () => {
+            finishOk();
+          });
+        });
+      }
+
+      function handleAccept(req) {
+        const listener = listeners.get(req.listener_id);
+        if (!listener) { writeErr('accept: invalid listener_id'); return; }
+        if (listener.pending.length > 0) {
+          const item = listener.pending.shift();
+          writeOk({ ok: true, ...item });
+          return;
+        }
+        writeOk({ ok: false, would_block: true, error: 'accept would block' });
+      }
+
+      function handleCloseListener(req) {
+        const listener = listeners.get(req.listener_id);
+        if (!listener) { writeErr('close_listener: invalid listener_id'); return; }
+        listener.server.close();
+        listeners.delete(req.listener_id);
+        for (const [key, route] of loopbackRoutes.entries()) {
+          if (route.listenerId === req.listener_id) loopbackRoutes.delete(key);
+        }
+        writeOk({ ok: true });
       }
 
       async function handleSend(req) {
@@ -324,9 +412,12 @@ export class NetworkBridge implements NetworkBridgeLike {
             switch (op) {
               case 'fetch': await handleFetch(req); break;
               case 'connect': await handleConnect(req); break;
+              case 'listen': await handleListen(req); break;
+              case 'accept': handleAccept(req); break;
               case 'send': await handleSend(req); break;
               case 'recv': await handleRecv(req); break;
               case 'set_no_delay': handleSetNoDelay(req); break;
+              case 'close_listener': handleCloseListener(req); break;
               case 'close': handleClose(req); break;
               default: writeErr('unknown op: ' + op); break;
             }

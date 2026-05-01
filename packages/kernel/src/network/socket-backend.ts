@@ -126,6 +126,56 @@ export function createNetworkBridgeSocketBackend(bridge: NetworkBridgeLike): Soc
       }));
     },
 
+    listen(req) {
+      const result = bridge.requestSync({
+        op: 'listen',
+        host: req.host,
+        port: req.port,
+        backlog: req.backlog,
+        mapping: req.mapping,
+      });
+      if (!result.ok || typeof result.listener_id !== 'number') {
+        return {
+          ok: false,
+          error: typeof result.error === 'string' ? result.error : 'socket listen failed',
+        };
+      }
+      return {
+        ok: true,
+        listener: result.listener_id,
+        host: typeof result.host === 'string' ? result.host : req.host,
+        port: typeof result.port === 'number' ? result.port : req.port,
+      };
+    },
+
+    accept(listener) {
+      const result = bridge.requestSync({ op: 'accept', listener_id: listener });
+      if (!result.ok && result.would_block === true) {
+        return { ok: false, wouldBlock: true, error: 'accept would block' };
+      }
+      if (!result.ok || typeof result.socket_id !== 'number') {
+        return {
+          ok: false,
+          error: typeof result.error === 'string' ? result.error : 'socket accept failed',
+        };
+      }
+      return {
+        ok: true,
+        socket: result.socket_id,
+        peerHost: typeof result.peer_host === 'string' ? result.peer_host : '127.0.0.1',
+        peerPort: typeof result.peer_port === 'number' ? result.peer_port : 0,
+        localHost: typeof result.local_host === 'string' ? result.local_host : '127.0.0.1',
+        localPort: typeof result.local_port === 'number' ? result.local_port : 0,
+      };
+    },
+
+    closeListener(listener) {
+      return socketResult(bridge.requestSync({
+        op: 'close_listener',
+        listener_id: listener,
+      }));
+    },
+
     close(socket) {
       return socketResult(bridge.requestSync({
         op: 'close',

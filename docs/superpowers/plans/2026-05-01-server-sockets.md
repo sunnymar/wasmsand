@@ -170,7 +170,7 @@ source scripts/dev-init.sh && deno check packages/orchestrator/src/network/socke
 
 Expected: type-check passes or only fails in `kernel-imports.ts` because bind/listen are not implemented yet.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/orchestrator/src/network/socket-backend.ts packages/orchestrator/src/host-imports/__tests__/socket-listen-policy.test.ts
@@ -561,7 +561,7 @@ git diff --check -- packages/orchestrator/src/host-imports/kernel-imports.ts pac
 
 Expected: all pass.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add packages/orchestrator/src/wasi/fd-target.ts packages/orchestrator/src/host-imports/kernel-imports.ts packages/orchestrator/src/host-imports/__tests__/socket-listen-policy.test.ts packages/orchestrator/src/host-imports/__tests__/socket-fds.test.ts
@@ -577,7 +577,7 @@ git commit -m "feat(kernel): implement server socket fd imports"
 - Modify: `packages/orchestrator/src/network/bridge.ts`
 - Test: `packages/orchestrator/src/network/__tests__/bridge.test.ts`
 
-- [ ] **Step 1: Add bridge integration test**
+- [x] **Step 1: Add bridge integration test**
 
 Append to `packages/orchestrator/src/network/__tests__/bridge.test.ts`:
 
@@ -616,7 +616,7 @@ it('routes sandbox loopback connect to a backend listener', async () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run:
 
@@ -626,7 +626,7 @@ source scripts/dev-init.sh && deno test -A --no-check packages/orchestrator/src/
 
 Expected: fails because `createNetworkBridgeSocketBackend` does not implement `listen` and the worker has no `listen`/nonblocking `accept` operations.
 
-- [ ] **Step 3: Add bridge adapter methods**
+- [x] **Step 3: Add bridge adapter methods**
 
 In `createNetworkBridgeSocketBackend`, add:
 
@@ -682,7 +682,7 @@ closeListener(listener) {
 },
 ```
 
-- [ ] **Step 4: Add worker listener state**
+- [x] **Step 4: Add worker listener state**
 
 Inside the worker code string in `NetworkBridge.start()`, near `const sockets = new Map();`, add:
 
@@ -696,7 +696,7 @@ function routeKey(host, port) {
 }
 ```
 
-- [ ] **Step 5: Route loopback connects**
+- [x] **Step 5: Route loopback connects**
 
 At the start of `handleConnect(req)` in the worker string, after policy check:
 
@@ -721,7 +721,7 @@ const opts = { host, port };
 if (req.tls) opts.servername = req.host;
 ```
 
-- [ ] **Step 6: Implement `handleListen`**
+- [x] **Step 6: Implement `handleListen`**
 
 Add in the worker string:
 
@@ -773,7 +773,7 @@ async function handleListen(req) {
 }
 ```
 
-- [ ] **Step 7: Implement nonblocking `handleAccept` and close listener**
+- [x] **Step 7: Implement nonblocking `handleAccept` and close listener**
 
 Add in the worker string:
 
@@ -803,7 +803,7 @@ function handleCloseListener(req) {
 
 `accept` is deliberately a poll operation. It must never wait for a future connection inside the bridge worker because `requestSync` has a single shared SAB request slot; a blocking `accept` would prevent the worker from processing the `connect` request that satisfies it. Blocking POSIX semantics are implemented above the backend by retrying `host_socket_accept` from the C/Rust shim path when the socket is in blocking mode.
 
-- [ ] **Step 8: Register worker operations**
+- [x] **Step 8: Register worker operations**
 
 In the worker switch, add:
 
@@ -813,7 +813,7 @@ case 'accept': handleAccept(req); break;
 case 'close_listener': handleCloseListener(req); break;
 ```
 
-- [ ] **Step 9: Run bridge tests**
+- [x] **Step 9: Run bridge tests**
 
 Run:
 
