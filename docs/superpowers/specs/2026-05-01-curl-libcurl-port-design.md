@@ -86,7 +86,8 @@ Runtime fixtures:
 
 ```text
 packages/orchestrator/src/platform/__tests__/fixtures/curl.wasm
-packages/orchestrator/src/platform/__tests__/fixtures/libcurl-*.wasm
+packages/orchestrator/src/platform/__tests__/fixtures/libcurl-fetch-canary.wasm
+packages/orchestrator/src/platform/__tests__/fixtures/libcurl-socket-canary.wasm
 ```
 
 Test surface:
@@ -96,9 +97,9 @@ packages/orchestrator/src/__tests__/curl-conformance.test.ts
 packages/guest-compat/conformance/c/libcurl-*.c
 ```
 
-The exact fixture naming can change during implementation, but the split is
-intentional: CLI tests validate user-facing `curl`, while C canaries validate
-`libcurl` as a library.
+`libcurl` itself is a static archive consumed at build time. It is not a
+runtime `.wasm` dynamic library. CLI tests validate user-facing `curl`, while
+runnable C canary executables validate `libcurl` as a library.
 
 ## Runtime Network Selection
 
@@ -152,7 +153,8 @@ The fetch backend converts libcurl's HTTP request state into the existing
   "url": "https://example.test/path",
   "method": "POST",
   "headers": { "content-type": "application/json" },
-  "body": "..."
+  "body": "...",
+  "redirect": "manual"
 }
 ```
 
@@ -160,7 +162,6 @@ The host returns:
 
 ```json
 {
-  "ok": true,
   "status": 200,
   "headers": { "content-type": "application/json" },
   "body": "...",
@@ -170,7 +171,15 @@ The host returns:
 ```
 
 Binary response bodies use `body_base64`. The port must not route binary data
-through lossy UTF-8 conversions.
+through lossy UTF-8 conversions. The browser bridge must therefore read
+responses with `arrayBuffer()` and populate `body_base64`, matching the
+Node/Deno bridge behavior.
+
+`error != null` is the transport/policy failure signal. HTTP status is response
+metadata. A `404` response is still a completed curl transfer unless the user
+requested curl's normal failure behavior (`--fail` / corresponding libcurl
+option). The existing host `ok` field is not sufficient for libcurl error
+mapping because it currently folds HTTP status into success.
 
 Minimum fetch-backed libcurl behavior:
 
@@ -179,9 +188,12 @@ Minimum fetch-backed libcurl behavior:
 - Deliver response body through libcurl's normal write callback.
 - Accept request headers.
 - Accept request body for `POST`/custom methods.
-- Map host/network/policy failures to deterministic curl errors.
-- Respect redirects either through libcurl's existing redirect machinery or by
-  explicitly documenting a first-slice limitation.
+- Map host/network/policy failures to deterministic curl errors using
+  `error`, not HTTP status.
+- Keep redirects visible to libcurl by passing `redirect: "manual"` through
+  `host_network_fetch` and implementing manual redirect support in every host
+  bridge, including browser fetch. Fetch mode must not use browser/default
+  redirect-following behavior for curl requests.
 
 The fetch backend is allowed to be request-buffered in the first milestone:
 the complete request body is collected before calling `host_network_fetch`, and
@@ -276,7 +288,8 @@ Add curl CLI tests:
 - `curl -H 'x-test: yes' URL` sends headers.
 - `curl -d 'a=1' URL` sends body.
 - `curl -o /tmp/out URL` writes bytes to VFS.
-- `curl -L URL` follows redirects.
+- `curl -L URL` follows redirects, while the same URL without `-L` exposes the
+  3xx response according to curl/libcurl semantics.
 - Denied hosts produce non-zero exit and useful stderr.
 
 Network tests that require a host listener must be conditional in restricted
@@ -317,9 +330,8 @@ The curl/libcurl slice is complete when:
   path lets the CLI share the same behavior without inventing a second
   configuration mechanism.
 - Fetch mode keeps redirects in libcurl so fetch and socket mode use the same
-  redirect policy. If implementation proves that this requires a large invasive
-  patch, the first implementation may temporarily document `-L` as unsupported
-  in fetch mode, but that is a plan-level exception requiring review.
+  redirect policy. This requires a `host_network_fetch` protocol field for
+  manual redirects and browser bridge support for `redirect: "manual"`.
 - TLS certificate inspection is unsupported in fetch mode for this milestone.
   Browser fetch does not expose the same certificate details as socket/OpenSSL.
 - curl starts as an upstream-pin submodule with patches, matching the current
