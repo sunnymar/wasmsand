@@ -38,7 +38,7 @@ $(WORK_DIR)/configure.ac: submodule-init
 	if [ -d $(PATCHES_DIR) ] && ls $(PATCHES_DIR)/*.patch >/dev/null 2>&1; then \
 		for p in $(PATCHES_DIR)/*.patch; do \
 			echo "==> Applying $$p"; \
-			patch -d $(WORK_DIR) -p1 < $(abspath $$p); \
+			patch -d $(WORK_DIR) -p1 < $(abspath $$p) || exit 1; \
 		done; \
 	fi
 	touch $(WORK_DIR)/configure.ac
@@ -51,6 +51,7 @@ $(WORK_DIR)/Makefile: $(WORK_DIR)/configure ensure-toolchain ensure-compat
 		CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
 		CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
 		CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
+		CPCC_USE_SETJMP=1 \
 		CFLAGS="$(WASI_EMULATED_CFLAGS) -O2" \
 		LDFLAGS="$(WASI_EMULATED_LDFLAGS)" \
 		ac_cv_func_fork=no \
@@ -95,6 +96,7 @@ $(BUILD_DIR)/curl.wasm: $(WORK_DIR)/Makefile ensure-compat
 	cd $(WORK_DIR) && \
 		CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
 		CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
+		CPCC_USE_SETJMP=1 \
 		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
 			VERSION="$(CURL_VERSION)" \
 			all
@@ -103,6 +105,7 @@ $(BUILD_DIR)/curl.wasm: $(WORK_DIR)/Makefile ensure-compat
 $(BUILD_DIR)/libcurl-fetch-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/libcurl-fetch-canary.c ensure-compat
 	CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
 	CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
+	CPCC_USE_SETJMP=1 \
 	$(CPCC) \
 		-I$(WORK_DIR)/include \
 		-I$(WORK_DIR)/lib \
@@ -116,6 +119,7 @@ $(BUILD_DIR)/libcurl-fetch-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/lib
 $(BUILD_DIR)/libcurl-socket-canary.wasm: $(BUILD_DIR)/curl.wasm $(CANARY_DIR)/libcurl-socket-canary.c ensure-compat
 	CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
 	CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
+	CPCC_USE_SETJMP=1 \
 	$(CPCC) \
 		-I$(WORK_DIR)/include \
 		-I$(WORK_DIR)/lib \

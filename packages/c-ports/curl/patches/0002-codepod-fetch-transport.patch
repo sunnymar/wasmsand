@@ -26,7 +26,7 @@
         * Resolve the address of the server or proxy
 --- a/lib/http.c	2026-05-01 17:01:11
 +++ b/lib/http.c	2026-05-01 17:51:40
-@@ -526,7 +526,465 @@
+@@ -526,7 +526,467 @@
  
    return (bool)data->state.authproblem;
  }
@@ -451,16 +451,18 @@
 +                                         &body64);
 +  if(result)
 +    goto out;
-+  if(body64)
++  if(body64 && body64[0])
 +    result = curlx_base64_decode(body64, &body, &body_len);
 +  else {
 +    char *text = NULL;
-+    result = codepod_json_dup_string_field(resp, resp_len, "body", &text);
-+    if(result)
-+      goto out;
-+    if(text) {
-+      body = (uint8_t *)text;
-+      body_len = strlen(text);
++    if(!body64) {
++      result = codepod_json_dup_string_field(resp, resp_len, "body", &text);
++      if(result)
++        goto out;
++      if(text) {
++        body = (uint8_t *)text;
++        body_len = strlen(text);
++      }
 +    }
 +  }
 +  if(result)
@@ -492,7 +494,7 @@
  /*
   * Curl_http_auth_act() gets called when all HTTP headers have been received
   * and it checks what authentication methods that are available and decides
-@@ -3087,6 +3545,11 @@
+@@ -3087,6 +3547,11 @@
                           httpversion, method, httpreq);
      if(result)
        goto out;
