@@ -4,6 +4,12 @@ import type { FetchRedirectMode, NetworkBridgeLike, SyncFetchResult, SyncRequest
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+type HostNetworkFetch = (
+  reqPtr: number,
+  reqLen: number,
+  outPtr: number,
+  outCap: number,
+) => Promise<number>;
 
 class RecordingBridge implements NetworkBridgeLike {
   redirect: FetchRedirectMode | undefined;
@@ -45,12 +51,7 @@ Deno.test('host_network_fetch passes manual redirect and preserves HTTP status',
   }));
   new Uint8Array(memory.buffer, 32, req.length).set(req);
 
-  const hostNetworkFetch = imports.host_network_fetch as (
-    reqPtr: number,
-    reqLen: number,
-    outPtr: number,
-    outCap: number,
-  ) => Promise<number>;
+  const hostNetworkFetch = imports.host_network_fetch as HostNetworkFetch;
   const written = await hostNetworkFetch(32, req.length, 1024, 4096);
   const json = JSON.parse(readCString(memory, 1024, written));
 
@@ -58,4 +59,26 @@ Deno.test('host_network_fetch passes manual redirect and preserves HTTP status',
   assertEquals(json.status, 302);
   assertEquals(json.error, null);
   assertEquals(json.body_base64, 'bW92ZWQ=');
+});
+
+Deno.test("host_network_fetch error responses include body_base64", async () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const imports = createKernelImports({ memory });
+  const req = encoder.encode(JSON.stringify({
+    url: "https://example.test/start",
+    method: "GET",
+    headers: {},
+    redirect: "manual",
+  }));
+  new Uint8Array(memory.buffer, 32, req.length).set(req);
+
+  const hostNetworkFetch = imports.host_network_fetch as HostNetworkFetch;
+  const written = await hostNetworkFetch(32, req.length, 1024, 4096);
+  const json = JSON.parse(readCString(memory, 1024, written));
+
+  assertEquals(json.ok, false);
+  assertEquals(json.status, 0);
+  assertEquals(json.body, "");
+  assertEquals(json.body_base64, null);
+  assertEquals(json.error, "networking not configured");
 });

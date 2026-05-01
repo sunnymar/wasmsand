@@ -426,7 +426,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       const reqJson = readString(memory, reqPtr, reqLen);
 
       const fetchError = (error: string) =>
-        writeJson(memory, outPtr, outCap, { ok: false, status: 0, headers: {}, body: '', error });
+        writeJson(memory, outPtr, outCap, { ok: false, status: 0, headers: {}, body: '', body_base64: null, error });
 
       if (!opts.networkBridge) {
         return fetchError('networking not configured');
