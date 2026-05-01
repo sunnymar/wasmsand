@@ -144,8 +144,10 @@ Forced modes are strict:
 - If socket TLS is unavailable but fetch is available, HTTPS may use fetch.
 - If neither transport can satisfy the request, fail with a curl-style error.
 
-The exact auto probe can stay simple in the first TLS slice. Tests must cover
-forced modes first because they are deterministic.
+The exact auto probe can stay simple in the first TLS slice, but auto-mode
+HTTPS is in scope. The implementation must include an active test where plain
+`curl https://...` runs in a fetch-required or no-socket sandbox and uses
+`host_network_fetch` instead of attempting the socket/TLS path.
 
 ## Trust And Certificates
 
@@ -173,15 +175,23 @@ Fetch HTTPS tests are deterministic and required:
 - `libcurl-fetch-canary https://example.test/data` reports status and body.
 - A bridge spy proves fetch mode used `host_network_fetch` and did not call the
   socket path.
+- Plain `curl https://example.test/data` in a fetch-required or no-socket
+  sandbox uses fetch mode automatically and does not call the socket path.
 
 Socket HTTPS tests are required once mbedTLS is linked:
 
 - `curl --version` reports an SSL backend containing `mbedTLS`.
 - `curl --codepod-network=socket https://...` does not fall back to fetch.
-- A socket HTTPS canary exercises direct libcurl.
-- If deterministic local TLS serving is not available in the sandbox test
-  environment, use a skipped positive integration test with a clear message and
-  keep active tests for build/link/import shape and strict no-fetch fallback.
+- `curl --codepod-network=socket -k https://127.0.0.1:<port>/...` completes a
+  real TLS transfer against a deterministic local TLS server, or the same test
+  uses `--cacert` with a test CA.
+- `libcurl-socket-canary https://127.0.0.1:<port>/...` completes a real TLS
+  transfer against the same deterministic local TLS server, using either test
+  CA verification or an explicit insecure/test mode.
+- The active socket HTTPS tests must prove mbedTLS I/O, entropy, SNI/hostname
+  handling where applicable, and certificate plumbing enough to catch a broken
+  TLS handshake. Build/link/no-fetch checks are useful but are not sufficient
+  acceptance for socket-mode HTTPS.
 
 ## Build Expectations
 
@@ -197,7 +207,8 @@ The curl port must:
 
 - Keep patches explicit under `packages/c-ports/curl/patches`.
 - Keep `CPCC_USE_SETJMP=1` if curl still imports setjmp/longjmp.
-- Link static mbedTLS archives only for the socket TLS path.
+- Configure and link the single static curl artifact with mbedTLS for socket
+  TLS, while fetch mode must not invoke the TLS backend or open sockets.
 - Continue copying the existing curl/libcurl fixtures.
 
 ## Error Handling
