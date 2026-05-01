@@ -1,0 +1,25 @@
+--- /dev/null	2026-05-01 00:00:00
++++ b/docs/CODEPOD.md	2026-05-01 00:00:00
+@@ -0,0 +1,20 @@
++# Codepod port notes
++
++This curl build targets Codepod's wasm guest ABI. It deliberately keeps curl
++as a single-process, in-sandbox executable.
++
++Unsupported process features:
++
++- `fork()` and `vfork()` are disabled at configure time with
++  `ac_cv_func_fork=no` and `ac_cv_func_vfork=no`.
++- The threaded resolver is disabled with `--disable-threaded-resolver`.
++- External helper execution is not part of this port. Features that would
++  require launching host programs must be represented as explicit Codepod ABI
++  calls instead.
++
++Networking is selected at runtime:
++
++- `auto` uses the port default.
++- `fetch` routes HTTP through Codepod's `host_network_fetch` ABI.
++- `socket` routes through the POSIX socket compatibility layer.
++
++The wasm may still contain libc documentation strings mentioning process
++functions, but the curl port must not depend on `fork()` or `vfork()` imports.
