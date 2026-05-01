@@ -228,6 +228,23 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('socket-listen=ok');
   });
 
+  it('rejects 0.0.0.0 listener when mapped port authorization denies it', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+      network: { allowedHosts: ['127.0.0.1', 'localhost'] },
+      serverSockets: {
+        portMappings: [{ sandboxHost: '0.0.0.0', sandboxPort: 8080, hostPort: 0 }],
+        onListen: () => false,
+      },
+    });
+
+    const result = await sandbox.run('socket-listen-denied-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('listen-denied=ok');
+  });
+
   it('reports POSIX peer and local socket addresses through socket.h', async () => {
     const socketBackend: SocketBackend = {
       connect: () => ({ ok: true, socket: 606 }),

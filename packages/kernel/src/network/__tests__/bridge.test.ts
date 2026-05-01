@@ -4,6 +4,7 @@ import { NetworkBridge } from '../bridge.js';
 import { NetworkGateway } from '../gateway.js';
 import { createNetworkBridgeSocketBackend } from '../socket-backend.js';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 
 /**
  * These tests spin up an HTTP server in a CHILD PROCESS so that
@@ -199,6 +200,25 @@ describe('NetworkBridge', { sanitizeOps: false, sanitizeResources: false }, () =
 
     backend.close(client.socket);
     backend.close(accepted.socket);
+    backend.closeListener!(listen.listener);
+  });
+
+  it('binds mapped 0.0.0.0 sandbox listeners to configured host port', async () => {
+    const gateway = new NetworkGateway({ allowedHosts: ['127.0.0.1', 'localhost'] });
+    bridge = new NetworkBridge(gateway);
+    await bridge.start();
+
+    const backend = createNetworkBridgeSocketBackend(bridge);
+    const listen = backend.listen!({
+      host: '0.0.0.0',
+      port: 8080,
+      backlog: 8,
+      mapping: { sandboxHost: '0.0.0.0', sandboxPort: 8080, hostPort: 0 },
+    });
+
+    expect(listen.ok).toBe(true);
+    if (!listen.ok) throw new Error(listen.error);
+    expect(listen.port).toBe(8080);
     backend.closeListener!(listen.listener);
   });
 });

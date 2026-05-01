@@ -1386,7 +1386,7 @@ git diff --check -- packages/guest-compat/conformance/rust/std-net-listener-cana
 
 Expected: matrix and guest compat pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/guest-compat/conformance/rust/std-net-listener-canary packages/guest-compat/Makefile packages/orchestrator/src/__tests__/guest-compat.test.ts packages/orchestrator/src/platform/__tests__/fixtures/std-net-listener-canary.wasm patches/rust
@@ -1402,9 +1402,10 @@ git commit -m "feat(rust-std): support tcp listeners"
 - Modify: `packages/orchestrator/src/__tests__/guest-compat.test.ts`
 - Modify: `packages/orchestrator/src/network/bridge.ts`
 - Create: `packages/guest-compat/conformance/c/socket-listen-denied-canary.c`
+- Modify: `packages/guest-compat/conformance/c/socket-canary.c`
 - Modify: `packages/guest-compat/Makefile`
 
-- [ ] **Step 1: Add mapped-port bridge test**
+- [x] **Step 1: Add mapped-port bridge test**
 
 In `packages/orchestrator/src/network/__tests__/bridge.test.ts`, add:
 
@@ -1433,7 +1434,7 @@ it('binds mapped 0.0.0.0 sandbox listeners to configured host port', async () =>
 
 This test uses `hostPort: 0` to avoid collisions while still proving the mapped path is required and accepted.
 
-- [ ] **Step 2: Add denied-listen C canary**
+- [x] **Step 2: Add denied-listen C canary**
 
 Create `packages/guest-compat/conformance/c/socket-listen-denied-canary.c`:
 
@@ -1485,7 +1486,7 @@ int main(void) {
 
 In `packages/guest-compat/Makefile`, build `socket-listen-denied-canary.wasm` beside `socket-listen-canary.wasm` and copy it to `packages/orchestrator/src/platform/__tests__/fixtures/`.
 
-- [ ] **Step 3: Add guest policy test for denied mapping**
+- [x] **Step 3: Add guest policy test for denied mapping**
 
 In `packages/orchestrator/src/__tests__/guest-compat.test.ts`, add:
 
@@ -1506,13 +1507,13 @@ it('rejects 0.0.0.0 listener when mapped port authorization denies it', async ()
 });
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
 ```bash
 source scripts/dev-init.sh && deno test -A --no-check packages/orchestrator/src/network/__tests__/bridge.test.ts packages/orchestrator/src/__tests__/guest-compat.test.ts
-git diff --check -- packages/orchestrator/src/network/__tests__/bridge.test.ts packages/orchestrator/src/__tests__/guest-compat.test.ts packages/orchestrator/src/network/bridge.ts packages/guest-compat/conformance/c/socket-listen-denied-canary.c packages/guest-compat/Makefile
+git diff --check -- packages/orchestrator/src/network/__tests__/bridge.test.ts packages/orchestrator/src/__tests__/guest-compat.test.ts packages/orchestrator/src/network/bridge.ts packages/guest-compat/conformance/c/socket-listen-denied-canary.c packages/guest-compat/conformance/c/socket-canary.c packages/guest-compat/Makefile
 ```
 
 Expected: all pass.
@@ -1520,7 +1521,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/orchestrator/src/network/__tests__/bridge.test.ts packages/orchestrator/src/__tests__/guest-compat.test.ts packages/orchestrator/src/network/bridge.ts packages/guest-compat/conformance/c/socket-listen-denied-canary.c packages/guest-compat/Makefile
+git add packages/orchestrator/src/network/__tests__/bridge.test.ts packages/orchestrator/src/__tests__/guest-compat.test.ts packages/orchestrator/src/network/bridge.ts packages/guest-compat/conformance/c/socket-listen-denied-canary.c packages/guest-compat/conformance/c/socket-canary.c packages/guest-compat/Makefile packages/orchestrator/src/platform/__tests__/fixtures/socket-listen-denied-canary.wasm
 git commit -m "test(socket): cover mapped listener policy"
 ```
 
