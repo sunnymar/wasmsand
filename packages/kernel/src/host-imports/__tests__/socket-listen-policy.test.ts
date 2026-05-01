@@ -77,4 +77,77 @@ describe('socket listener policy preparation', () => {
       boundPort: 18081,
     });
   });
+
+  it('rejects loopback listen when allowLoopback is not enabled', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const backend: SocketBackend = {
+      connect: () => ({ ok: false, error: 'not used' }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+      listen: () => { throw new Error('policy denial must happen before backend.listen'); },
+      accept: () => ({ ok: false, error: 'not used' }),
+      closeListener: () => ({ ok: true }),
+    };
+    const imports = createKernelImports({
+      memory,
+      kernel,
+      socketBackend: backend,
+      serverSockets: { allowLoopback: false },
+    });
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const bindLen = writeString(memory, 16, JSON.stringify({ fd, host: '127.0.0.1', port: 18081 }));
+    (imports.host_socket_bind as (...args: number[]) => number)(16, bindLen, 256, 4096);
+    const listenLen = writeString(memory, 16, JSON.stringify({ fd, backlog: 8 }));
+
+    const out = (imports.host_socket_listen as (...args: number[]) => number)(16, listenLen, 256, 4096);
+
+    expect(readJson(memory, 256, out)).toEqual({
+      ok: false,
+      error: 'listen on 127.0.0.1:18081 is not allowed by sandbox policy',
+    });
+  });
+
+  it('allows mapped 0.0.0.0 listen only for configured mapped ports', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const calls: unknown[] = [];
+    const backend: SocketBackend = {
+      connect: () => ({ ok: false, error: 'not used' }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+      listen(req) {
+        calls.push(req);
+        return { ok: true, listener: 44, host: '127.0.0.1', port: 19081 };
+      },
+      accept: () => ({ ok: false, error: 'not used' }),
+      closeListener: () => ({ ok: true }),
+    };
+    const imports = createKernelImports({
+      memory,
+      kernel,
+      socketBackend: backend,
+      serverSockets: {
+        allowLoopback: false,
+        portMappings: [{ sandboxHost: '0.0.0.0', sandboxPort: 8080, hostPort: 19081 }],
+        onListen: (req) => req.port === 8080,
+      },
+    });
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const bindLen = writeString(memory, 16, JSON.stringify({ fd, host: '0.0.0.0', port: 8080 }));
+    expect(readJson(memory, 256, (imports.host_socket_bind as (...args: number[]) => number)(16, bindLen, 256, 4096))).toEqual({ ok: true });
+
+    const listenLen = writeString(memory, 16, JSON.stringify({ fd, backlog: 8 }));
+    const out = (imports.host_socket_listen as (...args: number[]) => number)(16, listenLen, 256, 4096);
+
+    expect(readJson(memory, 256, out)).toEqual({ ok: true });
+    expect(calls).toEqual([{
+      host: '0.0.0.0',
+      port: 8080,
+      backlog: 8,
+      mapping: { sandboxHost: '0.0.0.0', sandboxPort: 8080, hostPort: 19081 },
+    }]);
+  });
 });

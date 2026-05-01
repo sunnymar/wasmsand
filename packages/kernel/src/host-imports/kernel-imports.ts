@@ -18,7 +18,7 @@
  */
 
 import type { NetworkBridgeLike } from '../network/bridge.js';
-import type { SocketBackend, SocketListenPolicy } from '../network/socket-backend.js';
+import type { SocketBackend, SocketListenPolicy, SocketPortMapping } from '../network/socket-backend.js';
 import { createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { NativeModuleRegistry } from '../process/native-modules.js';
@@ -130,6 +130,35 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     out.set(left, 0);
     out.set(right, left.byteLength);
     return out;
+  }
+
+  function authorizeListen(
+    policy: SocketListenPolicy | undefined,
+    host: '127.0.0.1' | 'localhost' | '0.0.0.0',
+    port: number,
+    backlog: number,
+  ): { ok: true; mapping?: SocketPortMapping } | { ok: false; error: string } {
+    if (!policy) {
+      return { ok: false, error: `listen on ${host}:${port} is not allowed by sandbox policy` };
+    }
+    if (host === '127.0.0.1' || host === 'localhost') {
+      if (policy.allowLoopback === true) return { ok: true };
+      return { ok: false, error: `listen on ${host}:${port} is not allowed by sandbox policy` };
+    }
+    const mapping = policy.portMappings?.find((m) =>
+      m.sandboxHost === '0.0.0.0' && m.sandboxPort === port
+    );
+    if (!mapping) {
+      return { ok: false, error: `listen on 0.0.0.0:${port} requires an explicit port mapping` };
+    }
+    const allowed = policy.onListen?.({ host, port, backlog, mapping });
+    if (allowed === false) {
+      return { ok: false, error: `listen on 0.0.0.0:${port} was denied by sandbox policy` };
+    }
+    if (allowed && typeof (allowed as Promise<boolean>).then === 'function') {
+      return { ok: false, error: 'async listen authorization is not supported by synchronous socket imports' };
+    }
+    return { ok: true, mapping };
   }
 
   return {
@@ -528,21 +557,115 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     },
 
     // host_socket_bind(req_ptr, req_len, out_ptr, out_cap) -> i32
-    // Prepared for future server sockets. Runtime support is intentionally deferred.
-    host_socket_bind(_reqPtr: number, _reqLen: number, outPtr: number, outCap: number): number {
-      return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not implemented' });
+    // Records the sandbox-visible local address requested for a socket fd.
+    host_socket_bind(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+      try {
+        const req = JSON.parse(readString(memory, reqPtr, reqLen));
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a socket fd: ${req.fd}` });
+        }
+        const host = req.host === 'localhost' ? 'localhost' : req.host;
+        if (host !== '127.0.0.1' && host !== 'localhost' && host !== '0.0.0.0') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `unsupported bind host: ${String(req.host)}` });
+        }
+        if (typeof req.port !== 'number' || req.port < 0 || req.port > 65535) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `invalid bind port: ${String(req.port)}` });
+        }
+        target.boundHost = host;
+        target.boundPort = req.port;
+        target.localHost = host === '0.0.0.0' ? socketLocalHost : host;
+        target.localPort = req.port;
+        return writeJson(memory, outPtr, outCap, { ok: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return writeJson(memory, outPtr, outCap, { ok: false, error: msg });
+      }
     },
 
     // host_socket_listen(req_ptr, req_len, out_ptr, out_cap) -> i32
-    // Prepared for future server sockets. Runtime support is intentionally deferred.
-    host_socket_listen(_reqPtr: number, _reqLen: number, outPtr: number, outCap: number): number {
-      return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not implemented' });
+    // Creates a backend listener for a socket fd after sandbox policy authorizes it.
+    host_socket_listen(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+      try {
+        const req = JSON.parse(readString(memory, reqPtr, reqLen));
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a socket fd: ${req.fd}` });
+        }
+        const host = target.boundHost ?? '127.0.0.1';
+        const port = target.boundPort ?? 0;
+        const backlog = typeof req.backlog === 'number' && req.backlog > 0 ? req.backlog : 128;
+        const auth = authorizeListen(opts.serverSockets, host, port, backlog);
+        if (!auth.ok) return writeJson(memory, outPtr, outCap, auth);
+        if (!socketBackend?.listen) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not supported by this backend' });
+        }
+        const result = socketBackend.listen({ host, port, backlog, mapping: auth.mapping });
+        if (!result.ok) return writeJson(memory, outPtr, outCap, result);
+        target.listener = result.listener;
+        target.boundHost = host;
+        target.boundPort = port;
+        target.localHost = result.host;
+        target.localPort = result.port;
+        target.closeListener = (listener) => { socketBackend.closeListener?.(listener); };
+        return writeJson(memory, outPtr, outCap, { ok: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return writeJson(memory, outPtr, outCap, { ok: false, error: msg });
+      }
     },
 
     // host_socket_accept(req_ptr, req_len, out_ptr, out_cap) -> i32
-    // Prepared for future server sockets. Runtime support is intentionally deferred.
-    host_socket_accept(_reqPtr: number, _reqLen: number, outPtr: number, outCap: number): number {
-      return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not implemented' });
+    // Polls one accepted connection from a listening socket fd.
+    host_socket_accept(reqPtr: number, reqLen: number, outPtr: number, outCap: number): number {
+      if (!socketBackend?.accept) {
+        return writeJson(memory, outPtr, outCap, { ok: false, error: 'server sockets are not supported by this backend' });
+      }
+      try {
+        const req = JSON.parse(readString(memory, reqPtr, reqLen));
+        if (typeof req.fd !== 'number') {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'missing socket fd' });
+        }
+        const target = opts.kernel?.getFdTarget(callerPid, req.fd);
+        if (!target || target.type !== 'socket' || target.listener == null) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: `not a listening socket fd: ${req.fd}` });
+        }
+        const accepted = socketBackend.accept(target.listener);
+        if (!accepted.ok) return writeJson(memory, outPtr, outCap, accepted);
+        if (!opts.kernel) {
+          return writeJson(memory, outPtr, outCap, { ok: false, error: 'kernel not configured' });
+        }
+        const acceptedFd = opts.kernel.allocFd(callerPid, {
+          type: 'socket',
+          socket: accepted.socket,
+          refs: 1,
+          peerHost: accepted.peerHost,
+          peerPort: accepted.peerPort,
+          localHost: accepted.localHost,
+          localPort: accepted.localPort,
+          send: socketBackend.send.bind(socketBackend),
+          recv: socketBackend.recv.bind(socketBackend),
+          setNoDelay: socketBackend.setNoDelay?.bind(socketBackend),
+          close: (socket) => { socketBackend.close(socket); },
+        });
+        return writeJson(memory, outPtr, outCap, {
+          ok: true,
+          fd: acceptedFd,
+          peer_host: accepted.peerHost,
+          peer_port: accepted.peerPort,
+          local_host: accepted.localHost,
+          local_port: accepted.localPort,
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return writeJson(memory, outPtr, outCap, { ok: false, error: msg });
+      }
     },
 
     // host_socket_addr(req_ptr, req_len, out_ptr, out_cap) -> i32

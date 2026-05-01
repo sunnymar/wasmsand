@@ -361,4 +361,51 @@ describe('socket fd host imports', () => {
     expect(readJson(memory, 512, recvLen)).toEqual({ ok: false, error: 'EAGAIN' });
     expect(requests).toEqual([]);
   });
+
+  it('accepts a listener connection and allocates a connected socket fd', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const kernel = new ProcessKernel();
+    const backend: SocketBackend = {
+      connect: () => ({ ok: false, error: 'not used' }),
+      send: () => ({ ok: true, bytes_sent: 0 }),
+      recv: () => ({ ok: true, data_b64: '' }),
+      close: () => ({ ok: true }),
+      listen: () => ({ ok: true, listener: 55, host: '127.0.0.1', port: 18081 }),
+      accept: () => ({
+        ok: true,
+        socket: 66,
+        peerHost: '127.0.0.1',
+        peerPort: 50123,
+        localHost: '127.0.0.1',
+        localPort: 18081,
+      }),
+      closeListener: () => ({ ok: true }),
+    };
+    const imports = createKernelImports({
+      memory,
+      kernel,
+      socketBackend: backend,
+      serverSockets: { allowLoopback: true },
+    });
+    const fd = (imports.host_socket_open as (...args: number[]) => number)(2, 1, 0);
+    const bindLen = writeString(memory, 16, JSON.stringify({ fd, host: '127.0.0.1', port: 18081 }));
+    (imports.host_socket_bind as (...args: number[]) => number)(16, bindLen, 256, 4096);
+    const listenLen = writeString(memory, 16, JSON.stringify({ fd, backlog: 8 }));
+    (imports.host_socket_listen as (...args: number[]) => number)(16, listenLen, 256, 4096);
+
+    const acceptLen = writeString(memory, 16, JSON.stringify({ fd }));
+    const out = (imports.host_socket_accept as (...args: number[]) => number)(16, acceptLen, 256, 4096);
+    const accepted = readJson(memory, 256, out) as { ok: true; fd: number };
+
+    expect(accepted.ok).toBe(true);
+    expect(typeof accepted.fd).toBe('number');
+    expect(kernel.getFdTarget(0, accepted.fd)).toMatchObject({
+      type: 'socket',
+      socket: 66,
+      peerHost: '127.0.0.1',
+      peerPort: 50123,
+      localHost: '127.0.0.1',
+      localPort: 18081,
+    });
+  });
 });

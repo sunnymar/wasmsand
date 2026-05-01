@@ -1,5 +1,5 @@
 import type { AsyncPipeReadEnd, AsyncPipeWriteEnd } from '../vfs/pipe.js';
-import type { SocketBackendResult, SocketHandle } from '../network/socket-backend.js';
+import type { SocketBackendResult, SocketHandle, SocketListenerHandle } from '../network/socket-backend.js';
 import type { FdTable } from '../vfs/fd-table.js';
 
 /** Target for a file descriptor in a process's fd table. */
@@ -11,7 +11,10 @@ export type FdTarget =
   | {
       type: 'socket';
       socket: SocketHandle | null;
+      listener?: SocketListenerHandle | null;
       refs: number;
+      boundHost?: '127.0.0.1' | 'localhost' | '0.0.0.0';
+      boundPort?: number;
       peerHost?: string;
       peerPort?: number;
       localHost?: string;
@@ -25,6 +28,7 @@ export type FdTarget =
       recv: (socket: SocketHandle, maxBytes: number) => SocketBackendResult;
       setNoDelay?: (socket: SocketHandle, enabled: boolean) => SocketBackendResult;
       close: (socket: SocketHandle) => void;
+      closeListener?: (listener: SocketListenerHandle) => void;
     }
   | { type: 'static'; data: Uint8Array; offset: number }
   | { type: 'null' };

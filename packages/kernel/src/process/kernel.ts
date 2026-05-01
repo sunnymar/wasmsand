@@ -321,9 +321,15 @@ export class ProcessKernel {
     }
     if (target.type === 'socket') {
       target.refs--;
-      if (target.refs <= 0 && target.socket !== null) {
-        target.close(target.socket);
-        target.socket = null;
+      if (target.refs <= 0) {
+        if (target.listener != null && target.closeListener) {
+          target.closeListener(target.listener);
+          target.listener = null;
+        }
+        if (target.socket !== null) {
+          target.close(target.socket);
+          target.socket = null;
+        }
       }
     }
   }

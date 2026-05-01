@@ -183,11 +183,12 @@ git commit -m "feat(socket): define listener backend contract"
 
 **Files:**
 - Modify: `packages/orchestrator/src/wasi/fd-target.ts`
+- Modify: `packages/orchestrator/src/process/kernel.ts`
 - Modify: `packages/orchestrator/src/host-imports/kernel-imports.ts`
 - Test: `packages/orchestrator/src/host-imports/__tests__/socket-listen-policy.test.ts`
 - Test: `packages/orchestrator/src/host-imports/__tests__/socket-fds.test.ts`
 
-- [ ] **Step 1: Add policy rejection tests**
+- [x] **Step 1: Add policy rejection tests**
 
 Append these tests to `packages/orchestrator/src/host-imports/__tests__/socket-listen-policy.test.ts`:
 
@@ -266,7 +267,7 @@ it('allows mapped 0.0.0.0 listen only for configured mapped ports', () => {
 });
 ```
 
-- [ ] **Step 2: Add accept fd allocation test**
+- [x] **Step 2: Add accept fd allocation test**
 
 Add this test to `packages/orchestrator/src/host-imports/__tests__/socket-fds.test.ts`:
 
@@ -319,7 +320,7 @@ it('accepts a listener connection and allocates a connected socket fd', () => {
 });
 ```
 
-- [ ] **Step 3: Run tests and verify failures**
+- [x] **Step 3: Run tests and verify failures**
 
 Run:
 
@@ -329,7 +330,7 @@ source scripts/dev-init.sh && deno test -A --no-check packages/orchestrator/src/
 
 Expected: policy and accept tests fail because `host_socket_bind/listen/accept` still return fixed errors.
 
-- [ ] **Step 4: Extend fd target metadata**
+- [x] **Step 4: Extend fd target metadata**
 
 In `packages/orchestrator/src/wasi/fd-target.ts`, extend the socket target union:
 
@@ -364,7 +365,7 @@ Add imports at the top:
 import type { SocketBackendResult, SocketHandle, SocketListenerHandle } from '../network/socket-backend.js';
 ```
 
-- [ ] **Step 5: Implement policy helper in kernel imports**
+- [x] **Step 5: Implement policy helper in kernel imports**
 
 In `packages/orchestrator/src/host-imports/kernel-imports.ts`, add this helper near the socket helpers:
 
@@ -405,7 +406,7 @@ Also import `SocketListenPolicy` and `SocketPortMapping` if not already present:
 import type { SocketBackend, SocketListenPolicy, SocketPortMapping } from '../network/socket-backend.js';
 ```
 
-- [ ] **Step 6: Implement `host_socket_bind`**
+- [x] **Step 6: Implement `host_socket_bind`**
 
 Replace the fixed `host_socket_bind` body in `kernel-imports.ts` with:
 
@@ -439,7 +440,7 @@ host_socket_bind(reqPtr: number, reqLen: number, outPtr: number, outCap: number)
 },
 ```
 
-- [ ] **Step 7: Implement `host_socket_listen`**
+- [x] **Step 7: Implement `host_socket_listen`**
 
 Replace `host_socket_listen` with:
 
@@ -478,7 +479,7 @@ host_socket_listen(reqPtr: number, reqLen: number, outPtr: number, outCap: numbe
 },
 ```
 
-- [ ] **Step 8: Implement `host_socket_accept`**
+- [x] **Step 8: Implement `host_socket_accept`**
 
 Replace `host_socket_accept` with:
 
@@ -529,7 +530,7 @@ host_socket_accept(reqPtr: number, reqLen: number, outPtr: number, outCap: numbe
 },
 ```
 
-- [ ] **Step 9: Ensure close cleans listeners**
+- [x] **Step 9: Ensure close cleans listeners**
 
 In `ProcessKernel.cleanupFds` and `closeFd`, when target type is `socket`:
 
@@ -548,7 +549,7 @@ if (target.type === 'socket') {
 
 If the current code already closes connected sockets in one place, update that branch rather than duplicating it.
 
-- [ ] **Step 10: Run tests**
+- [x] **Step 10: Run tests**
 
 Run:
 
