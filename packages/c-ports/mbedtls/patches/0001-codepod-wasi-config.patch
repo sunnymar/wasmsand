@@ -1,0 +1,71 @@
+--- a/include/mbedtls/mbedtls_config.h	2026-05-01 20:33:49
++++ b/include/mbedtls/mbedtls_config.h	2026-05-01 20:45:18
+@@ -3092,7 +3092,7 @@
+  *
+  * This module provides networking routines.
+  */
+-#define MBEDTLS_NET_C
++//#define MBEDTLS_NET_C
+ 
+ /**
+  * \def MBEDTLS_OID_C
+@@ -3799,7 +3799,7 @@
+  *
+  * Module:  library/timing.c
+  */
+-#define MBEDTLS_TIMING_C
++//#define MBEDTLS_TIMING_C
+ 
+ /**
+  * \def MBEDTLS_VERSION_C
+--- a/library/entropy_poll.c	2026-05-01 20:33:49
++++ b/library/entropy_poll.c	2026-05-01 20:45:18
+@@ -31,11 +31,16 @@
+ 
+ #if !defined(unix) && !defined(__unix__) && !defined(__unix) && \
+     !defined(__APPLE__) && !defined(_WIN32) && !defined(__QNXNTO__) && \
+-    !defined(__HAIKU__) && !defined(__midipix__) && !defined(__MVS__)
++    !defined(__HAIKU__) && !defined(__midipix__) && !defined(__MVS__) && \
++    !defined(__wasi__)
+ #error \
+     "Platform entropy sources only work on Unix and Windows, see MBEDTLS_NO_PLATFORM_ENTROPY in mbedtls_config.h"
+ #endif
+ 
++#if defined(__wasi__)
++#include <unistd.h>
++#endif
++
+ #if defined(_WIN32) && !defined(EFIX64) && !defined(EFI32)
+ 
+ #include <windows.h>
+@@ -152,6 +157,22 @@
+ int mbedtls_platform_entropy_poll(void *data,
+                                   unsigned char *output, size_t len, size_t *olen)
+ {
++#if defined(__wasi__)
++    ((void) data);
++    *olen = 0;
++
++    while (len != 0) {
++        size_t chunk = len > 256 ? 256 : len;
++        if (getentropy(output, chunk) != 0) {
++            return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
++        }
++        output += chunk;
++        len -= chunk;
++        *olen += chunk;
++    }
++
++    return 0;
++#else
+     FILE *file;
+     size_t read_len;
+     int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
+@@ -202,6 +223,7 @@
+     return 0;
+ #endif /* HAVE_SYSCTL_ARND */
++#endif /* __wasi__ */
+ }
+ #endif /* _WIN32 && !EFIX64 && !EFI32 */
+ #endif /* !MBEDTLS_NO_PLATFORM_ENTROPY */
+ 

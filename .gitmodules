@@ -26,3 +26,6 @@
 [submodule "packages/c-ports/curl/upstream"]
 	path = packages/c-ports/curl/upstream
 	url = https://github.com/curl/curl.git
+[submodule "packages/c-ports/mbedtls/upstream"]
+	path = packages/c-ports/mbedtls/upstream
+	url = https://github.com/Mbed-TLS/mbedtls.git
