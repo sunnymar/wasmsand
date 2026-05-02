@@ -200,6 +200,9 @@ export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string,
     }
     // Apply permissions after all entries are created (strip S_TOOL bit)
     for (const entry of safeFiles) {
+      if ((entry.uid !== undefined || entry.gid !== undefined) && vfs.chown) {
+        vfs.chown(entry.path, entry.uid ?? 0, entry.gid ?? 0);
+      }
       if (entry.permissions !== undefined) {
         vfs.chmod(entry.path, entry.permissions & ~S_TOOL);
       }
@@ -236,13 +239,13 @@ function walkTree(
 
     if (entry.type === 'dir') {
       const st = vfs.stat(childPath);
-      out.push({ path: childPath, data: '', type: 'dir', permissions: st.permissions });
+      out.push({ path: childPath, data: '', type: 'dir', permissions: st.permissions, uid: st.uid, gid: st.gid });
       walkTree(vfs, childPath, out, excludePrefixes);
     } else if (entry.type === 'file') {
       const content = vfs.readFile(childPath);
       const st = vfs.stat(childPath);
       const b64 = toBase64(content);
-      out.push({ path: childPath, data: b64, type: 'file', permissions: st.permissions });
+      out.push({ path: childPath, data: b64, type: 'file', permissions: st.permissions, uid: st.uid, gid: st.gid });
     }
     // Skip symlinks — not part of the persistence spec
   }

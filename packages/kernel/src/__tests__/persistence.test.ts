@@ -123,7 +123,7 @@ describe('Persistence serializer', () => {
 
   describe('safe import path filtering', () => {
     /** Helper: build a v2 blob from a SerializedState object. */
-    function buildBlob(state: { version: number; files: Array<{ path: string; data: string; type: string; permissions?: number }> }): Uint8Array {
+    function buildBlob(state: { version: number; files: Array<{ path: string; data: string; type: string; permissions?: number; uid?: number; gid?: number }> }): Uint8Array {
       const json = JSON.stringify(state);
       const jsonBytes = new TextEncoder().encode(json);
       // Compute CRC32
@@ -273,6 +273,25 @@ describe('Persistence serializer', () => {
 
       expect(dst.stat('/tmp/readonly.txt').permissions).toBe(0o444);
       expect(dst.stat('/tmp/restricted').permissions).toBe(0o555);
+    });
+
+    it('round-trips uid and gid metadata', () => {
+      const src = new VFS();
+      src.withWriteAccess(() => {
+        src.writeFile('/tmp/owned.txt', enc('owned'));
+        src.chown('/tmp/owned.txt', 1234, 5678);
+        src.mkdirp('/tmp/owned-dir');
+        src.chown('/tmp/owned-dir', 2345, 6789);
+      });
+
+      const blob = exportState(src);
+      const dst = new VFS();
+      importState(dst, blob);
+
+      expect(dst.stat('/tmp/owned.txt').uid).toBe(1234);
+      expect(dst.stat('/tmp/owned.txt').gid).toBe(5678);
+      expect(dst.stat('/tmp/owned-dir').uid).toBe(2345);
+      expect(dst.stat('/tmp/owned-dir').gid).toBe(6789);
     });
   });
 });

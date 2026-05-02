@@ -128,6 +128,8 @@ export class VfsProxy {
       type: metadata.type as StatResult['type'],
       size: metadata.size as number,
       permissions: metadata.permissions as number,
+      uid: (metadata.uid as number | undefined) ?? 0,
+      gid: (metadata.gid as number | undefined) ?? 0,
       mtime: new Date(metadata.mtime as string),
       ctime: new Date(metadata.ctime as string),
       atime: new Date(metadata.atime as string),
@@ -140,6 +142,8 @@ export class VfsProxy {
       type: metadata.type as StatResult['type'],
       size: metadata.size as number,
       permissions: metadata.permissions as number,
+      uid: (metadata.uid as number | undefined) ?? 0,
+      gid: (metadata.gid as number | undefined) ?? 0,
       mtime: new Date(metadata.mtime as string),
       ctime: new Date(metadata.ctime as string),
       atime: new Date(metadata.atime as string),
@@ -173,6 +177,10 @@ export class VfsProxy {
 
   chmod(path: string, mode: number): void {
     this.call('chmod', { path, mode });
+  }
+
+  chown(path: string, uid: number, gid: number): void {
+    this.call('chown', { path, uid, gid });
   }
 
   symlink(target: string, path: string): void {
