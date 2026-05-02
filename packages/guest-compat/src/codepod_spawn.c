@@ -339,6 +339,29 @@ static const char *resolve_chdir(const fa_state_t *s) {
   return last;
 }
 
+static const char *absolute_pwd_env(void) {
+  const char *pwd = getenv("PWD");
+  if (pwd && pwd[0] == '/') return pwd;
+  return NULL;
+}
+
+static const char *current_spawn_cwd(char *buf, size_t cap) {
+  if (getcwd(buf, cap) == NULL) {
+    const char *pwd = absolute_pwd_env();
+    return pwd ? pwd : NULL;
+  }
+
+  /* WASI has no ambient process cwd. The host gives a process cwd to
+   * path syscalls, but wasi-libc can still report "/" until the guest
+   * explicitly chdir()s. Shells maintain exported PWD, so use it to keep
+   * nested posix_spawn cwd inheritance POSIX-shaped. */
+  if (strcmp(buf, "/") == 0) {
+    const char *pwd = absolute_pwd_env();
+    if (pwd && strcmp(pwd, "/") != 0) return pwd;
+  }
+  return buf;
+}
+
 static int do_posix_spawn(pid_t *pid_out, const char *prog,
                           const posix_spawn_file_actions_t *file_actions,
                           const posix_spawnattr_t *attrp,
@@ -366,6 +389,22 @@ static int do_posix_spawn(pid_t *pid_out, const char *prog,
   if (stderr_fd == -1) stderr_fd = 2;
 
   const char *cwd = resolve_chdir(fa);
+  char cwd_buf[PATH_MAX];
+  char cwd_joined[PATH_MAX];
+  if (!cwd) {
+    cwd = current_spawn_cwd(cwd_buf, sizeof(cwd_buf));
+  } else if (cwd[0] != '/') {
+    const char *base = current_spawn_cwd(cwd_buf, sizeof(cwd_buf));
+    if (base) {
+      int n = snprintf(cwd_joined, sizeof(cwd_joined), "%s%s%s",
+                       base,
+                       strcmp(base, "/") == 0 ? "" : "/",
+                       cwd);
+      if (n >= 0 && (size_t)n < sizeof(cwd_joined)) {
+        cwd = cwd_joined;
+      }
+    }
+  }
   /* Build the SpawnRequest JSON.  64 KB upper bound — anything past
    * that is a degenerate argv/env. */
   char *json = (char *)malloc(65536);

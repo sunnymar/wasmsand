@@ -67,6 +67,18 @@ const smokes: Smoke[] = [
     expectedStdout: 'hello world\n/tmp/tree\n/\ncodepod\n',
     expectedExitCode: 0,
   },
+  {
+    name: 'cd-external-relative-path',
+    script: "mkdir -p /tmp/cwd-check && printf 'cwd-ok\\n' > /tmp/cwd-check/marker.txt && cd /tmp/cwd-check && cat marker.txt",
+    expectedStdout: 'cwd-ok\n',
+    expectedExitCode: 0,
+  },
+  {
+    name: 'nested-script-external-relative-path',
+    script: "mkdir -p /tmp/cwd-script && printf 'nested-ok\\n' > /tmp/cwd-script/marker.txt && printf 'cat marker.txt\\n' > /tmp/cwd-script/child.sh && cd /tmp/cwd-script && /bin/sh ./child.sh",
+    expectedStdout: 'nested-ok\n',
+    expectedExitCode: 0,
+  },
 ];
 
 function ensureBuilt(): void {
