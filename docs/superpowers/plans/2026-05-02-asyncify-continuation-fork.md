@@ -217,26 +217,65 @@ Run: `source scripts/dev-init.sh && deno test -A --no-check packages/kernel/src/
 **Files:**
 - Modify generated fixtures under `packages/kernel/src/platform/__tests__/fixtures/` only for rebuilt canaries.
 
-- [ ] **Step 1: Build guest compat canaries**
-
-Run: `make -C packages/guest-compat all copy-fixtures`.
-
-- [ ] **Step 2: Run focused Deno tests**
+- [x] **Step 1: Build guest compat canaries**
 
 Run:
 
 ```bash
-source scripts/dev-init.sh && deno test -A --no-check \
-  packages/kernel/src/process/__tests__/module-profile.test.ts \
-  packages/kernel/src/process/__tests__/kernel.test.ts \
-  packages/kernel/src/__tests__/guest-compat.test.ts
+make -C packages/guest-compat build/fork-default-canary.wasm build/fork-canary.wasm
 ```
 
-- [ ] **Step 3: Run focused Rust tests**
+- [x] **Step 2: Run focused Deno tests**
 
-Run: `cargo test -q -p cpcc-toolchain`.
+Run:
 
-- [ ] **Step 4: Run diff hygiene**
+```bash
+source scripts/dev-init.sh && deno check \
+  packages/kernel/src/async-bridge.ts \
+  packages/kernel/src/process/module-profile.ts \
+  packages/kernel/src/process/loader.ts \
+  packages/kernel/src/process/manager.ts \
+  packages/kernel/src/process/kernel.ts \
+  packages/kernel/src/wasi/wasi-host.ts \
+  packages/kernel/src/host-imports/kernel-imports.ts \
+  packages/kernel/src/process/__tests__/loader.test.ts \
+  packages/kernel/src/process/__tests__/module-profile.test.ts \
+  packages/kernel/src/process/__tests__/kernel.test.ts \
+  packages/kernel/src/host-imports/__tests__/imports-shape.test.ts \
+  packages/kernel/src/host-imports/__tests__/imports-parity.test.ts
+
+source scripts/dev-init.sh && deno test -A --no-check \
+  packages/kernel/src/process/__tests__/module-profile.test.ts
+
+source scripts/dev-init.sh && deno test -A --no-check \
+  packages/kernel/src/process/__tests__/loader.test.ts \
+  --filter "continuation fork"
+
+source scripts/dev-init.sh && deno test -A --no-check \
+  packages/kernel/src/process/__tests__/kernel.test.ts \
+  packages/kernel/src/host-imports/__tests__/imports-shape.test.ts \
+  packages/kernel/src/host-imports/__tests__/imports-parity.test.ts
+```
+
+- [x] **Step 3: Run focused Rust tests**
+
+Run:
+
+```bash
+cargo test -q -p cpcc-toolchain --lib
+cargo test -q -p cpcc-toolchain --test cli dry_run_
+```
+
+Known existing broader-suite blocker:
+
+```bash
+cargo test -q -p cpcc-toolchain
+```
+
+still fails in `tests/canary_coverage.rs` because many Tier 1 symbols are not
+covered by canaries.
+
+- [x] **Step 4: Run diff hygiene**
 
 Run: `git diff --check`.
 
