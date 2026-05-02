@@ -228,6 +228,7 @@ export class Sandbox {
       : await Sandbox.createNetworkBridge(options.network);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
     const tools = await Sandbox.registerTools(mgr, adapter, options.wasmDir, vfs);
+    await Sandbox.installCpythonStdlib(vfs, adapter, options.wasmDir, tools);
 
     // Register optional WASM tools from ToolRegistry before preloadModules()
     if (options.tools && options.tools.length > 0) {
@@ -621,6 +622,38 @@ export class Sandbox {
       vfs.writeFile(vfsPath, bytes);
       vfs.chmod(vfsPath, 0o555);
     });
+  }
+
+  private static async installCpythonStdlib(
+    vfs: VFS,
+    adapter: PlatformAdapter,
+    wasmDir: string,
+    tools: Map<string, string>,
+  ): Promise<void> {
+    // Temporary CPython bring-up shim. This belongs in pkg once package install
+    // owns language runtimes and their VFS layouts.
+    if (!tools.has('cpython3') || !adapter.readDataFile) return;
+
+    const manifestBytes = await adapter.readDataFile(wasmDir, 'cpython3-lib-manifest.json');
+    if (!manifestBytes) return;
+
+    const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as string[];
+    for (const relPath of manifest) {
+      if (relPath.startsWith('/') || relPath.includes('..')) {
+        throw new Error(`Invalid CPython stdlib path in manifest: ${relPath}`);
+      }
+      const data = await adapter.readDataFile(wasmDir, `cpython3-lib/${relPath}`);
+      if (!data) {
+        throw new Error(`Missing CPython stdlib sidecar: ${relPath}`);
+      }
+      vfs.withWriteAccess(() => {
+        const fullPath = `/usr/local/lib/python3.14/${relPath}`;
+        const dir = fullPath.slice(0, fullPath.lastIndexOf('/')) || '/';
+        vfs.mkdirp(dir);
+        vfs.writeFile(fullPath, data);
+        vfs.chmod(fullPath, 0o444);
+      });
+    }
   }
 
   private static async installBootProgram(

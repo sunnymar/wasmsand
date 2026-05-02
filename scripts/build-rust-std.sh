@@ -139,7 +139,7 @@ CARGO_TARGET_DIR="$OUT_DIR/target" \
 RUSTC="$RUSTC_WRAPPER" \
 RUSTC_BOOTSTRAP=1 \
 cargo "+$RUST_VERSION" build \
-  -Z build-std=core,alloc,std,panic_abort,proc_macro \
+  -Z build-std=core,alloc,std,panic_abort,proc_macro,test \
   --target wasm32-wasip1 \
   --manifest-path "$BUILD_CRATE/Cargo.toml" \
   --release
@@ -160,6 +160,10 @@ if ! find "$LIB_DIR" -maxdepth 1 -name 'libcompiler_builtins-*.rlib' | grep -q .
 fi
 if ! find "$LIB_DIR" -maxdepth 1 -name 'libstd-*.rlib' | grep -q .; then
   echo "build-rust-std: packaged sysroot is missing std" >&2
+  exit 1
+fi
+if ! find "$LIB_DIR" -maxdepth 1 -name 'libtest-*.rlib' | grep -q .; then
+  echo "build-rust-std: packaged sysroot is missing test" >&2
   exit 1
 fi
 if [[ ! -f "$LIB_DIR/self-contained/crt1-command.o" ]]; then

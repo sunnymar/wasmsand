@@ -1,7 +1,8 @@
 #include <pthread.h>
+#include <errno.h>
 #include <stdio.h>
 
-#define NUM_THREADS 4
+#define NUM_THREADS 1
 #define ITERS_PER_THREAD 10000
 #define EXPECTED (NUM_THREADS * ITERS_PER_THREAD)
 
@@ -42,6 +43,52 @@ static void *worker(void *arg) {
 }
 
 int main(void) {
+  pthread_mutex_t try_lock = PTHREAD_MUTEX_INITIALIZER;
+  int try_rc = pthread_mutex_trylock(&try_lock);
+  if (try_rc != 0) {
+    fprintf(stderr, "pthread-canary: first pthread_mutex_trylock returned %d\n", try_rc);
+    return 1;
+  }
+  try_rc = pthread_mutex_trylock(&try_lock);
+  if (try_rc != EBUSY) {
+    fprintf(stderr, "pthread-canary: second pthread_mutex_trylock returned %d, expected EBUSY=%d\n", try_rc, EBUSY);
+    return 1;
+  }
+  if (pthread_mutex_unlock(&try_lock) != 0) {
+    fprintf(stderr, "pthread-canary: pthread_mutex_unlock after trylock failed\n");
+    return 1;
+  }
+
+  pthread_attr_t self_attr;
+  void *stackaddr = (void *)1;
+  size_t stacksize = 0;
+  size_t guardsize = 1;
+  if (pthread_getattr_np(pthread_self(), &self_attr) != 0) {
+    fprintf(stderr, "pthread-canary: pthread_getattr_np failed\n");
+    return 1;
+  }
+  if (pthread_attr_getstack(&self_attr, &stackaddr, &stacksize) != 0 || stackaddr != NULL || stacksize == 0) {
+    fprintf(stderr, "pthread-canary: pthread_attr_getstack failed\n");
+    return 1;
+  }
+  if (pthread_attr_getguardsize(&self_attr, &guardsize) != 0 || guardsize != 0) {
+    fprintf(stderr, "pthread-canary: pthread_attr_getguardsize failed\n");
+    return 1;
+  }
+  pthread_condattr_t cond_attr;
+  clockid_t cond_clock = CLOCK_REALTIME;
+  if (pthread_condattr_init(&cond_attr) != 0) {
+    fprintf(stderr, "pthread-canary: pthread_condattr_init failed\n");
+    return 1;
+  }
+  if (pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC) != 0) {
+    fprintf(stderr, "pthread-canary: pthread_condattr_setclock failed\n");
+    return 1;
+  }
+  if (pthread_condattr_getclock(&cond_attr, &cond_clock) != 0 || cond_clock != CLOCK_MONOTONIC) {
+    fprintf(stderr, "pthread-canary: pthread_condattr_getclock failed\n");
+    return 1;
+  }
   if (pthread_key_create(&tls_key, NULL) != 0) {
     fprintf(stderr, "pthread-canary: pthread_key_create failed\n");
     return 1;

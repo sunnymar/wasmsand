@@ -22,6 +22,10 @@
 #define MSG_PEEK 0x02
 #endif
 
+#ifndef SOMAXCONN
+#define SOMAXCONN 128
+#endif
+
 int socket(int domain, int type, int protocol);
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);

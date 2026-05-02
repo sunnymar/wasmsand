@@ -62,7 +62,7 @@ ensure-toolchain:
 # when these rules fire and must not be injected; CPCC_ARCHIVE is
 # explicitly unset so cpcc skips link-arg framing. This is safe because
 # `-c` disables link anyway.
-$(BUILD_DIR)/%.o: src/%.c include/codepod_compat.h src/codepod_runtime.h src/codepod_markers.h | $(BUILD_DIR) ensure-toolchain
+$(BUILD_DIR)/%.o: src/%.c $(wildcard include/*.h) src/codepod_runtime.h src/codepod_markers.h | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE= CPCC_INCLUDE=$(INCLUDE) $(CPCC) -c $< -o $@
 
 lib: $(LIB)
@@ -76,7 +76,7 @@ $(LIB): $(LIB_OBJS) | $(BUILD_DIR) ensure-toolchain
 $(SETJMP_LIB): $(SETJMP_OBJS) | $(BUILD_DIR) ensure-toolchain
 	$(CPAR) rcs $@ $(SETJMP_OBJS)
 
-$(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(LIB) $(SETJMP_LIB) | $(BUILD_DIR) ensure-toolchain
+$(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(wildcard include/*.h) $(LIB) $(SETJMP_LIB) | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE=$(abspath $(LIB)) \
 	CPCC_SETJMP_ARCHIVE=$(abspath $(SETJMP_LIB)) \
 	CPCC_USE_SETJMP=1 \
@@ -84,7 +84,7 @@ $(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(LIB) $(SETJMP_L
 	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/setjmp-canary.pre-opt.wasm \
 	$(CPCC) $< -o $@
 
-$(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(LIB) | $(BUILD_DIR) ensure-toolchain
+$(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(wildcard include/*.h) $(LIB) | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE=$(abspath $(LIB)) \
 	CPCC_INCLUDE=$(INCLUDE) \
 	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/$*-canary.pre-opt.wasm \

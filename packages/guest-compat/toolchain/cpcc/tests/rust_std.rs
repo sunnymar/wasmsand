@@ -1,5 +1,6 @@
 use cpcc_toolchain::rust_std::{
-    discover_built_std, discover_installed_std, package_metadata_opt_in, rustc_version_key,
+    discover_built_std, discover_installed_std, discover_repo_std_from_cwd,
+    package_metadata_opt_in, rustc_version_key,
 };
 
 #[test]
@@ -44,6 +45,32 @@ fn discover_installed_std_uses_codepod_home_layout() {
 
     let found = discover_installed_std(tmp.path(), "1.93.0").unwrap();
     assert_eq!(found, tmp.path().join("rust-std/1.93.0"));
+}
+
+#[test]
+fn discover_repo_std_from_cwd_walks_up_to_repo_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let nested = tmp.path().join("a/b/c");
+    let lib = tmp
+        .path()
+        .join("packages/guest-compat/build/rust-std/1.93.0/lib/rustlib/wasm32-wasip1/lib");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&lib).unwrap();
+
+    let prev = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&nested).unwrap();
+    let found = discover_repo_std_from_cwd("1.93.0");
+    std::env::set_current_dir(prev).unwrap();
+
+    assert_eq!(
+        found.map(|p| p.canonicalize().unwrap()),
+        Some(
+            tmp.path()
+                .join("packages/guest-compat/build/rust-std/1.93.0")
+                .canonicalize()
+                .unwrap()
+        )
+    );
 }
 
 #[test]

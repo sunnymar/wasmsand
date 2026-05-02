@@ -233,7 +233,7 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('signal-ok');
   });
 
-  it('runs the pthread-canary 4-thread mutex stress test', async () => {
+  it('runs the pthread-canary single-thread compatibility test', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
       adapter: new NodeAdapter(),

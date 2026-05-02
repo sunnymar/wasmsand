@@ -35,6 +35,18 @@ pub fn discover_installed_std(codepod_home: &Path, rust_key: &str) -> Option<Pat
     }
 }
 
+pub fn discover_repo_std_from_cwd(rust_key: &str) -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if let Some(found) = discover_built_std(&dir, rust_key) {
+            return Some(found);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
 pub fn manifest_path_from_args(forwarded: &[String]) -> PathBuf {
     let mut iter = forwarded.iter();
     while let Some(arg) = iter.next() {
@@ -91,6 +103,10 @@ pub fn resolve_std_for_invocation(forwarded: &[String]) -> Result<Option<PathBuf
         if let Some(found) = discover_built_std(&PathBuf::from(root), &rust_key) {
             return Ok(Some(found));
         }
+    }
+
+    if let Some(found) = discover_repo_std_from_cwd(&rust_key) {
+        return Ok(Some(found));
     }
 
     let home = std::env::var_os("CODEPOD_HOME")

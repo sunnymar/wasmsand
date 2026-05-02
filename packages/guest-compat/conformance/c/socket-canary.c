@@ -83,6 +83,12 @@ int main(void) {
 #ifndef POLLPRI
 #error "POLLPRI must be available for curl-compatible poll headers"
 #endif
+#ifndef AI_PASSIVE
+#error "AI_PASSIVE must be available for CPython-compatible socket headers"
+#endif
+#ifndef SOMAXCONN
+#error "SOMAXCONN must be available for CPython-compatible socket headers"
+#endif
   int socket_type = 0;
   socklen_t socket_type_len = sizeof(socket_type);
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_len) != 0 ||

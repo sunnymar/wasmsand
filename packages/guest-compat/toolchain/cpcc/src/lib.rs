@@ -93,4 +93,10 @@ pub const TIER1: &[&str] = &[
 
 /// POSIX symbols that are also present as strong wasi-libc definitions.
 /// Link with `--wrap` so guests consistently call libcodepod's versions.
-pub const WRAPPED_WASI_LIBC_SYMBOLS: &[&str] = &["accept", "getsockopt", "recv", "send"];
+pub const WRAPPED_WASI_LIBC_SYMBOLS: &[&str] = &[
+    "accept",
+    "getsockopt",
+    "pthread_setspecific",
+    "recv",
+    "send",
+];

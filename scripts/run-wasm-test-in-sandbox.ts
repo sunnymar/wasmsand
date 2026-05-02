@@ -29,7 +29,7 @@ try {
     mode: 'cli',
     env: {
       RUST_TEST_THREADS: '1',
-      RAYON_NUM_THREADS: '4',
+      RAYON_NUM_THREADS: Deno.env.get('RAYON_NUM_THREADS') ?? '1',
     },
   });
 

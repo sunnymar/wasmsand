@@ -169,13 +169,21 @@ int pthread_key_delete(pthread_key_t key) {
   return 0;
 }
 
-int pthread_setspecific(pthread_key_t key, const void *value) {
+static int codepod_pthread_setspecific_impl(pthread_key_t key, const void *value) {
   CODEPOD_MARKER_CALL(pthread_setspecific);
   if (key >= CODEPOD_TLS_KEYS_MAX || !tls_keys[key].in_use) return EINVAL;
   int tid = codepod_host_thread_self();
   if (tid < 0 || tid >= CODEPOD_TLS_THREADS_MAX) return EINVAL;
   tls_keys[key].values[tid] = (void *)value;
   return 0;
+}
+
+int pthread_setspecific(pthread_key_t key, const void *value) {
+  return codepod_pthread_setspecific_impl(key, value);
+}
+
+int __wrap_pthread_setspecific(pthread_key_t key, const void *value) {
+  return codepod_pthread_setspecific_impl(key, value);
 }
 
 void *pthread_getspecific(pthread_key_t key) {
@@ -231,6 +239,25 @@ int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize) {
   return attr ? 0 : EINVAL;
 }
 
+int pthread_attr_getstack(const pthread_attr_t *attr, void **stackaddr, size_t *stacksize) {
+  if (!attr || !stackaddr || !stacksize) return EINVAL;
+  *stackaddr = NULL;
+  *stacksize = 1024 * 1024;
+  return 0;
+}
+
+int pthread_attr_getguardsize(const pthread_attr_t *attr, size_t *guardsize) {
+  if (!attr || !guardsize) return EINVAL;
+  *guardsize = 0;
+  return 0;
+}
+
+int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr) {
+  if (!attr) return EINVAL;
+  if (!pthread_equal(thread, pthread_self())) return ESRCH;
+  return pthread_attr_init(attr);
+}
+
 int pthread_mutexattr_init(pthread_mutexattr_t *attr) {
   if (!attr) return EINVAL;
   memset(attr, 0, sizeof(*attr));
@@ -260,6 +287,18 @@ int pthread_condattr_init(pthread_condattr_t *attr) {
 
 int pthread_condattr_destroy(pthread_condattr_t *attr) {
   return attr ? 0 : EINVAL;
+}
+
+int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock_id) {
+  if (!attr) return EINVAL;
+  if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC) return EINVAL;
+  return 0;
+}
+
+int pthread_condattr_getclock(const pthread_condattr_t *attr, clockid_t *clock_id) {
+  if (!attr || !clock_id) return EINVAL;
+  *clock_id = CLOCK_MONOTONIC;
+  return 0;
 }
 
 int pthread_cancel(pthread_t thread) {

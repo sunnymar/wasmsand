@@ -29,3 +29,6 @@
 [submodule "packages/c-ports/mbedtls/upstream"]
 	path = packages/c-ports/mbedtls/upstream
 	url = https://github.com/Mbed-TLS/mbedtls.git
+[submodule "packages/c-ports/cpython/upstream"]
+	path = packages/c-ports/cpython/upstream
+	url = https://github.com/python/cpython.git

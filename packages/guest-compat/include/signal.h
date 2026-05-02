@@ -20,6 +20,11 @@ typedef unsigned char sigset_t;
 
 typedef void (*sighandler_t)(int);
 
+#if !defined(__DEFINED_sig_atomic_t)
+typedef int sig_atomic_t;
+#define __DEFINED_sig_atomic_t
+#endif
+
 /* POSIX-standard signal numbers, matching the values in
  * wasi-sysroot/include/wasm32-wasip1/bits/signal.h.  The full set is
  * exposed unconditionally — wasi-sdk gates these behind
@@ -72,6 +77,8 @@ typedef void (*sighandler_t)(int);
 #define SIG_SETMASK 2
 
 #define SA_RESTART 0x10000000
+#define SA_ONSTACK 0x08000000
+#define SA_NODEFER 0x40000000
 
 #define SIG_DFL ((sighandler_t)(intptr_t)0)
 #define SIG_IGN ((sighandler_t)(intptr_t)-2)

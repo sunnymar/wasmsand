@@ -69,6 +69,9 @@ int pthread_attr_getdetachstate(const pthread_attr_t *attr, int *detachstate);
 int pthread_attr_setdetachstate(pthread_attr_t *attr, int detachstate);
 int pthread_attr_getstacksize(const pthread_attr_t *attr, size_t *stacksize);
 int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize);
+int pthread_attr_getstack(const pthread_attr_t *attr, void **stackaddr, size_t *stacksize);
+int pthread_attr_getguardsize(const pthread_attr_t *attr, size_t *guardsize);
+int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr);
 
 int pthread_mutexattr_init(pthread_mutexattr_t *attr);
 int pthread_mutexattr_destroy(pthread_mutexattr_t *attr);
@@ -77,6 +80,8 @@ int pthread_mutexattr_gettype(const pthread_mutexattr_t *attr, int *type);
 
 int pthread_condattr_init(pthread_condattr_t *attr);
 int pthread_condattr_destroy(pthread_condattr_t *attr);
+int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock_id);
+int pthread_condattr_getclock(const pthread_condattr_t *attr, clockid_t *clock_id);
 
 #define PTHREAD_CANCEL_ENABLE         0
 #define PTHREAD_CANCEL_DISABLE        1

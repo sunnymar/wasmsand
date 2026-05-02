@@ -191,7 +191,17 @@ export async function loadProcess(
       ? WebAssembly.promising(rawStart)
       : rawStart
     : undefined;
-  const exitCode = await wasi.startAsync(instance, startFn);
+  let exitCode: number;
+  try {
+    exitCode = await wasi.startAsync(instance, startFn);
+  } catch (e) {
+    const stderr = proc.fdReadAndClear(2).data.trimEnd();
+    if (stderr) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new Error(`${message}\n${stderr}`, { cause: e });
+    }
+    throw e;
+  }
   if (mode === "cli") proc.exitCode = exitCode;
 
   const wrappedExports: Record<string, (...args: number[]) => unknown> = {};

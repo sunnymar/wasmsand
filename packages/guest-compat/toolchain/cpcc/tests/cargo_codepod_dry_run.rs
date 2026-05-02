@@ -164,6 +164,8 @@ rust_std = "auto"
     let prev_home = std::env::var_os("CODEPOD_HOME");
     let prev_std = std::env::var_os("CODEPOD_RUST_STD");
     let prev_rustc = std::env::var_os("CODEPOD_RUSTC_VERSION");
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp.path()).unwrap();
     std::env::set_var("CODEPOD_HOME", &codepod_home);
     std::env::remove_var("CODEPOD_RUST_STD");
     std::env::set_var("CODEPOD_RUSTC_VERSION", "rustc 1.93.0 (abcdef 2026-01-01)");
@@ -174,6 +176,7 @@ rust_std = "auto"
     )
     .unwrap();
 
+    std::env::set_current_dir(prev_cwd).unwrap();
     match prev_home {
         Some(v) => std::env::set_var("CODEPOD_HOME", v),
         None => std::env::remove_var("CODEPOD_HOME"),
@@ -197,6 +200,85 @@ rust_std = "auto"
         flags.contains(&format!(
             "--sysroot={}",
             codepod_home.join("rust-std/1.93.0").display()
+        )),
+        "flags: {flags}"
+    );
+}
+
+#[test]
+fn repo_local_std_is_composed_when_manifest_opts_in() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let nested = repo.join("nested/project");
+    let std_lib =
+        repo.join("packages/guest-compat/build/rust-std/1.93.0/lib/rustlib/wasm32-wasip1/lib");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&std_lib).unwrap();
+    let manifest = nested.join("Cargo.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.codepod]
+target = "wasm32-wasip1"
+rust_std = "auto"
+"#,
+    )
+    .unwrap();
+
+    let prev_cwd = std::env::current_dir().unwrap();
+    let prev_home = std::env::var_os("CODEPOD_HOME");
+    let prev_root = std::env::var_os("CODEPOD_ROOT");
+    let prev_std = std::env::var_os("CODEPOD_RUST_STD");
+    let prev_rustc = std::env::var_os("CODEPOD_RUSTC_VERSION");
+    std::env::set_current_dir(&nested).unwrap();
+    std::env::remove_var("CODEPOD_HOME");
+    std::env::remove_var("CODEPOD_ROOT");
+    std::env::remove_var("CODEPOD_RUST_STD");
+    std::env::set_var("CODEPOD_RUSTC_VERSION", "rustc 1.93.0 (abcdef 2026-01-01)");
+
+    let plan = plan_invocation(
+        Subcommand::Build,
+        &["--manifest-path".into(), manifest.display().to_string()],
+    )
+    .unwrap();
+
+    std::env::set_current_dir(prev_cwd).unwrap();
+    match prev_home {
+        Some(v) => std::env::set_var("CODEPOD_HOME", v),
+        None => std::env::remove_var("CODEPOD_HOME"),
+    }
+    match prev_root {
+        Some(v) => std::env::set_var("CODEPOD_ROOT", v),
+        None => std::env::remove_var("CODEPOD_ROOT"),
+    }
+    match prev_std {
+        Some(v) => std::env::set_var("CODEPOD_RUST_STD", v),
+        None => std::env::remove_var("CODEPOD_RUST_STD"),
+    }
+    match prev_rustc {
+        Some(v) => std::env::set_var("CODEPOD_RUSTC_VERSION", v),
+        None => std::env::remove_var("CODEPOD_RUSTC_VERSION"),
+    }
+
+    let flags = plan
+        .env
+        .iter()
+        .find(|(k, _)| k == "CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    assert!(
+        flags.contains(&format!(
+            "--sysroot={}",
+            repo.join("packages/guest-compat/build/rust-std/1.93.0")
+                .canonicalize()
+                .unwrap()
+                .display()
         )),
         "flags: {flags}"
     );

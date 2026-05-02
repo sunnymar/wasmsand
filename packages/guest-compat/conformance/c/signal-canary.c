@@ -3,10 +3,22 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef SA_ONSTACK
+#error "SA_ONSTACK must be available for POSIX signal consumers"
+#endif
+
+#ifndef SA_NODEFER
+#error "SA_NODEFER must be available for POSIX signal consumers"
+#endif
+
 static int signal_canary_seen = 0;
 static int signal_canary_suspend_seen = 0;
+static volatile sig_atomic_t signal_canary_atomic_seen = 0;
 
-static void signal_canary_handler(int sig) { signal_canary_seen = sig; }
+static void signal_canary_handler(int sig) {
+  signal_canary_seen = sig;
+  signal_canary_atomic_seen = sig;
+}
 static void signal_canary_suspend_handler(int sig) { signal_canary_suspend_seen = sig; }
 
 static void emit(const char *case_name, int exit_code, const char *stdout_line, int has_errno, int errno_value) {
@@ -35,6 +47,7 @@ static int case_sigaction_raise(void) {
   if (sigaction(SIGINT, &sa, NULL) != 0) { emit("sigaction_raise", 1, NULL, 1, errno); return 1; }
   if (raise(SIGINT) != 0) { emit("sigaction_raise", 1, NULL, 1, errno); return 1; }
   if (signal_canary_seen != SIGINT) { emit("sigaction_raise", 1, NULL, 0, 0); return 1; }
+  if (signal_canary_atomic_seen != SIGINT) { emit("sigaction_raise", 1, NULL, 0, 0); return 1; }
   emit("sigaction_raise", 0, "signal-ok", 0, 0);
   return 0;
 }

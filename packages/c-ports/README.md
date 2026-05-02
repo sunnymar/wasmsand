@@ -49,3 +49,4 @@ apply patches, configure, make) so the submodule stays pristine and
 | `jq/` | [jqlang/jq](https://github.com/jqlang/jq) `jq-1.8.1` | submodule (upstream-pin) | `jq.wasm` (replaces former Rust standalone) |
 | `file/` | [file/file](https://github.com/file/file) `FILE5_47` | submodule (upstream-pin) | `file.wasm` + `magic.mgc` (replaces former Rust stub) |
 | `coreutils/` | [coreutils/coreutils](https://github.com/coreutils/coreutils) `v9.11` | submodule (upstream-pin) + 1 patch (gnulib `__wasi__` arms) | `csplit.wasm`, `fmt.wasm`, `join.wasm`, `numfmt.wasm`, `sha224sum.wasm`, `sha384sum.wasm` (replaces former Rust standalones) |
+| `cpython/` | [python/cpython](https://github.com/python/cpython) `v3.14.4` | submodule (upstream-pin, bring-up) | `cpython3.wasm` (temporary; replaces RustPython `python3.wasm` at cutover) |

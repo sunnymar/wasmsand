@@ -1,49 +1,78 @@
 import type { ThreadsBackend } from './backend.js';
 import type { IndirectCallTable } from './indirect-call-table.js';
 import { NULL_INDIRECT_CALL_TABLE } from './indirect-call-table.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { WASI_EBUSY } from '../../wasi/types.js';
 
 interface SpawnSlot {
   result: Promise<number>;
   reaped: boolean;
   detached: boolean;
+  finished: boolean;
+}
+
+interface MutexState {
+  owner: number | null;
+  waiters: Waiter[];
+}
+
+interface CondvarState {
+  waiters: Waiter[];
+}
+
+interface Waiter {
+  tid: number;
+  wake: () => void;
 }
 
 export class CooperativeSerialBackend implements ThreadsBackend {
   readonly kind = 'cooperative-serial' as const;
 
+  // FIXME: This backend is only a compatibility bridge for one spawned thread at a
+  // time. Real Rayon/std::thread parallelism requires a shared-memory + atomics
+  // backend such as wasi-threads, worker-SAB, WASIp2 threads, or WASIX.
+  private readonly maxLiveSpawnedThreads = 1;
   private slots: SpawnSlot[] = [];
   private indirectTable: IndirectCallTable = NULL_INDIRECT_CALL_TABLE;
-  private activeTid = 0;
+  private tids = new AsyncLocalStorage<number>();
+  private mutexes = new Map<number, MutexState>();
+  private condvars = new Map<number, CondvarState>();
 
   setIndirectCallTable(table: IndirectCallTable): void {
     this.indirectTable = table;
     if (this.slots.length === 0) {
-      this.slots.push({ result: Promise.resolve(0), reaped: true, detached: false });
+      this.slots.push({
+        result: Promise.resolve(0),
+        reaped: true,
+        detached: false,
+        finished: true,
+      });
     }
   }
 
   async spawn(fnPtr: number, arg: number): Promise<number> {
     if (this.slots.length === 0) {
-      this.slots.push({ result: Promise.resolve(0), reaped: true, detached: false });
+      this.slots.push({
+        result: Promise.resolve(0),
+        reaped: true,
+        detached: false,
+        finished: true,
+      });
     }
+    if (this.liveSpawnedThreads() >= this.maxLiveSpawnedThreads) return -1;
     const tid = this.slots.length;
-    const slot: SpawnSlot = { result: Promise.resolve(-1), reaped: false, detached: false };
+    const slot: SpawnSlot = {
+      result: Promise.resolve(-1),
+      reaped: false,
+      detached: false,
+      finished: false,
+    };
     this.slots.push(slot);
-    const result = (async () => {
-      const previousTid = this.activeTid;
-      this.activeTid = tid;
-      try {
-        return await this.indirectTable.call(fnPtr, arg);
-      } finally {
-        this.activeTid = previousTid;
-      }
-    })();
-    slot.result = result;
-    try {
-      await result;
-    } catch {
-      return -1;
-    }
+    slot.result = this.tids.run(tid, () => this.indirectTable.call(fnPtr, arg))
+      .catch(() => -1)
+      .finally(() => {
+        slot.finished = true;
+      });
     return tid;
   }
 
@@ -63,34 +92,96 @@ export class CooperativeSerialBackend implements ThreadsBackend {
   }
 
   self(): number {
-    return this.activeTid;
+    return this.tids.getStore() ?? 0;
   }
 
   async yield_(): Promise<number> {
+    await Promise.resolve();
     return 0;
   }
 
-  async mutexLock(_mutexPtr: number): Promise<number> {
+  async mutexLock(mutexPtr: number): Promise<number> {
+    const tid = this.self();
+    const state = this.mutexState(mutexPtr);
+    while (true) {
+      if (state.owner === null) {
+        state.owner = tid;
+        return 0;
+      }
+      if (state.owner === tid) return -1;
+      await new Promise<void>((resolve) => state.waiters.push({
+        tid,
+        wake: resolve,
+      }));
+    }
+  }
+
+  mutexUnlock(mutexPtr: number): number {
+    const state = this.mutexes.get(mutexPtr);
+    if (!state || state.owner === null) return -1;
+    state.owner = null;
+    this.wake(state.waiters.shift());
     return 0;
   }
 
-  mutexUnlock(_mutexPtr: number): number {
+  mutexTryLock(mutexPtr: number): number {
+    const state = this.mutexState(mutexPtr);
+    if (state.owner !== null) return WASI_EBUSY;
+    state.owner = this.self();
     return 0;
   }
 
-  mutexTryLock(_mutexPtr: number): number {
+  async condWait(condPtr: number, mutexPtr: number): Promise<number> {
+    const state = this.condvarState(condPtr);
+    const tid = this.self();
+    const wait = new Promise<void>((resolve) => state.waiters.push({
+      tid,
+      wake: resolve,
+    }));
+    const unlock = this.mutexUnlock(mutexPtr);
+    if (unlock !== 0) return unlock;
+    await wait;
+    return await this.mutexLock(mutexPtr);
+  }
+
+  condSignal(condPtr: number): number {
+    this.wake(this.condvars.get(condPtr)?.waiters.shift());
     return 0;
   }
 
-  async condWait(_condPtr: number, _mutexPtr: number): Promise<number> {
+  condBroadcast(condPtr: number): number {
+    const state = this.condvars.get(condPtr);
+    if (state) {
+      const waiters = state.waiters.splice(0);
+      for (const waiter of waiters) this.wake(waiter);
+    }
     return 0;
   }
 
-  condSignal(_condPtr: number): number {
-    return 0;
+  private mutexState(ptr: number): MutexState {
+    let state = this.mutexes.get(ptr);
+    if (!state) {
+      state = { owner: null, waiters: [] };
+      this.mutexes.set(ptr, state);
+    }
+    return state;
   }
 
-  condBroadcast(_condPtr: number): number {
-    return 0;
+  private condvarState(ptr: number): CondvarState {
+    let state = this.condvars.get(ptr);
+    if (!state) {
+      state = { waiters: [] };
+      this.condvars.set(ptr, state);
+    }
+    return state;
+  }
+
+  private wake(waiter: Waiter | undefined): void {
+    if (!waiter) return;
+    this.tids.run(waiter.tid, waiter.wake);
+  }
+
+  private liveSpawnedThreads(): number {
+    return this.slots.filter((slot, tid) => tid !== 0 && !slot.finished).length;
   }
 }
