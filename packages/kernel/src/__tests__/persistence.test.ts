@@ -153,13 +153,48 @@ describe('Persistence serializer', () => {
       const blob = exportState(original);
 
       const restored = new OverlayVFS({ base, upper: new VFS() });
-      importState(restored, blob);
+      importState(restored, blob, { allowSystemPaths: true });
       expect(() => restored.readFile('/opt/base/readme.txt')).toThrow(/ENOENT/);
       expect(dec(restored.readFile('/tmp/upper.txt'))).toBe('upper');
 
       const wrongBase = new OverlayVFS({ base: new MemoryRoot('base:wrong'), upper: new VFS() });
-      expect(() => importState(wrongBase, blob)).toThrow(/base id mismatch/);
+      expect(() => importState(wrongBase, blob, { allowSystemPaths: true })).toThrow(/base id mismatch/);
       expect(() => wrongBase.readFile('/tmp/upper.txt')).toThrow(/ENOENT/);
+    });
+
+    it('does not emit partial overlay state while importing upper files', () => {
+      const base = new MemoryRoot('base:test');
+      base.addDir('/opt/base', { uid: 1000, gid: 1000, permissions: 0o755 });
+      base.addFile('/opt/base/readme.txt', 'base', { uid: 1000, gid: 1000, permissions: 0o644 });
+      const original = new OverlayVFS({ base, upper: new VFS() });
+      original.withWriteAccess(() => original.writeFile('/tmp/upper.txt', enc('upper')));
+      original.unlink('/opt/base/readme.txt');
+      const blob = exportState(original);
+
+      const restored = new OverlayVFS({ base, upper: new VFS() });
+      const observed: any[] = [];
+      restored.setOnChange(() => observed.push(JSON.parse(dec(exportState(restored).subarray(12)))));
+      importState(restored, blob, { allowSystemPaths: true });
+
+      expect(observed).toEqual([]);
+      expect(dec(restored.readFile('/tmp/upper.txt'))).toBe('upper');
+      expect(() => restored.readFile('/opt/base/readme.txt')).toThrow(/ENOENT/);
+    });
+
+    it('round-trips upper symlinks that shadow base entries', () => {
+      const base = new MemoryRoot('base:test');
+      base.addDir('/opt/base', { uid: 1000, gid: 1000, permissions: 0o755 });
+      base.addFile('/opt/base/tool', 'base', { uid: 1000, gid: 1000, permissions: 0o755 });
+      const original = new OverlayVFS({ base, upper: new VFS() });
+      original.unlink('/opt/base/tool');
+      original.symlink('/tmp/tool', '/opt/base/tool');
+
+      const blob = exportState(original);
+      const restored = new OverlayVFS({ base, upper: new VFS() });
+      importState(restored, blob, { allowSystemPaths: true });
+
+      expect(restored.readlink('/opt/base/tool')).toBe('/tmp/tool');
+      expect(restored.lstat('/opt/base/tool').type).toBe('symlink');
     });
 
     it('can export a self-contained full overlay view when includeBase is true', () => {
@@ -174,12 +209,28 @@ describe('Persistence serializer', () => {
       expect(state.overlay).toBeUndefined();
       expect(state.files.some((f: any) => f.path === '/opt/base/readme.txt' && f.data === 'YmFzZQ==')).toBe(true);
       expect(state.files.some((f: any) => f.path === '/tmp/upper.txt')).toBe(true);
+
+      const restored = new VFS();
+      importState(restored, blob);
+      expect(() => restored.readFile('/opt/base/readme.txt')).toThrow();
+      expect(dec(restored.readFile('/tmp/upper.txt'))).toBe('upper');
+
+      const trustedRestored = new VFS();
+      importState(trustedRestored, blob, { allowSystemPaths: true });
+      expect(dec(trustedRestored.readFile('/opt/base/readme.txt'))).toBe('base');
+      expect(dec(trustedRestored.readFile('/tmp/upper.txt'))).toBe('upper');
     });
+
   });
 
   describe('safe import path filtering', () => {
     /** Helper: build a v2 blob from a SerializedState object. */
-    function buildBlob(state: { version: number; files: Array<{ path: string; data: string; type: string; permissions?: number; uid?: number; gid?: number }> }): Uint8Array {
+    function buildBlob(state: {
+      version: number;
+      includeBase?: boolean;
+      overlay?: { baseId: string; whiteouts: string[] };
+      files: Array<{ path: string; data: string; type: string; permissions?: number; uid?: number; gid?: number }>;
+    }): Uint8Array {
       const json = JSON.stringify(state);
       const jsonBytes = new TextEncoder().encode(json);
       // Compute CRC32
@@ -225,6 +276,62 @@ describe('Persistence serializer', () => {
       expect(() => vfs.stat('/bin/evil')).toThrow();
       expect(() => vfs.stat('/etc/shadow')).toThrow();
       expect(() => vfs.stat('/usr/bin/hack')).toThrow();
+    });
+
+    it('does not trust blob-controlled includeBase for system path imports', () => {
+      const blob = buildBlob({
+        version: 2,
+        includeBase: true,
+        files: [
+          { path: '/bin/evil', data: btoa('pwn'), type: 'file' },
+          { path: '/tmp/safe.txt', data: btoa('safe'), type: 'file' },
+        ],
+      });
+
+      const vfs = new VFS();
+      importState(vfs, blob);
+
+      expect(() => vfs.readFile('/bin/evil')).toThrow();
+      expect(dec(vfs.readFile('/tmp/safe.txt'))).toBe('safe');
+    });
+
+    it('does not trust blob-controlled overlay metadata for system path imports', () => {
+      const base = new MemoryRoot('base:test');
+      base.addDir('/bin', { uid: 1000, gid: 1000, permissions: 0o755 });
+      base.addFile('/bin/real', 'real', { uid: 1000, gid: 1000, permissions: 0o755 });
+      const blob = buildBlob({
+        version: 2,
+        overlay: { baseId: 'base:test', whiteouts: ['/bin/real'] },
+        files: [{ path: '/bin/evil', data: btoa('pwn'), type: 'file' }],
+      });
+
+      const vfs = new OverlayVFS({ base, upper: new VFS() });
+      importState(vfs, blob);
+
+      expect(() => vfs.readFile('/bin/evil')).toThrow();
+      expect(dec(vfs.readFile('/bin/real'))).toBe('real');
+
+      importState(vfs, blob, { allowSystemPaths: true });
+      expect(dec(vfs.readFile('/bin/evil'))).toBe('pwn');
+      expect(() => vfs.readFile('/bin/real')).toThrow(/ENOENT/);
+    });
+
+    it('does not let untrusted overlay imports clear existing system whiteouts', () => {
+      const base = new MemoryRoot('base:test');
+      base.addDir('/bin', { uid: 1000, gid: 1000, permissions: 0o755 });
+      base.addFile('/bin/real', 'real', { uid: 1000, gid: 1000, permissions: 0o755 });
+      const vfs = new OverlayVFS({ base, upper: new VFS() });
+      vfs.withWriteAccess(() => vfs.unlink('/bin/real'));
+      const blob = buildBlob({
+        version: 2,
+        overlay: { baseId: 'base:test', whiteouts: [] },
+        files: [{ path: '/tmp/safe.txt', data: btoa('safe'), type: 'file' }],
+      });
+
+      importState(vfs, blob);
+
+      expect(() => vfs.readFile('/bin/real')).toThrow(/ENOENT/);
+      expect(dec(vfs.readFile('/tmp/safe.txt'))).toBe('safe');
     });
 
     it('importState normalizes paths to prevent .. escape', () => {

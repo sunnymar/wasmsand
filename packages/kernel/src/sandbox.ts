@@ -38,7 +38,7 @@ import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
 import type { WorkerExecutor } from './execution/worker-executor.js';
 import { exportState as serializerExportState, importState as serializerImportState } from './persistence/serializer.js';
-import type { PersistenceOptions } from './persistence/types.js';
+import type { ImportStateOptions, PersistenceOptions } from './persistence/types.js';
 import { PersistenceManager } from './persistence/manager.js';
 import { HostMount } from './vfs/host-mount.js';
 import type { VirtualProvider } from './vfs/provider.js';
@@ -1368,9 +1368,9 @@ export class Sandbox {
   }
 
   /** Import a previously exported state blob, restoring files and env vars. */
-  importState(blob: Uint8Array): void {
+  importState(blob: Uint8Array, options?: ImportStateOptions): void {
     this.assertAlive();
-    const { env } = serializerImportState(this.vfs, blob);
+    const { env } = serializerImportState(this.vfs, blob, options);
     if (env) {
       this.setEnvMap(env);
     }
@@ -1398,7 +1398,7 @@ export class Sandbox {
 
     const blob = await this.storage.load(this.sessionId);
     this.offloaded = false; // clear before importState so assertAlive passes
-    const { env } = serializerImportState(this.vfs, blob);
+    const { env } = serializerImportState(this.vfs, blob, { allowSystemPaths: true });
     if (env) {
       this.setEnvMap(env);
     }

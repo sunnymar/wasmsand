@@ -3,6 +3,7 @@ import { expect } from '@std/expect';
 import { VFS } from '../vfs.ts';
 import { OverlayVFS } from '../overlay-vfs.ts';
 import { MemoryRoot } from './helpers.ts';
+import { exportState, importState } from '../../persistence/serializer.ts';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -222,6 +223,55 @@ describe('OverlayVFS', () => {
 
     expect(() => vfs.readFile('/user/file.txt')).toThrow(/ENOENT/);
     expect(vfs.readdir('/user').some((entry) => entry.name === 'file.txt')).toBe(false);
+  });
+
+  it('fires onChange for upper writes and whiteout-only deletes', () => {
+    const base = new MemoryRoot();
+    base.addDir('/user', { uid: 1000, gid: 1000, permissions: 0o755 });
+    base.addFile('/user/base.txt', 'base', { uid: 1000, gid: 1000, permissions: 0o644 });
+    const vfs = new OverlayVFS({ base, upper: new VFS() });
+    let changes = 0;
+    vfs.setOnChange(() => changes++);
+
+    vfs.writeFile('/user/new.txt', enc.encode('new'));
+    vfs.unlink('/user/base.txt');
+    vfs.mkdir('/user/dir');
+    vfs.symlink('new.txt', '/user/link');
+
+    expect(changes).toBe(4);
+  });
+
+  it('fires one rename notification only after overlay state is consistent', () => {
+    const base = new MemoryRoot('base:test');
+    base.addDir('/work', { uid: 1000, gid: 1000, permissions: 0o755 });
+    base.addFile('/work/a.txt', 'a', { uid: 1000, gid: 1000, permissions: 0o644 });
+    base.addFile('/work/b.txt', 'b', { uid: 1000, gid: 1000, permissions: 0o644 });
+    const vfs = new OverlayVFS({ base, upper: new VFS() });
+    const exportedStates: any[] = [];
+    vfs.setOnChange(() => {
+      exportedStates.push(JSON.parse(dec.decode(exportState(vfs).subarray(12))));
+    });
+
+    vfs.rename('/work/a.txt', '/work/b.txt');
+
+    expect(exportedStates.length).toBe(1);
+    expect(exportedStates[0].overlay.whiteouts).toEqual(['/work/a.txt']);
+
+    const restored = new OverlayVFS({ base, upper: new VFS() });
+    importState(restored, exportState(vfs), { allowSystemPaths: true });
+    expect(dec.decode(vfs.readFile('/work/b.txt'))).toBe('a');
+    expect(dec.decode(restored.readFile('/work/b.txt'))).toBe('a');
+  });
+
+  it('does not fire onChange for clearFileContents', () => {
+    const vfs = new OverlayVFS({ base: new MemoryRoot(), upper: new VFS() });
+    let changes = 0;
+    vfs.writeFile('/tmp/file.txt', enc.encode('data'));
+    vfs.setOnChange(() => changes++);
+
+    vfs.clearFileContents();
+
+    expect(changes).toBe(0);
   });
 
   it('does not recreate files below a whiteouted base directory', () => {

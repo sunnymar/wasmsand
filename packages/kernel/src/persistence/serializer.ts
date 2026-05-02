@@ -17,7 +17,7 @@
  */
 
 import type { VfsLike } from '../vfs/vfs-like.js';
-import type { ExportStateOptions, SerializedState } from './types.js';
+import type { ExportStateOptions, ImportStateOptions, SerializedState } from './types.js';
 
 /** S_TOOL bit — must not be importable from external state blobs. */
 const S_TOOL = 0o100000;
@@ -111,6 +111,9 @@ export function exportState(
     version: FORMAT_VERSION,
     files,
   };
+  if (includeBase) {
+    state.includeBase = true;
+  }
   const overlay = includeBase ? undefined : vfs.exportOverlayState?.();
   if (overlay) {
     state.overlay = overlay;
@@ -153,7 +156,11 @@ export function exportState(
  *
  * Returns the restored environment map if one was stored in the blob.
  */
-export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string, string> } {
+export function importState(
+  vfs: VfsLike,
+  blob: Uint8Array,
+  options: ImportStateOptions = {},
+): { env?: Map<string, string> } {
   if (blob.byteLength < HEADER_SIZE_V1) {
     throw new Error('Invalid state blob: too short');
   }
@@ -197,15 +204,25 @@ export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string,
     throw new Error('State blob contains overlay state, but target VFS does not support overlays');
   }
 
+  const allowSystemPaths = options.allowSystemPaths === true;
+
   if (state.overlay) {
-    vfs.importOverlayState!(state.overlay);
+    const whiteouts = allowSystemPaths
+      ? state.overlay.whiteouts
+      : [
+        ...(vfs.exportOverlayState?.().whiteouts.filter(path => !isSafeImportPath(path)) ?? []),
+        ...state.overlay.whiteouts.filter(isSafeImportPath),
+      ];
+    vfs.importOverlayState!({ ...state.overlay, whiteouts });
   }
 
   const targetVfs = state.overlay ? (vfs.exportUpperVfs?.() ?? vfs) : vfs;
 
-  // Filter out entries targeting system paths for legacy/non-overlay imports.
-  // Overlay imports restore an upper layer paired with a validated base id.
-  const safeFiles = state.overlay ? state.files : state.files.filter(entry => isSafeImportPath(entry.path));
+  // Filter out entries targeting system paths unless the caller explicitly
+  // trusts this blob. Blob fields are data, not authority.
+  const safeFiles = allowSystemPaths
+    ? state.files
+    : state.files.filter(entry => isSafeImportPath(entry.path));
 
   // Restore filesystem: directories first, then files, then permissions
   targetVfs.withWriteAccess(() => {
@@ -218,10 +235,13 @@ export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string,
       if (entry.type === 'file') {
         const content = fromBase64(entry.data);
         targetVfs.writeFile(entry.path, content);
+      } else if (entry.type === 'symlink') {
+        targetVfs.symlink(entry.data, entry.path);
       }
     }
     // Apply permissions after all entries are created (strip S_TOOL bit)
     for (const entry of safeFiles) {
+      if (entry.type === 'symlink') continue;
       if ((entry.uid !== undefined || entry.gid !== undefined) && targetVfs.chown) {
         targetVfs.chown(entry.path, entry.uid ?? 0, entry.gid ?? 0);
       }
@@ -268,7 +288,16 @@ function walkTree(
       const st = vfs.stat(childPath);
       const b64 = toBase64(content);
       out.push({ path: childPath, data: b64, type: 'file', permissions: st.permissions, uid: st.uid, gid: st.gid });
+    } else if (entry.type === 'symlink') {
+      const st = vfs.lstat(childPath);
+      out.push({
+        path: childPath,
+        data: vfs.readlink(childPath),
+        type: 'symlink',
+        permissions: st.permissions,
+        uid: st.uid,
+        gid: st.gid,
+      });
     }
-    // Skip symlinks — not part of the persistence spec
   }
 }

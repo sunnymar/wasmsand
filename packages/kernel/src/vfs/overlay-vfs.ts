@@ -83,6 +83,8 @@ export class OverlayVFS implements VfsLike {
   private readonly whiteouts = new Set<string>();
   private readonly overlaySnapshots = new Map<string, string[]>();
   private readonly credential: FsCredential;
+  private onChange: (() => void) | null = null;
+  private notificationDepth = 0;
   private privileged = false;
 
   constructor(private readonly options: OverlayVFSOptions) {
@@ -142,6 +144,7 @@ export class OverlayVFS implements VfsLike {
       this.options.upper.writeFile(path, data);
     });
     this.whiteouts.delete(path);
+    this.notifyChange();
   }
 
   stat(path: string): StatResult {
@@ -197,10 +200,12 @@ export class OverlayVFS implements VfsLike {
     this.ensureUpperParentDirectory(path);
     this.options.upper.mkdir(path);
     this.whiteouts.delete(path);
+    this.notifyChange();
   }
 
   mkdirp(path: string): void {
     path = normalizeOverlayPath(path);
+    let changed = false;
     for (const dir of ancestorPaths(path)) {
       const existing = this.lookupMerged(dir);
       if (existing) {
@@ -214,10 +219,12 @@ export class OverlayVFS implements VfsLike {
       try {
         this.options.upper.mkdir(dir);
         this.whiteouts.delete(dir);
+        changed = true;
       } catch (e) {
         if (!isEexist(e)) throw e;
       }
     }
+    if (changed) this.notifyChange();
   }
 
   unlink(path: string): void {
@@ -233,6 +240,7 @@ export class OverlayVFS implements VfsLike {
       if (!this.privileged) this.assertCanMutateBaseDirectoryEntry(path);
     }
     this.whiteouts.add(path);
+    this.notifyChange();
   }
 
   rmdir(path: string): void {
@@ -252,6 +260,7 @@ export class OverlayVFS implements VfsLike {
       if (!this.privileged) this.assertCanMutateBaseDirectoryEntry(path);
     }
     this.whiteouts.add(path);
+    this.notifyChange();
   }
 
   rename(oldPath: string, newPath: string): void {
@@ -269,34 +278,37 @@ export class OverlayVFS implements VfsLike {
     this.assertRenameSourceCopyable(oldPath, st);
     this.assertCanRemoveSourceEntry(oldPath, st);
 
-    const destinationWhiteoutBefore = this.whiteouts.has(newPath);
-    const tempPath = this.renameTempPath(newPath);
-    try {
-      this.copyUpAny(oldPath, tempPath, st);
-    } catch (e) {
-      if (destinationWhiteoutBefore) this.whiteouts.add(newPath);
-      throw e;
-    }
+    this.withSuppressedNotifications(() => {
+      const destinationWhiteoutBefore = this.whiteouts.has(newPath);
+      const tempPath = this.renameTempPath(newPath);
+      try {
+        this.copyUpAny(oldPath, tempPath, st);
+      } catch (e) {
+        if (destinationWhiteoutBefore) this.whiteouts.add(newPath);
+        throw e;
+      }
 
-    let destinationBackup: RenameDestinationBackup = { kind: 'none' };
-    try {
-      destinationBackup = this.stageDestinationForRename(newPath, destination, destinationWhiteoutBefore);
-      this.moveUpperTempIntoPlace(tempPath, newPath);
-    } catch (e) {
-      this.removeUpperTemp(tempPath, st);
-      this.restoreDestinationAfterFailedRename(newPath, destinationBackup);
-      throw e;
-    }
+      let destinationBackup: RenameDestinationBackup = { kind: 'none' };
+      try {
+        destinationBackup = this.stageDestinationForRename(newPath, destination, destinationWhiteoutBefore);
+        this.moveUpperTempIntoPlace(tempPath, newPath);
+      } catch (e) {
+        this.removeUpperTemp(tempPath, st);
+        this.restoreDestinationAfterFailedRename(newPath, destinationBackup);
+        throw e;
+      }
 
-    try {
-      this.removeSourceEntry(oldPath, st);
-    } catch (e) {
-      this.restoreDestinationAfterFailedRename(newPath, destinationBackup);
-      throw e;
-    }
+      try {
+        this.removeSourceEntry(oldPath, st);
+      } catch (e) {
+        this.restoreDestinationAfterFailedRename(newPath, destinationBackup);
+        throw e;
+      }
 
-    this.discardRenameDestinationBackup(destinationBackup);
-    this.whiteouts.delete(newPath);
+      this.discardRenameDestinationBackup(destinationBackup);
+      this.whiteouts.delete(newPath);
+    });
+    this.notifyChange();
   }
 
   symlink(target: string, path: string): void {
@@ -307,11 +319,13 @@ export class OverlayVFS implements VfsLike {
     this.ensureUpperParentDirectory(path);
     this.options.upper.symlink(target, path);
     this.whiteouts.delete(path);
+    this.notifyChange();
   }
 
   link(oldPath: string, newPath: string): void {
     if (!this.options.upper.link) throw new VfsError('EACCES', 'hard link unsupported on overlay upper');
     this.options.upper.link(oldPath, newPath);
+    this.notifyChange();
   }
 
   readlink(path: string): string {
@@ -335,6 +349,7 @@ export class OverlayVFS implements VfsLike {
       this.copyUpMetadataOnly(path);
       this.options.upper.chmod(path, mode);
     }
+    this.notifyChange();
   }
 
   chown(path: string, uid: number, gid: number): void {
@@ -350,6 +365,7 @@ export class OverlayVFS implements VfsLike {
       this.copyUpMetadataOnly(path);
       this.options.upper.chown(path, uid, gid);
     }
+    this.notifyChange();
   }
 
   withWriteAccess(fn: () => void): void {
@@ -388,6 +404,7 @@ export class OverlayVFS implements VfsLike {
     upper.restore(id);
     this.whiteouts.clear();
     for (const path of this.overlaySnapshots.get(id) ?? []) this.whiteouts.add(path);
+    this.notifyChange();
   }
 
   getProviderPaths(): string[] {
@@ -402,9 +419,20 @@ export class OverlayVFS implements VfsLike {
   }
 
   setOnChange(cb: (() => void) | null): void {
-    const upper = this.options.upper as VfsLike & { setOnChange?: (cb: (() => void) | null) => void };
-    if (!upper.setOnChange) throw new Error('OverlayVFS upper layer does not support setOnChange()');
-    upper.setOnChange(cb);
+    this.onChange = cb;
+  }
+
+  private notifyChange(): void {
+    if (!this.privileged && this.notificationDepth === 0) this.onChange?.();
+  }
+
+  private withSuppressedNotifications(fn: () => void): void {
+    this.notificationDepth++;
+    try {
+      fn();
+    } finally {
+      this.notificationDepth--;
+    }
   }
 
   private copyUpMetadataOnly(path: string): void {
