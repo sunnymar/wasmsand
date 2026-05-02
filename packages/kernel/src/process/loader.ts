@@ -13,6 +13,7 @@ import { AsyncifyAsyncBridge } from "../async-bridge.js";
 import { CooperativeSerialBackend } from "./threads/cooperative-serial.js";
 import { makeIndirectCallTable } from "./threads/indirect-call-table.js";
 import type { ThreadsBackend } from "./threads/backend.js";
+import { defaultWasmModuleCache, sha256Hex, type WasmModuleCache } from "./module-cache.js";
 
 export interface LoaderContext {
   vfs: VfsLike;
@@ -35,6 +36,7 @@ export interface LoaderContext {
   makeFdReadAndClear(
     pid: number,
   ): (fd: 1 | 2) => { data: string; truncated: boolean };
+  moduleCache?: WasmModuleCache;
 }
 
 export interface LoadProcessOptions {
@@ -67,7 +69,8 @@ export async function loadProcess(
     throw new Error(`loadProcess: ${path} is not a wasm binary`);
   }
 
-  const module = await WebAssembly.compile(bytes as BufferSource);
+  const digest = await sha256Hex(bytes);
+  const module = await (ctx.moduleCache ?? defaultWasmModuleCache).getOrCompile(digest, bytes);
   const importsSetjmp = moduleImportsSetjmp(module);
   const setjmpMarked = moduleHasCodepodFeature(module, "setjmp");
   if (importsSetjmp && !setjmpMarked) {
