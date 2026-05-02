@@ -1,0 +1,12 @@
+{
+  "name": "busybox-shell",
+  "multicall": {
+    "applets": ["ash", "sh"]
+  },
+  "symlinks": [
+    {
+      "target": "/usr/bin/sh",
+      "link": "/bin/sh"
+    }
+  ]
+}
