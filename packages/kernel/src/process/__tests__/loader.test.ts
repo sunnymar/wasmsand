@@ -6,7 +6,7 @@ import { VFS } from "../../vfs/vfs.ts";
 import { bufferToString, type FdTarget } from "../../wasi/fd-target.ts";
 import { WasiHost } from "../../wasi/wasi-host.ts";
 import { NO_PARENT_PID, ProcessKernel } from "../kernel.ts";
-import { loadProcess } from "../loader.ts";
+import { loadProcess, type LoaderContext } from "../loader.ts";
 import { Sandbox } from "../../sandbox.ts";
 
 const WASM_DIR = resolve(
@@ -50,6 +50,7 @@ async function makeLoaderContext() {
         env,
         preopens: { "/": "/" },
         ioFds,
+        kernel,
         pid,
       });
     },
@@ -57,12 +58,14 @@ async function makeLoaderContext() {
       pid: number,
       memory: WebAssembly.Memory,
       wasiHost: WasiHost,
+      threadsBackend: Parameters<LoaderContext["buildKernelImports"]>[3],
     ) =>
       createKernelImports({
         memory,
         callerPid: pid,
         kernel,
         wasiHost,
+        threadsBackend,
       }),
     makeFdReadAndClear: (pid: number) => (fd: 1 | 2) => {
       const target = kernel.getFdTarget(pid, fd);
@@ -92,6 +95,24 @@ Deno.test("loadProcess instantiates a CLI wasm at a VFS path and returns a Proce
 
   await proc.terminate();
   assertEquals(await ctx.kernel.waitpid(proc.pid), 0);
+});
+
+Deno.test("loadProcess runs a continuation fork canary", async () => {
+  const ctx = await makeLoaderContext();
+  const bytes = await ctx.adapter.readBytes(`${WASM_DIR}/fork-canary.wasm`);
+  ctx.vfs.withWriteAccess(() => {
+    ctx.vfs.writeFile("/bin/fork-canary", bytes);
+    ctx.vfs.chmod("/bin/fork-canary", 0o755);
+  });
+
+  const proc = await loadProcess(ctx, {
+    argv: ["/bin/fork-canary"],
+    mode: "cli",
+  });
+
+  assertEquals(proc.exitCode, 0);
+  assert(proc.fdReadAndClear(1).data.trim().startsWith("fork-ok child="));
+  await proc.terminate();
 });
 
 Deno.test("loader-backed resident shell supports Asyncify fallback without JSPI", async () => {

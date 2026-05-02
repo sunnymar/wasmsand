@@ -161,6 +161,21 @@ export class ProcessKernel {
     return newFdTable;
   }
 
+  buildFdTableForFork(parentPid: number): Map<number, FdTarget> {
+    const parentFdTable = this.fdTables.get(parentPid);
+    if (!parentFdTable) throw new Error(`No fd table for parent pid ${parentPid}`);
+    const childFdTable = new Map<number, FdTarget>();
+    for (const [fd, target] of parentFdTable) {
+      if (target.type === 'pipe_read' || target.type === 'pipe_write') {
+        target.pipe.addRef();
+      } else if (target.type === 'vfs_file' || target.type === 'socket') {
+        target.refs++;
+      }
+      childFdTable.set(fd, target);
+    }
+    return childFdTable;
+  }
+
   /** Pre-register a process entry so waitpid can find it before async instantiation completes. */
   registerPending(pid: number, command?: string, ppid: number = NO_PARENT_PID): void {
     this.reservePid(pid);
