@@ -279,6 +279,8 @@ covered by canaries.
 
 Run: `git diff --check`.
 
-- [ ] **Step 5: Open PR**
+- [x] **Step 5: Open PR**
 
 Push `feature/continuation-fork` and open a PR against `main` with the fork-only scope and known `execve` companion follow-up called out.
+
+PR: https://github.com/codepod-sandbox/codepod/pull/17
