@@ -78,6 +78,8 @@ export interface ResidentBashRunnerOptions {
   toolAllowlist?: string[];
   /** Max WASM linear memory in bytes for spawned child processes. */
   memoryBytes?: number;
+  /** Max process records in this runner's process kernel. */
+  processes?: number;
   /** Additional codepod imports for loader-backed shell instances. */
   extraCodepodImports?: LoadProcessOptions["extraCodepodImports"];
   /** argv for the loader-backed shell process. */
@@ -87,6 +89,20 @@ export interface ResidentBashRunnerOptions {
   /** Sandbox instance supplied to RunCommandContext. */
   sandbox?: Sandbox;
 }
+
+type HostCommandEntry = {
+  description?: string;
+  handler: (request: {
+    args: string[];
+    stdin: string;
+    env: Record<string, string>;
+    cwd: string;
+  }) => Promise<{ stdout?: string; stderr?: string; exitCode: number }>;
+};
+
+type ProcessManagerWithHostCommands = ProcessManager & {
+  getHostCommand?: (name: string) => HostCommandEntry | null;
+};
 
 export class ResidentBashRunner implements CommandRunner {
   private instance: WebAssembly.Instance | undefined;
@@ -264,7 +280,7 @@ export class ResidentBashRunner implements CommandRunner {
     });
 
     // ── Process kernel for pipe/spawn/waitpid/close_fd ──
-    const kernel = new ProcessKernel();
+    const kernel = new ProcessKernel({ maxProcesses: options?.processes });
 
     // Wire /proc/<pid>/* entries.  The ProcProvider (built when the
     // VFS was constructed) reads through this callback live, so
@@ -302,6 +318,7 @@ export class ResidentBashRunner implements CommandRunner {
       const sub = await ResidentBashRunner.create(vfs, mgr, adapter, wasmPath, {
         networkBridge: options?.networkBridge,
         extensionRegistry: options?.extensionRegistry,
+        processes: options?.processes,
       });
       try {
         sub.inheritDeadlineFrom(shellRef);
@@ -1246,10 +1263,16 @@ function spawnAsyncProcess(
     return pid;
   }
 
+  // Check for host commands (TypeScript handlers) first
+  const hostCmdEntry = (mgr as ProcessManagerWithHostCommands).getHostCommand?.(req.prog) ?? null;
+  const module = hostCmdEntry ? null : mgr.getModule(req.prog);
+  if (!hostCmdEntry && !module) {
+    kernel.releaseFdTable(fdTable);
+    return -1;
+  }
+
   const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(" ")}`);
 
-  // Check for host commands (TypeScript handlers) first
-  const hostCmdEntry = mgr.getHostCommand(req.prog);
   if (hostCmdEntry) {
     for (const [fd, target] of fdTable) kernel.setFdTarget(pid, fd, target);
     // Execute host command asynchronously
@@ -1311,8 +1334,10 @@ function spawnAsyncProcess(
     return pid;
   }
 
-  const module = mgr.getModule(req.prog);
-  if (!module) return -1;
+  if (!module) {
+    kernel.discardProcess(pid);
+    return -1;
+  }
 
   // Store fd targets in the kernel so cleanupFds can close them on exit.
   // This ensures pipe write ends get closed when the child process exits,

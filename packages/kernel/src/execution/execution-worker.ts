@@ -39,6 +39,7 @@ interface InitMessage {
   stderrBytes?: number;
   toolAllowlist?: string[];
   memoryBytes?: number;
+  processes?: number;
   bridgeSab?: SharedArrayBuffer;
   networkPolicy?: { allowedHosts?: string[]; blockedHosts?: string[] };
   hasExtensions?: boolean;
@@ -54,7 +55,7 @@ interface RunMessage {
 }
 
 class WorkerResidentRunner {
-  private kernel = new ProcessKernel();
+  private kernel: ProcessKernel;
   private processes = new Map<number, Process>();
   private env = new Map<string, string>();
   private bootProcess: Process | null = null;
@@ -67,7 +68,10 @@ class WorkerResidentRunner {
     private readonly mgr: ProcessManager,
     private readonly networkBridge: NetworkBridgeLike | undefined,
     private readonly extensionHandler: ((cmd: Record<string, unknown>) => Record<string, unknown>) | undefined,
-  ) {}
+    maxProcesses?: number,
+  ) {
+    this.kernel = new ProcessKernel({ maxProcesses });
+  }
 
   async boot(argv: string[], stdoutLimit?: number, stderrLimit?: number): Promise<void> {
     this.stdoutLimit = stdoutLimit;
@@ -275,6 +279,7 @@ class WorkerResidentRunner {
               cwd: req.cwd || '/',
               stdoutLimit: this.stdoutLimit,
               stderrLimit: this.stderrLimit,
+              rollbackOnFailure: false,
             }).then(async (proc) => {
               processes.set(childPid, proc);
               await proc.terminate();
@@ -363,7 +368,7 @@ parentPort.on('message', async (msg: InitMessage | RunMessage) => {
       mgr.setExtensionHandler(extensionProxy);
     }
 
-    runner = new WorkerResidentRunner(vfs, adapter, mgr, networkBridge, extensionProxy);
+    runner = new WorkerResidentRunner(vfs, adapter, mgr, networkBridge, extensionProxy, msg.processes);
     await runner.boot(['/bin/bash'], msg.stdoutBytes, msg.stderrBytes);
 
     if (msg.bridgeSab !== undefined) {

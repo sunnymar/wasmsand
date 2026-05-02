@@ -100,6 +100,7 @@ fn dry_run_injects_compat_archive_and_include_first() {
         .env("CPCC_ARCHIVE", "/fake/libcodepod_guest_compat.a")
         .env("CPCC_INCLUDE", "/fake/include")
         .env("CPCC_SKIP_VERSION_CHECK", "1")
+        .env("CPCC_MARKERS", "1")
         .arg("--dry-run")
         .arg("foo.c")
         .arg("-o")
@@ -135,7 +136,39 @@ fn dry_run_injects_compat_archive_and_include_first() {
 }
 
 #[test]
-fn dry_run_marks_setjmp_opt_in_builds() {
+fn dry_run_marks_continuation_opt_in_builds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::create_dir_all(root.join("share/wasi-sysroot")).unwrap();
+    let clang = root.join("bin/clang");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&clang, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&clang, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let out = Command::new(bin())
+        .env("WASI_SDK_PATH", root)
+        .env("CPCC_ARCHIVE", "/fake/libcodepod.a")
+        .env("CPCC_CONTINUATIONS_ARCHIVE", "/fake/libcodepod_continuations.a")
+        .env("CPCC_INCLUDE", "/fake/include")
+        .env("CPCC_SKIP_VERSION_CHECK", "1")
+        .env("CPCC_USE_CONTINUATIONS", "1")
+        .arg("--dry-run")
+        .arg("foo.c")
+        .arg("-o")
+        .arg("foo.wasm")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("-DCODEPOD_USE_CONTINUATIONS=1"), "{stdout}");
+    assert!(stdout.contains("/fake/libcodepod_continuations.a"), "{stdout}");
+}
+
+#[test]
+fn dry_run_accepts_legacy_setjmp_opt_in_aliases() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     fs::create_dir_all(root.join("bin")).unwrap();
@@ -162,6 +195,7 @@ fn dry_run_marks_setjmp_opt_in_builds() {
         .output()
         .unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("-DCODEPOD_USE_CONTINUATIONS=1"), "{stdout}");
     assert!(stdout.contains("-DCODEPOD_USE_SETJMP=1"), "{stdout}");
     assert!(stdout.contains("/fake/libcodepod_setjmp.a"), "{stdout}");
 }

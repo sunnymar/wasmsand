@@ -1,8 +1,74 @@
 import { describe, it } from '@std/testing/bdd';
 import { expect } from '@std/expect';
-import { ProcessKernel } from '../kernel.js';
+import { DEFAULT_MAX_PROCESSES, ProcessKernel, ProcessLimitError } from '../kernel.js';
 
 describe('ProcessKernel', () => {
+  it('uses a finite default process limit', () => {
+    const kernel = new ProcessKernel();
+    expect(kernel.getMaxProcesses()).toBe(DEFAULT_MAX_PROCESSES);
+    expect(kernel.canReserveProcessSlot()).toBe(true);
+    kernel.dispose();
+  });
+
+  it('rejects invalid process limits', () => {
+    expect(() => new ProcessKernel({ maxProcesses: 0 })).toThrow();
+    expect(() => new ProcessKernel({ maxProcesses: 1.5 })).toThrow();
+  });
+
+  it('applies the process limit before PID allocation or fd-table creation', () => {
+    const kernel = new ProcessKernel({ maxProcesses: 1 });
+    const first = kernel.allocPid();
+    expect(first).toBe(1);
+    expect(kernel.getReservedProcessCount()).toBe(1);
+
+    expect(() => kernel.allocPid()).toThrow(ProcessLimitError);
+
+    expect(kernel.getReservedProcessCount()).toBe(1);
+    expect(kernel.getPpid(2)).toBe(0);
+    expect(kernel.getFdTarget(2, 0)).toBeNull();
+    kernel.dispose();
+  });
+
+  it('applies the process limit before registering an explicit pid', () => {
+    const kernel = new ProcessKernel({ maxProcesses: 1 });
+    kernel.registerExited(99, 0);
+
+    expect(() => kernel.registerPending(100, 'cat', 99)).toThrow(ProcessLimitError);
+
+    expect(kernel.getReservedProcessCount()).toBe(1);
+    expect(kernel.hasProcess(100)).toBe(false);
+    expect(kernel.getPpid(100)).toBe(0);
+    expect(kernel.getFdTarget(100, 0)).toBeNull();
+    kernel.dispose();
+  });
+
+  it('releases a process slot when an exited child is waited', async () => {
+    const kernel = new ProcessKernel({ maxProcesses: 1 });
+    const pid = kernel.allocPid();
+    kernel.releaseProcess(pid, 0);
+    expect(kernel.canReserveProcessSlot()).toBe(false);
+
+    expect(await kernel.waitpid(pid)).toBe(0);
+
+    expect(kernel.canReserveProcessSlot()).toBe(true);
+    expect(kernel.getReservedProcessCount()).toBe(0);
+    expect(kernel.hasProcess(pid)).toBe(false);
+    kernel.dispose();
+  });
+
+  it('discardProcess rolls back allocated pid and fd state', () => {
+    const kernel = new ProcessKernel({ maxProcesses: 1 });
+    const pid = kernel.allocPid();
+    kernel.setFdTarget(pid, 0, { type: 'static', data: new Uint8Array([1]), offset: 0 });
+
+    kernel.discardProcess(pid);
+
+    expect(kernel.canReserveProcessSlot()).toBe(true);
+    expect(kernel.getReservedProcessCount()).toBe(0);
+    expect(kernel.getFdTarget(pid, 0)).toBeNull();
+    kernel.dispose();
+  });
+
   it('createPipe returns connected read/write ends', async () => {
     const kernel = new ProcessKernel();
     // Allocate a process so it has an fd table to attach pipe ends to.

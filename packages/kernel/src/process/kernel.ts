@@ -7,9 +7,25 @@ import type { WasiHost } from '../wasi/wasi-host.js';
 // private codepod fds that guest libc reaches through host_* imports.
 export const KERNEL_FD_BASE = 1024;
 export const NO_PARENT_PID = 0;
+export const DEFAULT_MAX_PROCESSES = 64;
+
+export class ProcessLimitError extends Error {
+  readonly code = 'EAGAIN';
+  readonly errno = 11;
+
+  constructor(readonly maxProcesses: number) {
+    super(`process limit exceeded: max ${maxProcesses}`);
+    this.name = 'ProcessLimitError';
+  }
+}
+
+export interface ProcessKernelOptions {
+  maxProcesses?: number;
+}
 
 export interface SpawnRequest {
   prog: string;
+  argv0?: string;
   args: string[];
   env: [string, string][];
   cwd: string;
@@ -38,15 +54,42 @@ interface FileLockState {
 export class ProcessKernel {
   private processTable = new Map<number, ProcessEntry>();
   private nextPid = 1;
+  private allocatedPids = new Set<number>();
   private parentPids = new Map<number, number>();
   private fdTables = new Map<number, Map<number, FdTarget>>();
   private nextFds = new Map<number, number>();
   private fileLocks = new Map<string, FileLockState>();
+  private readonly maxProcesses: number;
 
-  constructor() {
+  constructor(options: ProcessKernelOptions = {}) {
+    const maxProcesses = options.maxProcesses ?? DEFAULT_MAX_PROCESSES;
+    if (!Number.isInteger(maxProcesses) || maxProcesses < 1) {
+      throw new Error(`ProcessKernel maxProcesses must be an integer >= 1, got ${maxProcesses}`);
+    }
+    this.maxProcesses = maxProcesses;
     // Process 0 (shell) gets a default fd table
     this.fdTables.set(0, new Map());
     this.nextFds.set(0, KERNEL_FD_BASE);
+  }
+
+  getMaxProcesses(): number {
+    return this.maxProcesses;
+  }
+
+  getReservedProcessCount(): number {
+    return this.allocatedPids.size;
+  }
+
+  canReserveProcessSlot(): boolean {
+    return this.allocatedPids.size < this.maxProcesses;
+  }
+
+  private reservePid(pid: number): void {
+    if (this.allocatedPids.has(pid)) return;
+    if (!this.canReserveProcessSlot()) {
+      throw new ProcessLimitError(this.maxProcesses);
+    }
+    this.allocatedPids.add(pid);
   }
 
   createPipe(callerPid: number): { readFd: number; writeFd: number } {
@@ -77,6 +120,13 @@ export class ProcessKernel {
 
   setFdTarget(pid: number, fd: number, target: FdTarget): void {
     const fdTable = this.getFdTable(pid);
+    fdTable.set(fd, target);
+  }
+
+  replaceFdTarget(pid: number, fd: number, target: FdTarget): void {
+    const fdTable = this.getFdTable(pid);
+    const existing = fdTable.get(fd);
+    if (existing) this.closeTarget(existing);
     fdTable.set(fd, target);
   }
 
@@ -118,8 +168,24 @@ export class ProcessKernel {
     return newFdTable;
   }
 
+  buildFdTableForFork(parentPid: number): Map<number, FdTarget> {
+    const parentFdTable = this.fdTables.get(parentPid);
+    if (!parentFdTable) throw new Error(`No fd table for parent pid ${parentPid}`);
+    const childFdTable = new Map<number, FdTarget>();
+    for (const [fd, target] of parentFdTable) {
+      if (target.type === 'pipe_read' || target.type === 'pipe_write') {
+        target.pipe.addRef();
+      } else if (target.type === 'vfs_file' || target.type === 'socket') {
+        target.refs++;
+      }
+      childFdTable.set(fd, target);
+    }
+    return childFdTable;
+  }
+
   /** Pre-register a process entry so waitpid can find it before async instantiation completes. */
   registerPending(pid: number, command?: string, ppid: number = NO_PARENT_PID): void {
+    this.reservePid(pid);
     this.parentPids.set(pid, ppid);
     this.initProcess(pid);
     if (!this.processTable.has(pid)) {
@@ -148,6 +214,7 @@ export class ProcessKernel {
   }
 
   registerProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost): void {
+    this.reservePid(pid);
     this.processTable.set(pid, {
       pid, promise, exitCode: -1, state: 'running', wasiHost, waiters: [],
     });
@@ -164,7 +231,11 @@ export class ProcessKernel {
   }
 
   allocPid(ppid: number = NO_PARENT_PID, command?: string): number {
+    if (!this.canReserveProcessSlot()) {
+      throw new ProcessLimitError(this.maxProcesses);
+    }
     const pid = this.nextPid++;
+    this.allocatedPids.add(pid);
     this.parentPids.set(pid, ppid);
     this.initProcess(pid);
     if (command) this.registerPending(pid, command, ppid);
@@ -183,12 +254,23 @@ export class ProcessKernel {
   }
 
   releaseProcess(pid: number, exitCode: number): void {
-    this.registerExited(pid, exitCode);
     this.cleanupFds(pid);
+    this.registerExited(pid, exitCode);
+  }
+
+  discardProcess(pid: number): void {
+    this.cleanupFds(pid);
+    this.reapProcess(pid);
+  }
+
+  releaseFdTable(fdTable: Map<number, FdTarget>): void {
+    for (const target of fdTable.values()) this.closeTarget(target);
+    fdTable.clear();
   }
 
   /** Register a process as already exited (used for synchronous spawn). */
   registerExited(pid: number, exitCode: number, ppid?: number): void {
+    this.reservePid(pid);
     if (ppid !== undefined) this.parentPids.set(pid, ppid);
     this.initProcess(pid);
     const existing = this.processTable.get(pid);
@@ -208,14 +290,27 @@ export class ProcessKernel {
   async waitpid(pid: number): Promise<number> {
     const entry = this.processTable.get(pid);
     if (!entry) return -1;
-    if (entry.state === 'exited') return entry.exitCode;
-    return new Promise<number>((resolve) => { entry.waiters.push(resolve); });
+    if (entry.state === 'exited') {
+      const exitCode = entry.exitCode;
+      this.reapProcess(pid);
+      return exitCode;
+    }
+    return new Promise<number>((resolve) => {
+      entry.waiters.push((exitCode) => {
+        this.reapProcess(pid);
+        resolve(exitCode);
+      });
+    });
   }
 
   waitpidNohang(pid: number): number {
     const entry = this.processTable.get(pid);
     if (!entry) return -1;
-    if (entry.state === 'exited') return entry.exitCode;
+    if (entry.state === 'exited') {
+      const exitCode = entry.exitCode;
+      this.reapProcess(pid);
+      return exitCode;
+    }
     return -1;
   }
 
@@ -356,6 +451,15 @@ export class ProcessKernel {
     }
   }
 
+  private reapProcess(pid: number): void {
+    this.cleanupFds(pid);
+    this.processTable.delete(pid);
+    this.allocatedPids.delete(pid);
+    this.parentPids.delete(pid);
+    this.fdTables.delete(pid);
+    this.nextFds.delete(pid);
+  }
+
   initProcess(pid: number): void {
     if (!this.fdTables.has(pid)) {
       this.fdTables.set(pid, new Map());
@@ -380,6 +484,7 @@ export class ProcessKernel {
     }
     this.fdTables.clear();
     this.processTable.clear();
+    this.allocatedPids.clear();
     this.parentPids.clear();
     this.fileLocks.clear();
   }

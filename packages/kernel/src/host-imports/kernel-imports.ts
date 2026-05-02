@@ -263,12 +263,22 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
       const req = JSON.parse(reqJson) as SpawnRequest;
       if (opts.spawnProcess && opts.kernel) {
+        if (!opts.kernel.canReserveProcessSlot()) {
+          return -1;
+        }
         const fdTable = opts.kernel.buildFdTableForSpawn(callerPid, req);
         // If stdin_data is provided, override fd 0 with a static target
         if (req.stdin_data) {
+          const previousStdin = fdTable.get(0);
+          if (previousStdin) opts.kernel.releaseFdTable(new Map([[0, previousStdin]]));
           fdTable.set(0, createStaticTarget(new TextEncoder().encode(req.stdin_data)));
         }
-        return opts.spawnProcess(req, fdTable, callerPid);
+        try {
+          return opts.spawnProcess(req, fdTable, callerPid);
+        } catch {
+          opts.kernel.releaseFdTable(fdTable);
+          return -1;
+        }
       }
       return -1;
     },
@@ -285,6 +295,13 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // sees getppid() == 0, mirroring Linux init).
     host_getppid(): number {
       return opts.kernel ? opts.kernel.getPpid(callerPid) : 0;
+    },
+
+    // host_fork() -> i32
+    // Returns negative errno until the Asyncify continuation runtime wires the
+    // fork controller.  Guest continuation builds map -ENOSYS to fork() failure.
+    host_fork(): number {
+      return -38; // ENOSYS
     },
 
     // host_kill(pid, sig) -> i32

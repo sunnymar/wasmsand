@@ -10,6 +10,7 @@ const KERNEL_IMPORTS_BASELINE = [
   "host_close_fd",
   "host_getpid",
   "host_getppid",
+  "host_fork",
   "host_kill",
   "host_list_processes",
   "host_read_fd",
@@ -56,6 +57,8 @@ const SHELL_IMPORTS_BASELINE = [
 function shellImports() {
   return createShellImports({
     memory: new WebAssembly.Memory({ initial: 1 }),
+    vfs: {} as Parameters<typeof createShellImports>[0]["vfs"],
+    mgr: {} as Parameters<typeof createShellImports>[0]["mgr"],
   });
 }
 
@@ -78,7 +81,7 @@ Deno.test("shell-imports baseline names", () => {
   }
 });
 
-Deno.test("shell-imports and kernel-imports do not overlap", () => {
+Deno.test("shell-imports and kernel-imports only overlap on legacy chmod", () => {
   const kernelNames = new Set(
     Object.keys(
       createKernelImports({ memory: new WebAssembly.Memory({ initial: 1 }) }),
@@ -88,5 +91,5 @@ Deno.test("shell-imports and kernel-imports do not overlap", () => {
     kernelNames.has(name)
   );
 
-  assertEquals(overlapping, []);
+  assertEquals(overlapping, ["host_chmod"]);
 });
