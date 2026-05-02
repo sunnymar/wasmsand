@@ -20,7 +20,10 @@ const HELPER_DIR = resolve(BUSYBOX_DIR, 'build-shell/ash-test-helpers');
 const RESULTS_JSON = resolve(BUSYBOX_DIR, 'build/test-results/ash-upstream.json');
 const CPCC = resolve(REPO_ROOT, 'target/release/cpcc');
 
-const categories = Deno.args.length > 0 ? Deno.args : ['ash-arith'];
+const args = Deno.args.length > 0 ? Deno.args : ['ash-arith'];
+const categories = [...new Set(args.map((arg) => arg.split('/')[0]))];
+const selectedCategories = new Set(args.filter((arg) => !arg.includes('/')));
+const selectedTests = new Set(args.filter((arg) => arg.includes('/')));
 const helperNames = ['recho', 'zecho', 'printenv'];
 
 interface UpstreamCase {
@@ -106,6 +109,7 @@ function collectCases(): UpstreamCase[] {
       .sort((a, b) => a.localeCompare(b));
 
     for (const test of tests) {
+      if (!selectedCategories.has(category) && !selectedTests.has(`${category}/${test}`)) continue;
       const right = test.replace(/\.tests$/, '.right');
       const rightPath = resolve(hostCategoryDir, right);
       try {

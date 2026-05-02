@@ -948,6 +948,7 @@ export class Sandbox {
     const prog = req.prog.includes('/')
       ? Sandbox.resolveSpawnPath(req.prog, req.cwd || '/')
       : Sandbox.resolveExecutablePathForVfs(vfs, req.prog);
+    Sandbox.assertExecutableForSpawn(vfs, prog);
     return Sandbox.expandScriptArgvForSpawn(vfs, [prog, ...req.args]);
   }
 
@@ -992,6 +993,17 @@ export class Sandbox {
     }
 
     return ['/bin/sh', prog, ...argv.slice(1)];
+  }
+
+  private static resolveExecutablePathForVfs(vfs: VfsLike, prog: string): string {
+  private static assertExecutableForSpawn(vfs: VfsLike, path: string): void {
+    const st = vfs.stat(path);
+    if (st.type !== 'file') {
+      throw new Error(`EACCES: permission denied: ${path}`);
+    }
+    if ((st.permissions & 0o111) === 0) {
+      throw new Error(`EACCES: permission denied: ${path}`);
+    }
   }
 
   private static resolveExecutablePathForVfs(vfs: VfsLike, prog: string): string {

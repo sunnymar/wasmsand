@@ -21,6 +21,11 @@ Deno.test({
         'ash-getopts',
         'ash-glob',
         'ash-invert',
+        'ash-misc/command2.tests',
+        'ash-misc/empty_args.tests',
+        'ash-misc/exec.tests',
+        'ash-misc/exitcode_EACCES.tests',
+        'ash-misc/exitcode_ENOENT.tests',
       ],
       {
         cwd: repoRoot,
@@ -35,6 +40,6 @@ Deno.test({
     const summary = JSON.parse(Deno.readTextFileSync(summaryPath));
     assertEquals(summary.failed, 0);
     assertEquals(summary.skipped, 0);
-    assertEquals(summary.passed, 37);
+    assertEquals(summary.passed, 42);
   },
 });
