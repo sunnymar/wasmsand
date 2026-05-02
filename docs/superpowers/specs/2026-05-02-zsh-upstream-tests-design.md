@@ -219,6 +219,10 @@ selected `shell/ash.c` and related BusyBox shell helpers for `fork`, `vfork`,
 `exec*`, `waitpid`, and internal process helper usage. The report should state
 which paths ash is expected to exercise in Codepod. The grep/trace is useful
 for confidence, but acceptance still comes from running ash in the sandbox.
+BusyBox shell source setup is an explicit setup step, not part of the normal
+ash build/test command. `make shell` and the ash smoke runner must consume an
+already-populated local source tree and fail with setup guidance if it is
+missing.
 
 Ash acceptance starts with:
 

@@ -163,7 +163,7 @@ SHELL_SRC_DIR := src-shell
 Replace the `.PHONY` line with:
 
 ```make
-.PHONY: all shell fetch fetch-shell configure configure-shell copy-fixtures copy-shell-fixtures clean ensure-toolchain ensure-compat trace-ash-process-paths
+.PHONY: all shell fetch fetch-shell configure configure-shell copy-fixtures copy-shell-fixtures clean ensure-toolchain ensure-compat trace-ash-process-paths ensure-shell-source
 ```
 
 - [ ] **Step 3: Add shell build entrypoint**
@@ -174,7 +174,7 @@ After `all: $(BUILD_DIR)/busybox.wasm`, add:
 shell: $(SHELL_BUILD_DIR)/busybox-shell.wasm
 ```
 
-- [ ] **Step 4: Add shell source fetch target**
+- [ ] **Step 4: Add explicit shell source setup targets**
 
 After the existing `fetch` target, add:
 
@@ -184,14 +184,23 @@ fetch-shell:
 	if [ ! -f $(SHELL_SRC_DIR)/Makefile ]; then \
 		curl -L $(BUSYBOX_URL) | tar -xj -C $(SHELL_SRC_DIR) --strip-components=1; \
 	fi
+
+ensure-shell-source:
+	@test -f $(SHELL_SRC_DIR)/Makefile || { \
+		echo "BusyBox shell source missing at $(SHELL_SRC_DIR). Run: make -C packages/c-ports/busybox fetch-shell"; \
+		exit 1; \
+	}
 ```
+
+`fetch-shell` is an explicit setup target. Normal build/test targets must not
+depend on it, so they cannot fetch tarballs implicitly.
 
 - [ ] **Step 5: Add shell configure target**
 
 After the existing `configure` target, add:
 
 ```make
-configure-shell: fetch-shell busybox-shell.config compat/include/paths.h ensure-toolchain
+configure-shell: ensure-shell-source busybox-shell.config compat/include/paths.h ensure-toolchain
 	cd $(SHELL_SRC_DIR) && \
 		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
 			KCONFIG_ALLCONFIG="$(abspath busybox-shell.config)" allnoconfig && \
@@ -281,7 +290,9 @@ Run:
 make -n -C packages/c-ports/busybox shell
 ```
 
-Expected: make prints the commands it would run for `fetch-shell`, `configure-shell`, and `busybox-shell.wasm`; it does not report `missing separator` or an unknown target.
+Expected: make prints the commands it would run for `ensure-shell-source`,
+`configure-shell`, and `busybox-shell.wasm`; it does not report `missing
+separator` or an unknown target.
 
 - [ ] **Step 10: Commit**
 
@@ -310,10 +321,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 busybox_dir="$repo_root/packages/c-ports/busybox"
 src_dir="$busybox_dir/src-shell"
 
-make -C "$busybox_dir" fetch-shell >/dev/null
-
 if [[ ! -d "$src_dir/shell" ]]; then
   echo "BusyBox shell source not found at $src_dir/shell" >&2
+  echo "Run: make -C packages/c-ports/busybox fetch-shell" >&2
   exit 1
 fi
 
@@ -412,9 +422,7 @@ const smokes: Smoke[] = [
 ];
 
 function ensureBuilt(): void {
-  if (!existsSync(SHELL_WASM)) {
-    execSync('make -C packages/c-ports/busybox shell', { cwd: REPO_ROOT, stdio: 'inherit' });
-  }
+  execSync('make -C packages/c-ports/busybox shell', { cwd: REPO_ROOT, stdio: 'inherit' });
 }
 
 function prepareWasmDir(): void {
@@ -575,16 +583,20 @@ git commit -m "test(kernel): cover busybox ash smokes" --no-verify
 Run:
 
 ```bash
+make -C packages/c-ports/busybox fetch-shell
 make -C packages/c-ports/busybox shell
 ```
 
-Expected: `packages/c-ports/busybox/build-shell/busybox-shell.wasm` exists.
+Expected: `fetch-shell` performs the explicit source setup, `shell` consumes
+the local `src-shell` tree, and `packages/c-ports/busybox/build-shell/busybox-shell.wasm`
+exists.
 
 - [ ] **Step 2: Run the source trace**
 
 Run:
 
 ```bash
+mkdir -p packages/c-ports/busybox/build/test-results
 bash scripts/trace-busybox-ash-process-paths.sh | tee packages/c-ports/busybox/build/test-results/ash-process-trace.txt
 ```
 
