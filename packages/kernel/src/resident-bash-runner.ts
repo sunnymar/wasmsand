@@ -1263,10 +1263,16 @@ function spawnAsyncProcess(
     return pid;
   }
 
-  const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(" ")}`);
-
   // Check for host commands (TypeScript handlers) first
   const hostCmdEntry = (mgr as ProcessManagerWithHostCommands).getHostCommand?.(req.prog) ?? null;
+  const module = hostCmdEntry ? null : mgr.getModule(req.prog);
+  if (!hostCmdEntry && !module) {
+    kernel.releaseFdTable(fdTable);
+    return -1;
+  }
+
+  const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(" ")}`);
+
   if (hostCmdEntry) {
     for (const [fd, target] of fdTable) kernel.setFdTarget(pid, fd, target);
     // Execute host command asynchronously
@@ -1328,8 +1334,10 @@ function spawnAsyncProcess(
     return pid;
   }
 
-  const module = mgr.getModule(req.prog);
-  if (!module) return -1;
+  if (!module) {
+    kernel.discardProcess(pid);
+    return -1;
+  }
 
   // Store fd targets in the kernel so cleanupFds can close them on exit.
   // This ensures pipe write ends get closed when the child process exits,

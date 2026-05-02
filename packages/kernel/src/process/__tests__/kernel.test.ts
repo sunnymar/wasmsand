@@ -42,6 +42,33 @@ describe('ProcessKernel', () => {
     kernel.dispose();
   });
 
+  it('releases a process slot when an exited child is waited', async () => {
+    const kernel = new ProcessKernel({ maxProcesses: 1 });
+    const pid = kernel.allocPid();
+    kernel.releaseProcess(pid, 0);
+    expect(kernel.canReserveProcessSlot()).toBe(false);
+
+    expect(await kernel.waitpid(pid)).toBe(0);
+
+    expect(kernel.canReserveProcessSlot()).toBe(true);
+    expect(kernel.getReservedProcessCount()).toBe(0);
+    expect(kernel.hasProcess(pid)).toBe(false);
+    kernel.dispose();
+  });
+
+  it('discardProcess rolls back allocated pid and fd state', () => {
+    const kernel = new ProcessKernel({ maxProcesses: 1 });
+    const pid = kernel.allocPid();
+    kernel.setFdTarget(pid, 0, { type: 'static', data: new Uint8Array([1]), offset: 0 });
+
+    kernel.discardProcess(pid);
+
+    expect(kernel.canReserveProcessSlot()).toBe(true);
+    expect(kernel.getReservedProcessCount()).toBe(0);
+    expect(kernel.getFdTarget(pid, 0)).toBeNull();
+    kernel.dispose();
+  });
+
   it('createPipe returns connected read/write ends', async () => {
     const kernel = new ProcessKernel();
     // Allocate a process so it has an fd table to attach pipe ends to.

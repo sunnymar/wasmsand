@@ -2,6 +2,9 @@ import { assertEquals } from "jsr:@std/assert@^1.0.19";
 import { createKernelImports } from "../kernel-imports.ts";
 import { readString } from "../common.ts";
 import { ProcessKernel } from "../../process/kernel.ts";
+import { VFS } from "../../vfs/vfs.ts";
+import { FdTable } from "../../vfs/fd-table.ts";
+import { createVfsFileTarget } from "../../wasi/fd-target.ts";
 
 const encoder = new TextEncoder();
 
@@ -84,5 +87,43 @@ Deno.test("kernel host_spawn reserves a process slot before fd cloning", () => {
   assertEquals(kernel.getReservedProcessCount(), 1);
   assertEquals(kernel.getPpid(2), 0);
   assertEquals(kernel.getFdTarget(2, 0), null);
+  kernel.dispose();
+});
+
+Deno.test("kernel host_spawn releases cloned fd refs when spawnProcess fails", () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const kernel = new ProcessKernel({ maxProcesses: 2 });
+  const parentPid = kernel.allocPid();
+  const vfs = new VFS();
+  vfs.writeFile("/tmp/in.txt", new TextEncoder().encode("data"));
+  const fdTable = new FdTable(vfs);
+  const fd = fdTable.open("/tmp/in.txt", "r");
+  const target = createVfsFileTarget(fdTable, fd);
+  kernel.setFdTarget(parentPid, 0, target);
+  const request = JSON.stringify({
+    prog: "/bin/cat",
+    args: [],
+    env: [],
+    cwd: "/",
+    stdin_fd: 0,
+    stdout_fd: 1,
+    stderr_fd: 2,
+  });
+  const reqLen = writeString(memory, 0, request);
+
+  const imports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: parentPid,
+    spawnProcess: () => {
+      throw new Error("boom");
+    },
+  });
+
+  const pid = (imports.host_spawn as (...args: number[]) => number)(0, reqLen);
+  assertEquals(pid, -1);
+  assertEquals(target.refs, 1);
+  assertEquals(fdTable.isOpen(fd), true);
+  assertEquals(kernel.getReservedProcessCount(), 1);
   kernel.dispose();
 });

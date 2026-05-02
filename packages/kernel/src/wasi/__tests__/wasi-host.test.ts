@@ -9,6 +9,7 @@ import {
   WASI_ESUCCESS,
   WASI_FILETYPE_DIRECTORY,
   WASI_FILETYPE_REGULAR_FILE,
+  WASI_OFLAGS_DIRECTORY,
   WASI_PREOPENTYPE_DIR,
 } from '../types.js';
 
@@ -241,7 +242,7 @@ describe('WasiHost', () => {
       const errno = wasi.clock_time_get(0, BigInt(0), 100);
       expect(errno).toBe(WASI_ESUCCESS);
       const timestamp = view.getBigUint64(100, true);
-      expect(timestamp).toBeGreaterThan(BigInt(0));
+      expect(timestamp > BigInt(0)).toBe(true);
     });
 
     it('returns a nanosecond timestamp for monotonic clock', () => {
@@ -249,7 +250,7 @@ describe('WasiHost', () => {
       const errno = wasi.clock_time_get(1, BigInt(0), 100);
       expect(errno).toBe(WASI_ESUCCESS);
       const timestamp = view.getBigUint64(100, true);
-      expect(timestamp).toBeGreaterThan(BigInt(0));
+      expect(timestamp > BigInt(0)).toBe(true);
     });
   });
 
@@ -497,6 +498,37 @@ describe('WasiHost', () => {
       expect(errno).toBe(WASI_ESUCCESS);
       const bufused = view.getUint32(900, true);
       expect(bufused).toBeGreaterThan(0);
+    });
+  });
+
+  describe('fork snapshots', () => {
+    it('preserves directory fd allocator state', () => {
+      const { wasi, view, bytes } = getImportsAndView(host, memory);
+      const pathStr = 'home/user';
+      bytes.set(new TextEncoder().encode(pathStr), 500);
+      expect(wasi.path_open(3, 0, 500, pathStr.length, WASI_OFLAGS_DIRECTORY, BigInt(0), BigInt(0), 0, 400))
+        .toBe(WASI_ESUCCESS);
+      const inheritedDirFd = view.getUint32(400, true);
+
+      const snapshot = host.snapshotForFork();
+      const childMemory = new WebAssembly.Memory({ initial: 1 });
+      const child = new WasiHost({
+        vfs,
+        args: ['program'],
+        env: {},
+        preopens: { '/': '/' },
+      });
+      child.setMemory(childMemory);
+      child.restoreForkSnapshot(snapshot);
+      const { wasi: childWasi, view: childView, bytes: childBytes } = getImportsAndView(child, childMemory);
+
+      childBytes.set(new TextEncoder().encode('home'), 500);
+      expect(childWasi.path_open(3, 0, 500, 4, WASI_OFLAGS_DIRECTORY, BigInt(0), BigInt(0), 0, 400))
+        .toBe(WASI_ESUCCESS);
+      const newDirFd = childView.getUint32(400, true);
+
+      expect(newDirFd).not.toBe(inheritedDirFd);
+      expect(newDirFd).toBeGreaterThan(inheritedDirFd);
     });
   });
 
