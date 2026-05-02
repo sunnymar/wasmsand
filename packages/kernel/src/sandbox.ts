@@ -255,7 +255,7 @@ export class Sandbox {
     const { bridge } = options.networkBridge
       ? { bridge: options.networkBridge }
       : await Sandbox.createNetworkBridge(options.network);
-    const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
+    const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist, moduleCache);
     const tools = options.baseRoot
       ? Sandbox.registerBaseRootTools(mgr, vfs)
       : await Sandbox.registerTools(mgr, adapter, options.wasmDir, upper);
@@ -1448,7 +1448,7 @@ export class Sandbox {
     if (!this.vfs.cowClone) throw new Error('Configured VFS does not support fork');
     const childVfs = this.vfs.cowClone();
     const { bridge } = await Sandbox.createNetworkBridge(this.networkPolicy);
-    const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist);
+    const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist, this.moduleCache);
     const tools = childVfs instanceof OverlayVFS
       ? Sandbox.registerBaseRootTools(childMgr, childVfs)
       : await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir, childVfs as VFS);

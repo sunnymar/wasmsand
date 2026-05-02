@@ -1,8 +1,11 @@
 import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
-import { resolve } from 'node:path';
+import { copyFile, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { ProcessManager } from '../manager.js';
+import { MemoryWasmModuleCache } from '../module-cache.js';
 import { VFS } from '../../vfs/vfs.js';
 import { NodeAdapter } from '../../platform/node-adapter.js';
 
@@ -51,6 +54,50 @@ describe('ProcessManager', () => {
     expect(r2.stdout).toBe('hello from wasm\n');
   });
 
+  it('deduplicates host tool compilation by digest while preserving path cache', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codepod-process-cache-'));
+    const firstPath = join(dir, 'first.wasm');
+    const secondPath = join(dir, 'second.wasm');
+    await copyFile(resolve(FIXTURES, 'hello.wasm'), firstPath);
+    await copyFile(resolve(FIXTURES, 'hello.wasm'), secondPath);
+    let compiles = 0;
+    const moduleCache = new MemoryWasmModuleCache(async (bytes) => {
+      compiles++;
+      return await WebAssembly.compile(bytes as BufferSource);
+    });
+    const localMgr = new ProcessManager(vfs, new NodeAdapter(), undefined, undefined, moduleCache);
+    localMgr.registerTool('first', firstPath);
+    localMgr.registerTool('second', secondPath);
+
+    await localMgr.preloadModules();
+
+    expect(compiles).toBe(1);
+    expect(localMgr.spawnSync('first', [], {}, new Uint8Array(), '/').exit_code).toBe(0);
+    expect(localMgr.spawnSync('second', [], {}, new Uint8Array(), '/').exit_code).toBe(0);
+  });
+
+  it('deduplicates runtime-installed VFS tool compilation by digest', async () => {
+    const bytes = await new NodeAdapter().readBytes(resolve(FIXTURES, 'hello.wasm'));
+    vfs.withWriteAccess(() => {
+      vfs.mkdirp('/usr/share/pkg/bin');
+      vfs.writeFile('/usr/share/pkg/bin/first.wasm', bytes);
+      vfs.writeFile('/usr/share/pkg/bin/second.wasm', new Uint8Array(bytes));
+    });
+    let compiles = 0;
+    const moduleCache = new MemoryWasmModuleCache(async (wasmBytes) => {
+      compiles++;
+      return await WebAssembly.compile(wasmBytes as BufferSource);
+    });
+    const localMgr = new ProcessManager(vfs, new NodeAdapter(), undefined, undefined, moduleCache);
+
+    await localMgr.registerAndLoadTool('first', '/usr/share/pkg/bin/first.wasm');
+    await localMgr.registerAndLoadTool('second', '/usr/share/pkg/bin/second.wasm');
+
+    expect(compiles).toBe(1);
+    expect(localMgr.spawnSync('first', [], {}, new Uint8Array(), '/').exit_code).toBe(0);
+    expect(localMgr.spawnSync('second', [], {}, new Uint8Array(), '/').exit_code).toBe(0);
+  });
+
   it('throws for unregistered tools', async () => {
     await expect(mgr.spawn('nonexistent', { args: [], env: {} }))
       .rejects.toThrow(/not found|not registered/i);
@@ -97,7 +144,7 @@ describe('ProcessManager', () => {
       const badModule = await WebAssembly.compile(importWasm);
       // Inject the bad module into the cache via the tool path
       const helloPath = resolve(FIXTURES, 'hello.wasm');
-      (mgr as any).moduleCache.set(helloPath, badModule);
+      (mgr as any).pathModuleCache.set(helloPath, badModule);
 
       const result = mgr.spawnSync('hello', [], {}, new Uint8Array(), '/');
       // Should return an error result, not throw

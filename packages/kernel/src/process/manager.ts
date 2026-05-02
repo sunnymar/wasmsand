@@ -15,6 +15,7 @@ import { AsyncifyAsyncBridge } from '../async-bridge.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
 import { NativeModuleRegistry } from './native-modules.js';
+import { defaultWasmModuleCache, sha256Hex, type WasmModuleCache } from './module-cache.js';
 
 export type ToolSource =
   | { kind: 'host'; path: string }
@@ -24,7 +25,8 @@ export class ProcessManager {
   private vfs: VfsLike;
   private adapter: PlatformAdapter;
   private registry: Map<string, ToolSource> = new Map();
-  private moduleCache: Map<string, WebAssembly.Module> = new Map();
+  private pathModuleCache: Map<string, WebAssembly.Module> = new Map();
+  private wasmModuleCache: WasmModuleCache;
   private networkBridge: NetworkBridgeLike | null;
   private currentHost: WasiHost | null = null;
   private toolAllowlist: Set<string> | null = null;
@@ -33,9 +35,16 @@ export class ProcessManager {
   /** Registry for dynamically loaded native Python module WASMs. */
   readonly nativeModules: NativeModuleRegistry;
 
-  constructor(vfs: VfsLike, adapter: PlatformAdapter, networkBridge?: NetworkBridgeLike, toolAllowlist?: string[]) {
+  constructor(
+    vfs: VfsLike,
+    adapter: PlatformAdapter,
+    networkBridge?: NetworkBridgeLike,
+    toolAllowlist?: string[],
+    wasmModuleCache: WasmModuleCache = defaultWasmModuleCache,
+  ) {
     this.vfs = vfs;
     this.adapter = adapter;
+    this.wasmModuleCache = wasmModuleCache;
     this.networkBridge = networkBridge ?? null;
     this.toolAllowlist = toolAllowlist ? new Set(toolAllowlist) : null;
     this.nativeModules = new NativeModuleRegistry();
@@ -97,8 +106,8 @@ export class ProcessManager {
     this.registerTool(name, source);
     // Load WASM bytes from VFS and compile directly (not from host filesystem)
     const wasmBytes = this.vfs.readFile(wasmPath);
-    const module = await WebAssembly.compile(wasmBytes as BufferSource);
-    this.moduleCache.set(this.cacheKey(source), module);
+    const module = await this.compileBytes(wasmBytes);
+    this.pathModuleCache.set(this.cacheKey(source), module);
   }
 
   /** Return the names of all registered tools. */
@@ -182,7 +191,7 @@ export class ProcessManager {
     } catch {
       return null;
     }
-    return this.moduleCache.get(this.cacheKey(source)) ?? null;
+    return this.pathModuleCache.get(this.cacheKey(source)) ?? null;
   }
 
   /**
@@ -333,16 +342,22 @@ export class ProcessManager {
    */
   private async loadModule(source: ToolSource): Promise<WebAssembly.Module> {
     const key = this.cacheKey(source);
-    const cached = this.moduleCache.get(key);
+    const cached = this.pathModuleCache.get(key);
     if (cached !== undefined) {
       return cached;
     }
 
-    const module = source.kind === 'vfs'
-      ? await WebAssembly.compile(this.vfs.readFile(source.path) as BufferSource)
-      : await this.adapter.loadModule(source.path);
-    this.moduleCache.set(key, module);
+    const bytes = source.kind === 'vfs'
+      ? this.vfs.readFile(source.path)
+      : await this.adapter.readBytes(source.path);
+    const module = await this.compileBytes(bytes);
+    this.pathModuleCache.set(key, module);
     return module;
+  }
+
+  private async compileBytes(bytes: Uint8Array): Promise<WebAssembly.Module> {
+    const digest = await sha256Hex(bytes);
+    return await this.wasmModuleCache.getOrCompile(digest, bytes);
   }
 
   private cacheKey(source: ToolSource): string {
@@ -387,7 +402,7 @@ export class ProcessManager {
       return { exit_code: 127, stdout: '', stderr: `${command}: not found\n` };
     }
 
-    const module = this.moduleCache.get(this.cacheKey(source));
+    const module = this.pathModuleCache.get(this.cacheKey(source));
     if (!module) {
       return { exit_code: 127, stdout: '', stderr: `${command}: module not loaded\n` };
     }
