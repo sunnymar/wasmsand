@@ -1607,7 +1607,7 @@ Expected: tests pass and commit succeeds.
 - Test: `packages/kernel/src/base-image/__tests__/build-base-image.test.ts`
 - Modify: `packages/kernel/src/sandbox.ts`
 
-- [ ] **Step 1: Write base image builder test**
+- [x] **Step 1: Write base image builder test**
 
 Create `packages/kernel/src/base-image/__tests__/build-base-image.test.ts`:
 
@@ -1655,7 +1655,7 @@ describe("buildBaseImage", () => {
 });
 ```
 
-- [ ] **Step 2: Implement base image builder**
+- [x] **Step 2: Implement base image builder**
 
 Create `packages/kernel/src/base-image/build-base-image.ts`:
 
@@ -1787,7 +1787,7 @@ export async function buildBaseImage(options: BuildBaseImageOptions): Promise<Ba
 }
 ```
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run:
 
