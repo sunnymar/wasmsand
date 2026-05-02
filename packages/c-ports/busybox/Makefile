@@ -186,5 +186,8 @@ copy-shell-fixtures: $(SHELL_BUILD_DIR)/busybox-shell.wasm busybox-shell.manifes
 	cp $(SHELL_BUILD_DIR)/busybox-shell.wasm $(FIXTURES)/busybox-shell.wasm
 	cp busybox-shell.manifest.json $(FIXTURES)/busybox-shell.manifest.json
 
+trace-ash-process-paths:
+	$(REPO_ROOT)/scripts/trace-busybox-ash-process-paths.sh
+
 clean:
 	rm -rf $(BUILD_DIR) $(SRC_DIR) $(SHELL_BUILD_DIR) $(SHELL_SRC_DIR)
