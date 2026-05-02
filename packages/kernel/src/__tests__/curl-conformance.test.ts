@@ -253,6 +253,15 @@ describe('curl/libcurl conformance', () => {
     });
   });
 
+  it('socket-forced curl trusts the default VFS CA bundle', async () => {
+    await withLocalHttpsServer('tls trusted hello', async (url) => {
+      const sandbox = await createSocketSandbox();
+      const result = await sandbox.run(`curl --codepod-network=socket ${url}`);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('tls trusted hello');
+    });
+  });
+
   it('libcurl socket canary completes a real local TLS transfer', async () => {
     await withLocalHttpsServer('tls libcurl hello', async (url) => {
       const sandbox = await createSocketSandbox();

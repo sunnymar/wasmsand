@@ -1,0 +1,9 @@
+{
+  "name": "curl",
+  "files": [
+    {
+      "src": "ca-certificates.crt",
+      "dest": "/etc/ssl/certs/ca-certificates.crt"
+    }
+  ]
+}

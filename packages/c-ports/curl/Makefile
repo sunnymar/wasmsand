@@ -6,6 +6,8 @@ PATCHES_DIR := patches
 BUILD_DIR := build
 WORK_DIR := $(BUILD_DIR)/work
 CANARY_DIR := canaries
+CA_BUNDLE := ca-certificates.crt
+CA_BUNDLE_VFS := /etc/ssl/certs/ca-certificates.crt
 GUEST_COMPAT_INCLUDE := $(abspath ../../guest-compat/include)
 GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod.a
 MBEDTLS_DIR := $(REPO_ROOT)/packages/c-ports/mbedtls
@@ -78,6 +80,7 @@ $(WORK_DIR)/Makefile: $(WORK_DIR)/configure ensure-toolchain ensure-compat ensur
 			--disable-manual \
 			--disable-libcurl-option \
 			--with-mbedtls="$(MBEDTLS_PREFIX)" \
+			--with-ca-bundle="$(CA_BUNDLE_VFS)" \
 			--without-zlib \
 			--without-brotli \
 			--without-zstd \
@@ -147,6 +150,8 @@ copy-fixtures: all
 	cp $(BUILD_DIR)/curl.wasm $(FIXTURES)/curl.wasm
 	cp $(BUILD_DIR)/libcurl-fetch-canary.wasm $(FIXTURES)/libcurl-fetch-canary.wasm
 	cp $(BUILD_DIR)/libcurl-socket-canary.wasm $(FIXTURES)/libcurl-socket-canary.wasm
+	cp $(CA_BUNDLE) $(FIXTURES)/ca-certificates.crt
+	cp manifest.json $(FIXTURES)/curl.manifest.json
 
 clean:
 	rm -rf $(BUILD_DIR)
