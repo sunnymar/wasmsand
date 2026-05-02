@@ -164,9 +164,13 @@ pid_t waitpid(pid_t pid, int *wstatus, int options) {
             return (pid_t)-1;
         }
         exit_code = codepod_host_waitpid_nohang((int)pid);
-        if (exit_code < 0) {
+        if (exit_code == -1) {
             /* Still running: WNOHANG returns 0 with status untouched. */
             return 0;
+        }
+        if (exit_code < 0) {
+            errno = ECHILD;
+            return (pid_t)-1;
         }
     } else {
         char buf[64];
@@ -176,6 +180,10 @@ pid_t waitpid(pid_t pid, int *wstatus, int options) {
             return (pid_t)-1;
         }
         if (waitpid_parse_exit(buf, (size_t)n, &exit_code) != 0) {
+            errno = ECHILD;
+            return (pid_t)-1;
+        }
+        if (exit_code < 0) {
             errno = ECHILD;
             return (pid_t)-1;
         }

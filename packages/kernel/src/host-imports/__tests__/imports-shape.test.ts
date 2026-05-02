@@ -127,3 +127,63 @@ Deno.test("kernel host_spawn releases cloned fd refs when spawnProcess fails", (
   assertEquals(kernel.getReservedProcessCount(), 1);
   kernel.dispose();
 });
+
+Deno.test("kernel host_waitpid only reaps children of the caller", async () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const kernel = new ProcessKernel();
+  const parentPid = kernel.allocPid();
+  const siblingPid = kernel.allocPid();
+  const childPid = kernel.allocPid(parentPid, "child");
+  kernel.releaseProcess(childPid, 5);
+
+  const siblingImports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: siblingPid,
+  });
+  const deniedLen = await (siblingImports.host_waitpid as (...args: number[]) => Promise<number>)(
+    childPid,
+    4096,
+    1024,
+  );
+  assertEquals(readJson(memory, 4096, deniedLen), { pid: childPid, exit_code: -1 });
+  assertEquals(kernel.hasProcess(childPid), true);
+
+  const parentImports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: parentPid,
+  });
+  const waitedLen = await (parentImports.host_waitpid as (...args: number[]) => Promise<number>)(
+    childPid,
+    4096,
+    1024,
+  );
+  assertEquals(readJson(memory, 4096, waitedLen), { pid: childPid, exit_code: 5 });
+  assertEquals(kernel.hasProcess(childPid), false);
+  kernel.dispose();
+});
+
+Deno.test("kernel host_waitpid_nohang distinguishes running from ECHILD", () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const kernel = new ProcessKernel();
+  const parentPid = kernel.allocPid();
+  const siblingPid = kernel.allocPid();
+  const childPid = kernel.allocPid(parentPid, "child");
+
+  const parentImports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: parentPid,
+  });
+  const siblingImports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: siblingPid,
+  });
+
+  assertEquals((parentImports.host_waitpid_nohang as (pid: number) => number)(childPid), -1);
+  assertEquals((siblingImports.host_waitpid_nohang as (pid: number) => number)(childPid), -2);
+  assertEquals((parentImports.host_waitpid_nohang as (pid: number) => number)(999), -2);
+  kernel.dispose();
+});

@@ -246,6 +246,10 @@ export class ProcessKernel {
     return this.parentPids.get(pid) ?? NO_PARENT_PID;
   }
 
+  isChildOf(pid: number, parentPid: number): boolean {
+    return this.parentPids.get(pid) === parentPid;
+  }
+
   killProcess(pid: number, _sig: number): boolean {
     const entry = this.processTable.get(pid);
     if (!entry || entry.state === 'exited') return false;
@@ -287,7 +291,8 @@ export class ProcessKernel {
     }
   }
 
-  async waitpid(pid: number): Promise<number> {
+  async waitpid(pid: number, parentPid?: number): Promise<number> {
+    if (parentPid !== undefined && !this.isChildOf(pid, parentPid)) return -1;
     const entry = this.processTable.get(pid);
     if (!entry) return -1;
     if (entry.state === 'exited') {
@@ -315,21 +320,31 @@ export class ProcessKernel {
 
     return new Promise((resolve) => {
       let settled = false;
+      const settle = (result: { pid: number; exitCode: number } | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
       for (const [pid, entry] of running) {
         entry.waiters.push((exitCode) => {
           if (settled) return;
-          settled = true;
-          if (!this.processTable.has(pid)) return;
+          if (!this.processTable.has(pid)) {
+            // Another waiter may have reaped the entry first. The exit event
+            // still belongs to this waiter; resolve it instead of hanging.
+            settle({ pid, exitCode });
+            return;
+          }
           this.reapProcess(pid);
-          resolve({ pid, exitCode });
+          settle({ pid, exitCode });
         });
       }
     });
   }
 
-  waitpidNohang(pid: number): number {
+  waitpidNohang(pid: number, parentPid?: number): number {
+    if (parentPid !== undefined && !this.isChildOf(pid, parentPid)) return -2;
     const entry = this.processTable.get(pid);
-    if (!entry) return -1;
+    if (!entry) return parentPid === undefined ? -1 : -2;
     if (entry.state === 'exited') {
       const exitCode = entry.exitCode;
       this.reapProcess(pid);

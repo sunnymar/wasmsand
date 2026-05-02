@@ -902,7 +902,6 @@ export class Sandbox {
           },
           spawnProcess: (req, fdTable) => {
             const childPid = kernel.allocPid(pid, req.prog);
-            kernel.registerPending(childPid, req.prog);
             kernel.adoptFdTable(childPid, fdTable);
             const commandName = req.prog.includes('/')
               ? req.prog.split('/').pop() ?? req.prog

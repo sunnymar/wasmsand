@@ -323,7 +323,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_waitpid(pid, out_ptr, out_cap) -> i32
     // Async — must be wrapped with WebAssembly.Suspending for JSPI.
-    // Waits for the child process to exit and writes { exit_code } to the output buffer.
+    // Waits for a child process to exit and writes { pid, exit_code } to the output buffer.
     async host_waitpid(pid: number, outPtr: number, outCap: number): Promise<number> {
       if (!opts.kernel) {
         return writeJson(memory, outPtr, outCap, { exit_code: -1 });
@@ -336,7 +336,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           exit_code: result.exitCode,
         });
       }
-      const exitCode = await opts.kernel.waitpid(pid);
+      const exitCode = await opts.kernel.waitpid(pid, callerPid);
       return writeJson(memory, outPtr, outCap, { pid, exit_code: exitCode });
     },
 
@@ -472,10 +472,11 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     },
 
     // host_waitpid_nohang(pid) -> i32
-    // Non-blocking: returns exit code if process exited, -1 if still running.
+    // Non-blocking: returns exit code if process exited, -1 if still running,
+    // -2 if pid is not a child of the caller.
     host_waitpid_nohang(pid: number): number {
       if (!opts.kernel) return -1;
-      return opts.kernel.waitpidNohang(pid);
+      return opts.kernel.waitpidNohang(pid, callerPid);
     },
 
     // host_list_processes(out_ptr, out_cap) -> i32

@@ -2,6 +2,16 @@ import { describe, it } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { DEFAULT_MAX_PROCESSES, ProcessKernel, ProcessLimitError } from '../kernel.js';
 
+function withTimeout<T>(promise: Promise<T>, ms = 250): Promise<T | 'timeout'> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timeoutId = setTimeout(() => resolve('timeout'), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
+}
+
 describe('ProcessKernel', () => {
   it('uses a finite default process limit', () => {
     const kernel = new ProcessKernel();
@@ -73,6 +83,38 @@ describe('ProcessKernel', () => {
     kernel.dispose();
   });
 
+  it('resolves concurrent waitAnyChild callers when the same child exit wakes both', async () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    const child = kernel.allocPid(parent, 'child');
+
+    const firstWait = kernel.waitAnyChild(parent);
+    const secondWait = kernel.waitAnyChild(parent);
+    kernel.releaseProcess(child, 3);
+
+    const results = await withTimeout(Promise.all([firstWait, secondWait]));
+    expect(results).not.toBe('timeout');
+    expect(results).toEqual([{ pid: child, exitCode: 3 }, { pid: child, exitCode: 3 }]);
+    kernel.dispose();
+  });
+
+  it('only allows a parent to wait on its own child', async () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    const sibling = kernel.allocPid();
+    const child = kernel.allocPid(parent);
+
+    kernel.releaseProcess(child, 4);
+
+    expect(await kernel.waitpid(child, sibling)).toBe(-1);
+    expect(kernel.hasProcess(child)).toBe(true);
+    expect(kernel.waitpidNohang(child, sibling)).toBe(-2);
+
+    expect(await kernel.waitpid(child, parent)).toBe(4);
+    expect(kernel.hasProcess(child)).toBe(false);
+    kernel.dispose();
+  });
+
   it('discardProcess rolls back allocated pid and fd state', () => {
     const kernel = new ProcessKernel({ maxProcesses: 1 });
     const pid = kernel.allocPid();
@@ -129,6 +171,14 @@ describe('ProcessKernel', () => {
     expect(kernel.getPpid(a)).toBe(0);  // NO_PARENT_PID
     expect(kernel.getPpid(b)).toBe(a);
     expect(kernel.getPpid(c)).toBe(b);
+    kernel.dispose();
+  });
+
+  it('records ppid when allocPid also creates a pending command entry', () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    const child = kernel.allocPid(parent, 'cat');
+    expect(kernel.getPpid(child)).toBe(parent);
     kernel.dispose();
   });
 

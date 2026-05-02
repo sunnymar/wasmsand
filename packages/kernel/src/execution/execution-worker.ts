@@ -268,7 +268,6 @@ class WorkerResidentRunner {
           },
           spawnProcess: (req, fdTable) => {
             const childPid = kernel.allocPid(pid, req.prog);
-            kernel.registerPending(childPid, req.prog);
             kernel.adoptFdTable(childPid, fdTable);
             const argv = argvForSpawn(req);
             const childCtx = makeContextWithAllocator(() => childPid);
