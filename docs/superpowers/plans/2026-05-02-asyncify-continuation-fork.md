@@ -88,7 +88,7 @@ Run: `cargo test -q -p cpcc-toolchain`.
 - Modify: `packages/kernel/src/process/loader.ts`
 - Modify: `packages/kernel/src/process/manager.ts`
 
-- [ ] **Step 1: Write failing module-profile tests**
+- [x] **Step 1: Write failing module-profile tests**
 
 Tests cover:
 
@@ -98,19 +98,19 @@ Tests cover:
 - legacy `setjmp` metadata is accepted.
 - `continuations` chooses the Asyncify bridge even when JSPI exists.
 
-- [ ] **Step 2: Implement `analyzeCodepodModule()`**
+- [x] **Step 2: Implement `analyzeCodepodModule()`**
 
 Return a profile containing imports, features, Asyncify exports, and bridge selection. Export one validation function used by loader and manager.
 
-- [ ] **Step 3: Refactor `loadProcess()`**
+- [x] **Step 3: Refactor `loadProcess()`**
 
 Replace local setjmp feature parsing with the shared profile helper.
 
-- [ ] **Step 4: Refactor `ProcessManager.spawn()` and `spawnSync()`**
+- [x] **Step 4: Refactor `ProcessManager.spawn()` and `spawnSync()**
 
 Use the same helper. Legacy sync paths must reject continuation modules they cannot run correctly.
 
-- [ ] **Step 5: Verify module-profile tests**
+- [x] **Step 5: Verify module-profile tests**
 
 Run: `source scripts/dev-init.sh && deno test -A --no-check packages/kernel/src/process/__tests__/module-profile.test.ts`.
 

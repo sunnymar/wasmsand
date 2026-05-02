@@ -14,6 +14,10 @@ import { CooperativeSerialBackend } from "./threads/cooperative-serial.js";
 import { makeIndirectCallTable } from "./threads/indirect-call-table.js";
 import type { ThreadsBackend } from "./threads/backend.js";
 import { defaultWasmModuleCache, sha256Hex, type WasmModuleCache } from "./module-cache.js";
+import {
+  analyzeCodepodModule,
+  validateCodepodModuleProfile,
+} from "./module-profile.js";
 
 export interface LoaderContext {
   vfs: VfsLike;
@@ -71,16 +75,7 @@ export async function loadProcess(
 
   const digest = await sha256Hex(bytes);
   const module = await (ctx.moduleCache ?? defaultWasmModuleCache).getOrCompile(digest, bytes);
-  const importsSetjmp = moduleImportsSetjmp(module);
-  const setjmpMarked = moduleHasCodepodFeature(module, "setjmp");
-  if (importsSetjmp && !setjmpMarked) {
-    throw new Error(
-      "module imports host_setjmp/host_longjmp but lacks codepod.features setjmp marker; rebuild with cpcc CPCC_USE_SETJMP=1",
-    );
-  }
-  if (setjmpMarked && !moduleHasAsyncify(module)) {
-    throw new Error("module declares codepod.features setjmp but is not asyncify-instrumented");
-  }
+  const profile = validateCodepodModuleProfile(analyzeCodepodModule(module));
   const env = opts.env ?? {};
   const cwd = opts.cwd ?? "/";
   const pid = ctx.allocatePid(argv);
@@ -110,7 +105,7 @@ export async function loadProcess(
     },
   });
 
-  const asyncifyBridge = needsSetjmpBridge(module) ||
+  const asyncifyBridge = profile.bridge === "asyncify" ||
       typeof WebAssembly.Suspending !== "function"
     ? new AsyncifyAsyncBridge()
     : null;
@@ -256,50 +251,6 @@ function wrapAsyncImports(
       ) as unknown as WebAssembly.ImportValue;
     }
   }
-}
-
-function needsSetjmpBridge(module: WebAssembly.Module): boolean {
-  if (!moduleHasCodepodFeature(module, "setjmp")) return false;
-  return moduleHasAsyncify(module);
-}
-
-function moduleHasAsyncify(module: WebAssembly.Module): boolean {
-  const exports = WebAssembly.Module.exports(module);
-  return [
-    "asyncify_start_unwind",
-    "asyncify_stop_unwind",
-    "asyncify_start_rewind",
-    "asyncify_stop_rewind",
-    "asyncify_get_state",
-  ].every((name) =>
-    exports.some((exp: WebAssembly.ModuleExportDescriptor) =>
-      exp.kind === "function" && exp.name === name
-    )
-  );
-}
-
-function moduleImportsSetjmp(module: WebAssembly.Module): boolean {
-  return WebAssembly.Module.imports(module).some((imp) =>
-    imp.module === "codepod" &&
-    (imp.name === "host_setjmp" || imp.name === "host_longjmp")
-  );
-}
-
-function moduleHasCodepodFeature(module: WebAssembly.Module, feature: string): boolean {
-  for (const section of WebAssembly.Module.customSections(module, "codepod.features")) {
-    try {
-      const decoded = JSON.parse(new TextDecoder().decode(section)) as {
-        features?: unknown;
-      };
-      if (Array.isArray(decoded.features) && decoded.features.includes(feature)) {
-        return true;
-      }
-    } catch {
-      // Malformed custom sections are ignored here; required-feature checks
-      // still fail closed when the marker is absent.
-    }
-  }
-  return false;
 }
 
 function initAsyncifyBridge(

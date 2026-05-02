@@ -11,7 +11,6 @@ import type { VfsLike } from '../vfs/vfs-like.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
-import { AsyncifyAsyncBridge } from '../async-bridge.js';
 
 import type { SpawnOptions, SpawnResult } from './process.js';
 import { NativeModuleRegistry } from './native-modules.js';
@@ -20,6 +19,10 @@ import { defaultWasmModuleCache, sha256Hex, type WasmModuleCache } from './modul
 export type ToolSource =
   | { kind: 'host'; path: string }
   | { kind: 'vfs'; path: string };
+import {
+  analyzeCodepodModule,
+  validateCodepodModuleProfile,
+} from './module-profile.js';
 
 export class ProcessManager {
   private vfs: VfsLike;
@@ -210,6 +213,26 @@ export class ProcessManager {
     }
     const source = this.resolveToolSource(command);
     const module = await this.loadModule(source);
+    let profile;
+    try {
+      profile = validateCodepodModuleProfile(analyzeCodepodModule(module));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${command}: ${message}\n`,
+        executionTimeMs: 0,
+      };
+    }
+    if (profile.requiresContinuations) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${command}: continuation modules require the generic process loader\n`,
+        executionTimeMs: 0,
+      };
+    }
 
     // Collect stdin data: prefer explicit stdinData, otherwise drain the stdin pipe
     let stdinData: Uint8Array | undefined = opts.stdinData;
@@ -250,8 +273,6 @@ export class ProcessManager {
     const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
 
     let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
-    const setjmpBridge = needsSetjmpBridge(module) ? new AsyncifyAsyncBridge() : null;
-
     if (needsCodepod) {
       let memRef: WebAssembly.Memory | null = null;
       setMemoryRef = (mem: WebAssembly.Memory) => { memRef = mem; };
@@ -270,10 +291,6 @@ export class ProcessManager {
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,
       });
-      if (setjmpBridge) {
-        imports.codepod.host_setjmp = setjmpBridge.hostSetjmp as unknown as WebAssembly.ImportValue;
-        imports.codepod.host_longjmp = setjmpBridge.hostLongjmp as unknown as WebAssembly.ImportValue;
-      }
     }
 
     const instance = await this.adapter.instantiate(module, imports);
@@ -282,9 +299,7 @@ export class ProcessManager {
     if (setMemoryRef) {
       setMemoryRef(instance.exports.memory as WebAssembly.Memory);
     }
-    const startFn = setjmpBridge && initAsyncifyBridge(setjmpBridge, instance)
-      ? setjmpBridge.wrapExportSync(instance.exports._start as () => number)
-      : undefined;
+    const startFn = undefined;
 
     // Check exported memory against limit
     if (opts.memoryBytes !== undefined) {
@@ -406,6 +421,20 @@ export class ProcessManager {
     if (!module) {
       return { exit_code: 127, stdout: '', stderr: `${command}: module not loaded\n` };
     }
+    let profile;
+    try {
+      profile = validateCodepodModuleProfile(analyzeCodepodModule(module));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return { exit_code: 1, stdout: '', stderr: `${command}: ${message}\n` };
+    }
+    if (profile.requiresContinuations) {
+      return {
+        exit_code: 1,
+        stdout: '',
+        stderr: `${command}: continuation modules require the generic process loader\n`,
+      };
+    }
 
     const host = new WasiHost({
       vfs: this.vfs,
@@ -440,8 +469,6 @@ export class ProcessManager {
     const needsCodepod = moduleImportDescs.some(imp => imp.module === 'codepod');
 
     let setMemoryRef: ((mem: WebAssembly.Memory) => void) | null = null;
-    const setjmpBridge = needsSetjmpBridge(module) ? new AsyncifyAsyncBridge() : null;
-
     if (needsCodepod) {
       let memRef: WebAssembly.Memory | null = null;
       setMemoryRef = (mem: WebAssembly.Memory) => { memRef = mem; };
@@ -460,10 +487,6 @@ export class ProcessManager {
         extensionHandler: this.extensionHandler ?? undefined,
         nativeModules: this.nativeModules,
       });
-      if (setjmpBridge) {
-        imports.codepod.host_setjmp = setjmpBridge.hostSetjmp as unknown as WebAssembly.ImportValue;
-        imports.codepod.host_longjmp = setjmpBridge.hostLongjmp as unknown as WebAssembly.ImportValue;
-      }
     }
 
     // Synchronous instantiation (works because Module is already compiled)
@@ -500,9 +523,7 @@ export class ProcessManager {
     if (setMemoryRef) {
       setMemoryRef(instance.exports.memory as WebAssembly.Memory);
     }
-    const startFn = setjmpBridge && initAsyncifyBridge(setjmpBridge, instance)
-      ? setjmpBridge.wrapExportSync(instance.exports._start as () => number)
-      : undefined;
+    const startFn = undefined;
 
     this.currentHost = host;
     const exitCode = host.start(instance, startFn);
@@ -520,63 +541,6 @@ export class ProcessManager {
       } : {}),
     };
   }
-}
-
-function needsSetjmpBridge(module: WebAssembly.Module): boolean {
-  const imports = WebAssembly.Module.imports(module);
-  const exports = WebAssembly.Module.exports(module);
-  const importsSetjmp = imports.some((imp) =>
-    imp.module === 'codepod' &&
-    (imp.name === 'host_setjmp' || imp.name === 'host_longjmp')
-  );
-  if (!importsSetjmp) return false;
-  return [
-    'asyncify_start_unwind',
-    'asyncify_stop_unwind',
-    'asyncify_start_rewind',
-    'asyncify_stop_rewind',
-    'asyncify_get_state',
-  ].every((name) => exports.some((exp) => exp.kind === 'function' && exp.name === name));
-}
-
-function initAsyncifyBridge(
-  bridge: AsyncifyAsyncBridge,
-  instance: WebAssembly.Instance,
-): boolean {
-  const exports = instance.exports;
-  const hasAsyncifyState =
-    typeof exports.asyncify_start_unwind === 'function' &&
-    typeof exports.asyncify_stop_unwind === 'function' &&
-    typeof exports.asyncify_start_rewind === 'function' &&
-    typeof exports.asyncify_stop_rewind === 'function' &&
-    typeof exports.asyncify_get_state === 'function';
-  if (!hasAsyncifyState) return false;
-
-  const memory = exports.memory as WebAssembly.Memory;
-  const addrExport = exports.codepod_asyncify_buf_addr as (() => number) | undefined;
-  const sizeExport = exports.codepod_asyncify_buf_size as (() => number) | undefined;
-  const alloc = exports.__alloc as ((size: number) => number) | undefined;
-
-  let dataAddr: number;
-  let dataSize: number;
-  if (typeof addrExport === 'function' && typeof sizeExport === 'function') {
-    dataAddr = addrExport();
-    dataSize = sizeExport();
-  } else if (typeof alloc === 'function') {
-    dataSize = 65536;
-    dataAddr = alloc(dataSize);
-  } else {
-    throw new Error('asyncify requires codepod_asyncify_buf_addr/size or __alloc exports');
-  }
-
-  if (dataSize < 16) {
-    throw new Error(`asyncify buffer is too small: ${dataSize}`);
-  }
-  const view = new DataView(memory.buffer);
-  view.setUint32(dataAddr, dataAddr + 8, true);
-  view.setUint32(dataAddr + 4, dataAddr + dataSize, true);
-  bridge.initFromInstance(instance, dataAddr, dataSize);
-  return true;
 }
 
 /** Drain all available bytes from a pipe read end into a single Uint8Array. */
