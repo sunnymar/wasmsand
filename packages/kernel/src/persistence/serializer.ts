@@ -17,7 +17,7 @@
  */
 
 import type { VfsLike } from '../vfs/vfs-like.js';
-import type { SerializedState } from './types.js';
+import type { ExportStateOptions, SerializedState } from './types.js';
 
 /** S_TOOL bit — must not be importable from external state blobs. */
 const S_TOOL = 0o100000;
@@ -96,14 +96,25 @@ function crc32(data: Uint8Array): number {
  * Export the full VFS state (files + directories) and optional env vars
  * into a self-describing binary blob.
  */
-export function exportState(vfs: VfsLike, env?: Map<string, string>, excludePaths?: string[]): Uint8Array {
+export function exportState(
+  vfs: VfsLike,
+  env?: Map<string, string>,
+  excludePathsOrOptions?: string[] | ExportStateOptions,
+): Uint8Array {
+  const includeBase = !Array.isArray(excludePathsOrOptions) && excludePathsOrOptions?.includeBase === true;
+  const excludePaths = Array.isArray(excludePathsOrOptions) ? excludePathsOrOptions : undefined;
   const files: SerializedState['files'] = [];
-  walkTree(vfs, '/', files, excludePaths ?? EXCLUDED_PREFIXES);
+  const exportedVfs = includeBase ? vfs : (vfs.exportUpperVfs?.() ?? vfs);
+  walkTree(exportedVfs, '/', files, excludePaths ?? EXCLUDED_PREFIXES);
 
   const state: SerializedState = {
     version: FORMAT_VERSION,
     files,
   };
+  const overlay = includeBase ? undefined : vfs.exportOverlayState?.();
+  if (overlay) {
+    state.overlay = overlay;
+  }
 
   if (env && env.size > 0) {
     state.env = Array.from(env);
@@ -182,29 +193,40 @@ export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string,
   const json = new TextDecoder().decode(jsonBytes);
   const state: SerializedState = JSON.parse(json);
 
-  // Filter out entries targeting system paths
-  const safeFiles = state.files.filter(entry => isSafeImportPath(entry.path));
+  if (state.overlay && !vfs.importOverlayState) {
+    throw new Error('State blob contains overlay state, but target VFS does not support overlays');
+  }
+
+  if (state.overlay) {
+    vfs.importOverlayState!(state.overlay);
+  }
+
+  const targetVfs = state.overlay ? (vfs.exportUpperVfs?.() ?? vfs) : vfs;
+
+  // Filter out entries targeting system paths for legacy/non-overlay imports.
+  // Overlay imports restore an upper layer paired with a validated base id.
+  const safeFiles = state.overlay ? state.files : state.files.filter(entry => isSafeImportPath(entry.path));
 
   // Restore filesystem: directories first, then files, then permissions
-  vfs.withWriteAccess(() => {
+  targetVfs.withWriteAccess(() => {
     for (const entry of safeFiles) {
       if (entry.type === 'dir') {
-        vfs.mkdirp(entry.path);
+        targetVfs.mkdirp(entry.path);
       }
     }
     for (const entry of safeFiles) {
       if (entry.type === 'file') {
         const content = fromBase64(entry.data);
-        vfs.writeFile(entry.path, content);
+        targetVfs.writeFile(entry.path, content);
       }
     }
     // Apply permissions after all entries are created (strip S_TOOL bit)
     for (const entry of safeFiles) {
-      if ((entry.uid !== undefined || entry.gid !== undefined) && vfs.chown) {
-        vfs.chown(entry.path, entry.uid ?? 0, entry.gid ?? 0);
+      if ((entry.uid !== undefined || entry.gid !== undefined) && targetVfs.chown) {
+        targetVfs.chown(entry.path, entry.uid ?? 0, entry.gid ?? 0);
       }
       if (entry.permissions !== undefined) {
-        vfs.chmod(entry.path, entry.permissions & ~S_TOOL);
+        targetVfs.chmod(entry.path, entry.permissions & ~S_TOOL);
       }
     }
   });

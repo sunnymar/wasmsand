@@ -14,6 +14,8 @@ import { NodeAdapter } from '../platform/node-adapter.js';
 import { MemoryBackend } from '../persistence/backend.js';
 import { FsBackend } from '../persistence/fs-backend.js';
 import { PersistenceManager } from '../persistence/manager.js';
+import { OverlayVFS } from '../vfs/overlay-vfs.ts';
+import { MemoryRoot } from '../vfs/__tests__/helpers.ts';
 
 const WASM_DIR = resolve(import.meta.dirname!, '../platform/__tests__/fixtures');
 
@@ -118,6 +120,60 @@ describe('Persistence serializer', () => {
 
       // But our file should be present
       expect(state.files.some((f: any) => f.path === '/tmp/keep.txt')).toBe(true);
+    });
+
+    it('exports overlay state without base file bytes by default', () => {
+      const base = new MemoryRoot('base:test');
+      base.addDir('/opt/base', { uid: 1000, gid: 1000, permissions: 0o755 });
+      base.addFile('/opt/base/readme.txt', 'base', { uid: 1000, gid: 1000, permissions: 0o644 });
+      const vfs = new OverlayVFS({ base, upper: new VFS() });
+      vfs.withWriteAccess(() => vfs.writeFile('/tmp/upper.txt', enc('upper')));
+      vfs.unlink('/opt/base/readme.txt');
+
+      const blob = exportState(vfs);
+      const json = dec(blob.subarray(12));
+
+      expect(json.includes('"data":"YmFzZQ=="')).toBe(false);
+      expect(json.includes('/tmp/upper.txt')).toBe(true);
+      expect(json.includes('/opt/base/readme.txt')).toBe(true);
+      expect(JSON.parse(json).overlay).toEqual({
+        baseId: 'base:test',
+        whiteouts: ['/opt/base/readme.txt'],
+      });
+    });
+
+    it('imports overlay whiteouts and validates the base id before restoring files', () => {
+      const base = new MemoryRoot('base:test');
+      base.addDir('/opt/base', { uid: 1000, gid: 1000, permissions: 0o755 });
+      base.addFile('/opt/base/readme.txt', 'base', { uid: 1000, gid: 1000, permissions: 0o644 });
+      const original = new OverlayVFS({ base, upper: new VFS() });
+      original.withWriteAccess(() => original.writeFile('/tmp/upper.txt', enc('upper')));
+      original.unlink('/opt/base/readme.txt');
+
+      const blob = exportState(original);
+
+      const restored = new OverlayVFS({ base, upper: new VFS() });
+      importState(restored, blob);
+      expect(() => restored.readFile('/opt/base/readme.txt')).toThrow(/ENOENT/);
+      expect(dec(restored.readFile('/tmp/upper.txt'))).toBe('upper');
+
+      const wrongBase = new OverlayVFS({ base: new MemoryRoot('base:wrong'), upper: new VFS() });
+      expect(() => importState(wrongBase, blob)).toThrow(/base id mismatch/);
+      expect(() => wrongBase.readFile('/tmp/upper.txt')).toThrow(/ENOENT/);
+    });
+
+    it('can export a self-contained full overlay view when includeBase is true', () => {
+      const base = new MemoryRoot('base:test');
+      base.addFile('/opt/base/readme.txt', 'base', { uid: 1000, gid: 1000, permissions: 0o644 });
+      const vfs = new OverlayVFS({ base, upper: new VFS() });
+      vfs.withWriteAccess(() => vfs.writeFile('/tmp/upper.txt', enc('upper')));
+
+      const blob = exportState(vfs, undefined, { includeBase: true });
+      const state = JSON.parse(dec(blob.subarray(12)));
+
+      expect(state.overlay).toBeUndefined();
+      expect(state.files.some((f: any) => f.path === '/opt/base/readme.txt' && f.data === 'YmFzZQ==')).toBe(true);
+      expect(state.files.some((f: any) => f.path === '/tmp/upper.txt')).toBe(true);
     });
   });
 

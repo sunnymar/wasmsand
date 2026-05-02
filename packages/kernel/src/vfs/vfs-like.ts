@@ -39,6 +39,9 @@ export interface VfsLike {
   clearFileContents?(): void;
   cowClone?(): VfsLike;
   setOnChange?(cb: (() => void) | null): void;
+  exportUpperVfs?(): VfsLike;
+  exportOverlayState?(): { baseId: string; whiteouts: string[] };
+  importOverlayState?(state: { baseId: string; whiteouts: string[] }): void;
   /**
    * Optional: detect a streaming-capable provider entry (e.g.
    * /dev/urandom, /dev/zero) so the FdTable can skip the

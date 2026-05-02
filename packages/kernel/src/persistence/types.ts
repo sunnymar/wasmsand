@@ -9,6 +9,15 @@ export interface SerializedState {
   version: number;
   files: Array<{ path: string; data: string; type: 'file' | 'dir'; permissions?: number; uid?: number; gid?: number }>;
   env?: [string, string][];
+  overlay?: {
+    baseId: string;
+    whiteouts: string[];
+  };
+}
+
+export interface ExportStateOptions {
+  /** Include bytes visible from read-only base layers instead of only upper changes. */
+  includeBase?: boolean;
 }
 
 /** Configuration for sandbox persistence behaviour. */
