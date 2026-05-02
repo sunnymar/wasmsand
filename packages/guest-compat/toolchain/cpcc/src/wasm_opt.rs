@@ -63,7 +63,7 @@ mod tests {
         assert!(args.contains(&"--enable-nontrapping-float-to-int".to_string()));
         assert!(
             !args.contains(&"--asyncify".to_string()),
-            "default cpcc output must not be asyncify/setjmp-tainted",
+            "default cpcc output must not be asyncify/continuation-tainted",
         );
     }
 

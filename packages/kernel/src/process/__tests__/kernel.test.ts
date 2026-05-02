@@ -56,6 +56,23 @@ describe('ProcessKernel', () => {
     kernel.dispose();
   });
 
+  it('waitAnyChild does not let stale sibling waiters reap later waits', async () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    const first = kernel.allocPid(parent, 'first');
+    const second = kernel.allocPid(parent, 'second');
+
+    const firstWait = kernel.waitAnyChild(parent);
+    kernel.releaseProcess(first, 0);
+    expect(await firstWait).toEqual({ pid: first, exitCode: 0 });
+
+    const secondWait = kernel.waitAnyChild(parent);
+    kernel.releaseProcess(second, 7);
+    expect(await secondWait).toEqual({ pid: second, exitCode: 7 });
+    expect(kernel.hasProcess(second)).toBe(false);
+    kernel.dispose();
+  });
+
   it('discardProcess rolls back allocated pid and fd state', () => {
     const kernel = new ProcessKernel({ maxProcesses: 1 });
     const pid = kernel.allocPid();

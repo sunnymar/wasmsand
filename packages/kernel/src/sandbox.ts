@@ -948,7 +948,35 @@ export class Sandbox {
     const prog = req.prog.includes('/')
       ? req.prog
       : Sandbox.resolveExecutablePathForVfs(vfs, req.prog);
-    return [prog, ...req.args];
+    return Sandbox.expandScriptArgvForSpawn(vfs, [prog, ...req.args]);
+  }
+
+  private static expandScriptArgvForSpawn(vfs: VFS, argv: string[]): string[] {
+    const prog = argv[0];
+    if (!prog) return argv;
+    let bytes: Uint8Array;
+    try {
+      bytes = vfs.readFile(prog);
+    } catch {
+      return argv;
+    }
+    if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x61 && bytes[2] === 0x73 && bytes[3] === 0x6d) {
+      return argv;
+    }
+
+    const firstLine = new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).split(/\r?\n/, 1)[0] ?? '';
+    if (firstLine.startsWith('#!')) {
+      const parts = firstLine.slice(2).trim().split(/\s+/).filter(Boolean);
+      if (parts.length > 0) {
+        const [interpreter, ...interpreterArgs] = parts;
+        const resolved = interpreter.includes('/')
+          ? interpreter
+          : Sandbox.resolveExecutablePathForVfs(vfs, interpreter);
+        return [resolved, ...interpreterArgs, prog, ...argv.slice(1)];
+      }
+    }
+
+    return ['/bin/sh', prog, ...argv.slice(1)];
   }
 
   private static resolveExecutablePathForVfs(vfs: VfsLike, prog: string): string {

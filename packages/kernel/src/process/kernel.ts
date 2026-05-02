@@ -303,6 +303,30 @@ export class ProcessKernel {
     });
   }
 
+  async waitAnyChild(parentPid: number): Promise<{ pid: number; exitCode: number } | null> {
+    const exited = this.findExitedChild(parentPid);
+    if (exited) {
+      this.reapProcess(exited.pid);
+      return { pid: exited.pid, exitCode: exited.exitCode };
+    }
+
+    const running = this.findRunningChildren(parentPid);
+    if (running.length === 0) return null;
+
+    return new Promise((resolve) => {
+      let settled = false;
+      for (const [pid, entry] of running) {
+        entry.waiters.push((exitCode) => {
+          if (settled) return;
+          settled = true;
+          if (!this.processTable.has(pid)) return;
+          this.reapProcess(pid);
+          resolve({ pid, exitCode });
+        });
+      }
+    });
+  }
+
   waitpidNohang(pid: number): number {
     const entry = this.processTable.get(pid);
     if (!entry) return -1;
@@ -312,6 +336,23 @@ export class ProcessKernel {
       return exitCode;
     }
     return -1;
+  }
+
+  private findExitedChild(parentPid: number): { pid: number; exitCode: number } | null {
+    for (const [pid, entry] of this.processTable) {
+      if (this.parentPids.get(pid) !== parentPid) continue;
+      if (entry.state === 'exited') return { pid, exitCode: entry.exitCode };
+    }
+    return null;
+  }
+
+  private findRunningChildren(parentPid: number): Array<[number, ProcessEntry]> {
+    const result: Array<[number, ProcessEntry]> = [];
+    for (const [pid, entry] of this.processTable) {
+      if (this.parentPids.get(pid) !== parentPid) continue;
+      if (entry.state !== 'exited') result.push([pid, entry]);
+    }
+    return result;
   }
 
   hasProcess(pid: number): boolean {

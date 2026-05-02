@@ -328,8 +328,16 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       if (!opts.kernel) {
         return writeJson(memory, outPtr, outCap, { exit_code: -1 });
       }
+      if (pid <= 0) {
+        const result = await opts.kernel.waitAnyChild(callerPid);
+        if (!result) return writeJson(memory, outPtr, outCap, { pid: -1, exit_code: -1 });
+        return writeJson(memory, outPtr, outCap, {
+          pid: result.pid,
+          exit_code: result.exitCode,
+        });
+      }
       const exitCode = await opts.kernel.waitpid(pid);
-      return writeJson(memory, outPtr, outCap, { exit_code: exitCode });
+      return writeJson(memory, outPtr, outCap, { pid, exit_code: exitCode });
     },
 
     // host_close_fd(fd) -> i32

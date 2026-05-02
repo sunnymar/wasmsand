@@ -140,6 +140,9 @@ export async function loadProcess(
     ...ctx.buildKernelImports(pid, memoryProxy, wasi, threadsBackend),
     ...(opts.extraCodepodImports?.(memoryProxy, wasi) ?? {}),
   };
+  if (!codepodImports.host_spawn_async && codepodImports.host_spawn) {
+    codepodImports.host_spawn_async = codepodImports.host_spawn;
+  }
   if (asyncifyBridge) {
     codepodImports.host_setjmp = asyncifyBridge
       .hostSetjmp as unknown as WebAssembly.ImportValue;

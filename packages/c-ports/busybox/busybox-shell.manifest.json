@@ -1,7 +1,7 @@
 {
   "name": "busybox-shell",
   "multicall": {
-    "applets": ["ash", "sh"]
+    "applets": ["ash", "cat", "chmod", "echo", "false", "printf", "sh", "test", "true"]
   },
   "symlinks": [
     {

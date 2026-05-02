@@ -13,6 +13,7 @@ SHELL_SRC_DIR := src-shell
 COMPAT_INCLUDE := $(abspath compat/include)
 GUEST_COMPAT_INCLUDE := $(abspath ../../guest-compat/include)
 GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod_guest_compat.a
+GUEST_CONTINUATIONS_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod_continuations.a
 
 CPCC := $(REPO_ROOT)/target/release/cpcc
 CPAR := $(REPO_ROOT)/target/release/cpar
@@ -43,7 +44,7 @@ ensure-toolchain:
 	cd $(REPO_ROOT) && cargo build --release -p cpcc-toolchain
 
 ensure-compat:
-	$(MAKE) -C $(REPO_ROOT)/packages/guest-compat lib
+	$(MAKE) -C $(REPO_ROOT)/packages/guest-compat lib build/libcodepod_continuations.a
 
 fetch:
 	mkdir -p $(BUILD_DIR) $(SRC_DIR)
@@ -167,6 +168,8 @@ $(BUILD_DIR)/busybox.wasm: configure ensure-compat
 $(SHELL_BUILD_DIR)/busybox-shell.wasm: configure-shell ensure-compat
 	cd $(SHELL_SRC_DIR) && \
 		CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
+		CPCC_CONTINUATIONS_ARCHIVE="$(GUEST_CONTINUATIONS_LIB)" \
+		CPCC_USE_CONTINUATIONS=1 \
 		CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
 		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
 			EXTRA_CFLAGS="$(WASI_EMULATED_CFLAGS)" \

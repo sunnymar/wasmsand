@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdarg.h>
 
 CODEPOD_DECLARE_MARKER(dup);
 CODEPOD_DECLARE_MARKER(dup3);
@@ -82,4 +83,55 @@ int dup3(int oldfd, int newfd, int flags) {
   /* O_CLOEXEC is a no-op in codepod (no exec()), so we drop the flag
    * and forward to dup2 — same renumber semantics. */
   return dup2(oldfd, newfd);
+}
+
+int fcntl(int fd, int cmd, ...) {
+  if (
+    cmd == F_DUPFD
+#ifdef F_DUPFD_CLOEXEC
+    || cmd == F_DUPFD_CLOEXEC
+#endif
+  ) {
+      va_list ap;
+      va_start(ap, cmd);
+      int arg = va_arg(ap, int);
+      va_end(ap);
+      if (fd < 0 || arg < 0) {
+        errno = EINVAL;
+        return -1;
+      }
+      int newfd = dup(fd);
+      if (newfd < 0) return -1;
+      if (newfd >= arg) return newfd;
+
+      int opened[64];
+      int opened_count = 0;
+      opened[opened_count++] = newfd;
+      while (newfd >= 0 && newfd < arg && opened_count < (int)(sizeof(opened) / sizeof(opened[0]))) {
+        newfd = dup(fd);
+        if (newfd < 0) break;
+        opened[opened_count++] = newfd;
+      }
+      for (int i = 0; i < opened_count; ++i) {
+        if (opened[i] != newfd) close(opened[i]);
+      }
+      if (newfd >= arg) return newfd;
+      if (newfd >= 0) close(newfd);
+      errno = EMFILE;
+      return -1;
+  }
+
+  switch (cmd) {
+    case F_GETFD:
+      return 0;
+    case F_SETFD:
+      return 0;
+    case F_GETFL:
+      return 0;
+    case F_SETFL:
+      return 0;
+    default:
+      errno = EINVAL;
+      return -1;
+  }
 }

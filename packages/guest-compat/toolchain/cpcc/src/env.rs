@@ -36,6 +36,7 @@ impl Env {
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
             continuations_archive: std::env::var_os("CPCC_CONTINUATIONS_ARCHIVE")
+                .or_else(|| std::env::var_os("CPCC_POSIX_CONTINUATION_ARCHIVE"))
                 .or_else(|| std::env::var_os("CPCC_SETJMP_ARCHIVE"))
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)
@@ -61,6 +62,7 @@ impl Env {
                 WasmOptMode::Default
             },
             use_continuations: std::env::var_os("CPCC_USE_CONTINUATIONS")
+                .or_else(|| std::env::var_os("CPCC_USE_POSIX_CONTINUATIONS"))
                 .or_else(|| std::env::var_os("CPCC_USE_SETJMP"))
                 .map(|v| v != "0" && !v.is_empty())
                 .unwrap_or(false),

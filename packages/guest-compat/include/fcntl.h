@@ -18,4 +18,14 @@
 
 #include_next <fcntl.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int fcntl(int fd, int cmd, ...);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

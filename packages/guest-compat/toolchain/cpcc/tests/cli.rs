@@ -99,8 +99,8 @@ fn dry_run_injects_compat_archive_and_include_first() {
         .env("WASI_SDK_PATH", root)
         .env("CPCC_ARCHIVE", "/fake/libcodepod_guest_compat.a")
         .env("CPCC_INCLUDE", "/fake/include")
-        .env("CPCC_SKIP_VERSION_CHECK", "1")
         .env("CPCC_MARKERS", "1")
+        .env("CPCC_SKIP_VERSION_CHECK", "1")
         .arg("--dry-run")
         .arg("foo.c")
         .arg("-o")
@@ -164,6 +164,7 @@ fn dry_run_marks_continuation_opt_in_builds() {
         .unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("-DCODEPOD_USE_CONTINUATIONS=1"), "{stdout}");
+    assert!(stdout.contains("-DCODEPOD_USE_SETJMP=1"), "{stdout}");
     assert!(stdout.contains("/fake/libcodepod_continuations.a"), "{stdout}");
 }
 

@@ -1,6 +1,7 @@
 #ifndef CODEPOD_RUNTIME_H
 #define CODEPOD_RUNTIME_H
 
+#include <stdint.h>
 #include <stddef.h>
 #include <stdint.h>
 
