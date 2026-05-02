@@ -438,7 +438,7 @@ Expected: tests pass and commit succeeds.
 - Test helper: `packages/kernel/src/vfs/__tests__/helpers.ts`
 - Modify: `packages/kernel/src/index.ts`
 
-- [ ] **Step 1: Write failing overlay tests**
+- [x] **Step 1: Write failing overlay tests**
 
 Create `packages/kernel/src/vfs/__tests__/overlay-vfs.test.ts`:
 
@@ -920,7 +920,7 @@ describe("OverlayVFS", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -931,7 +931,7 @@ deno test -A --no-check packages/kernel/src/vfs/__tests__/overlay-vfs.test.ts
 
 Expected: FAIL because `overlay-vfs.ts` does not exist.
 
-- [ ] **Step 3: Implement overlay semantics**
+- [x] **Step 3: Implement overlay semantics**
 
 Create `packages/kernel/src/vfs/overlay-vfs.ts`:
 
@@ -1577,7 +1577,7 @@ export class OverlayVFS implements VfsLike {
 
 Keep `RootProvider` synchronous for this slice because WASI and `VfsLike` are synchronous today. Browser/custom storage providers should expose a synchronous facade over already-mounted data in a later task; do not make all VFS calls async in this plan.
 
-- [ ] **Step 4: Export overlay API**
+- [x] **Step 4: Export overlay API**
 
 Add to `packages/kernel/src/index.ts`:
 
@@ -1587,7 +1587,7 @@ export type { OverlayState, OverlayVFSOptions } from "./vfs/overlay-vfs.js";
 export type { RootProvider, RootProviderStat } from "./vfs/root-provider.js";
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
