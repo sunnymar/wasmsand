@@ -19,11 +19,12 @@
 
 import type { FetchRedirectMode, NetworkBridgeLike } from '../network/bridge.js';
 import type { SocketBackend, SocketListenPolicy, SocketPortMapping } from '../network/socket-backend.js';
-import { createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
+import { createLoopbackSocketBackend, createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 import type { NativeModuleRegistry } from '../process/native-modules.js';
 import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
 import type { WasiHost } from '../wasi/wasi-host.js';
+import type { VfsLike } from '../vfs/vfs-like.js';
 import type { FdTarget } from '../wasi/fd-target.js';
 import { createStaticTarget } from '../wasi/fd-target.js';
 import { WASI_FDFLAGS_NONBLOCK } from '../wasi/types.ts';
@@ -39,6 +40,9 @@ export interface KernelImportsOptions {
 
   /** Process kernel for pipe/spawn/waitpid/close_fd. Optional until Task 8. */
   kernel?: ProcessKernel;
+
+  /** VFS backing this process. Used by generic file metadata imports. */
+  vfs?: VfsLike;
 
   /** Network bridge for synchronous HTTP fetch from WASM. */
   networkBridge?: NetworkBridgeLike;
@@ -104,7 +108,11 @@ export interface KernelImportsOptions {
 export function createKernelImports(opts: KernelImportsOptions): Record<string, WebAssembly.ImportValue> {
   const { memory } = opts;
   const callerPid = opts.callerPid ?? 0;
-  const socketBackend = opts.socketBackend ?? (opts.networkBridge ? createNetworkBridgeSocketBackend(opts.networkBridge) : undefined);
+  const bridgeSocketBackend = opts.networkBridge ? createNetworkBridgeSocketBackend(opts.networkBridge) : undefined;
+  const socketBackend = opts.socketBackend ??
+    (opts.serverSockets?.allowLoopback === true
+      ? createLoopbackSocketBackend(bridgeSocketBackend)
+      : bridgeSocketBackend);
   const socketLocalHost = opts.socketLocalHost ?? '10.0.2.15';
   const socketLocalPortForFd = (fd: number) => 49152 + (Math.max(0, fd - 3) % 16384);
 
@@ -114,6 +122,25 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       binary += String.fromCharCode(data[i]);
     }
     return btoa(binary);
+  }
+
+  function errnoToPosix(err: unknown): number {
+    if (err instanceof Error && 'errno' in err) {
+      switch ((err as { errno?: string }).errno) {
+        case 'ENOENT':
+          return 2;
+        case 'EACCES':
+        case 'EROFS':
+          return 13;
+        case 'ENOTDIR':
+          return 20;
+        case 'EISDIR':
+          return 21;
+        case 'ENOSPC':
+          return 28;
+      }
+    }
+    return 5;
   }
 
   function base64ToBytes(value: string): Uint8Array {
@@ -308,6 +335,19 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       if (!exclusive && (operation & LOCK_SH) === 0) return -22; // EINVAL
       const errno = opts.kernel.lockFile(callerPid, fd, exclusive);
       return errno === 0 ? 0 : -errno;
+    },
+
+    // host_chmod(path_ptr, path_len, mode) -> i32
+    // Generic VFS metadata operation used by guest libc chmod(2).
+    host_chmod(pathPtr: number, pathLen: number, mode: number): number {
+      if (!opts.vfs) return -38; // ENOSYS
+      try {
+        const path = readString(memory, pathPtr, pathLen);
+        opts.vfs.chmod(path, mode);
+        return 0;
+      } catch (err) {
+        return -errnoToPosix(err);
+      }
     },
 
     // host_read_fd(fd, out_ptr, out_cap) -> i32
@@ -510,7 +550,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         socket: null,
         refs: 1,
         send: (socket, dataB64) => socketBackend?.send(socket, dataB64) ?? { ok: false, error: 'networking not configured' },
-        recv: (socket, maxBytes) => socketBackend?.recv(socket, maxBytes) ?? { ok: false, error: 'networking not configured' },
+        recv: (socket, maxBytes, recvOpts) => socketBackend?.recv(socket, maxBytes, recvOpts) ?? { ok: false, error: 'networking not configured' },
         setNoDelay: (socket, enabled) => socketBackend?.setNoDelay?.(socket, enabled) ?? { ok: false, error: 'TCP_NODELAY not supported by socket backend' },
         close: (socket) => {
           socketBackend?.close(socket);
@@ -754,10 +794,9 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           }
           return writeJson(memory, outPtr, outCap, { ok: true, data_b64: bytesToBase64(chunk) });
         }
-        if (((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0) {
-          return writeJson(memory, outPtr, outCap, { ok: false, error: 'EAGAIN' });
-        }
-        const result = socketBackend.recv(target.socket, maxBytes);
+        const result = socketBackend.recv(target.socket, maxBytes, {
+          nonblocking: ((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0,
+        });
         if (peek && result.ok) {
           const data = base64ToBytes(result.data_b64 ?? '');
           target.peekBuffer = target.peekBuffer ? concatBytes(target.peekBuffer, data) : data;

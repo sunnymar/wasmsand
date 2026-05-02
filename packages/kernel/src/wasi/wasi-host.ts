@@ -717,11 +717,6 @@ export class WasiHost {
           case 'socket': {
             if (target.socket === null) return WASI_EBADF;
             if (target.readShutdown) break;
-            if (((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0) {
-              if (!target.peekBuffer || target.peekBuffer.byteLength === 0) {
-                return WASI_EAGAIN;
-              }
-            }
             if (target.peekBuffer && target.peekBuffer.byteLength > 0) {
               const toRead = Math.min(iov.len, target.peekBuffer.byteLength);
               const bytes = this.getBytes();
@@ -735,8 +730,10 @@ export class WasiHost {
               }
               continue;
             }
-            const result = target.recv(target.socket, iov.len);
-            if (!result.ok) return WASI_EIO;
+            const result = target.recv(target.socket, iov.len, {
+              nonblocking: ((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0,
+            });
+            if (!result.ok) return result.error === 'EAGAIN' ? WASI_EAGAIN : WASI_EIO;
             const data = result.data_b64 !== undefined
               ? base64ToBytes(result.data_b64)
               : this.encoder.encode(result.data ?? '');
@@ -844,7 +841,11 @@ export class WasiHost {
   private fdClose(fd: number): number {
     if (this.ioFds.has(fd)) {
       if (this.kernel && this.pid !== undefined) {
-        return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+        try {
+          return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+        } catch (err) {
+          return fdErrorToWasi(err);
+        }
       }
       return WASI_EBADF;
     }
@@ -852,12 +853,20 @@ export class WasiHost {
     if (this.kernel && this.pid !== undefined) {
       const target = this.kernel.getFdTarget(this.pid, fd);
       if (target?.type === 'vfs_file') {
-        return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+        try {
+          return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+        } catch (err) {
+          return fdErrorToWasi(err);
+        }
       }
     }
 
     if (this.kernel && this.pid !== undefined && fd >= KERNEL_FD_BASE) {
-      return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+      try {
+        return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+      } catch (err) {
+        return fdErrorToWasi(err);
+      }
     }
 
     try {
@@ -1569,6 +1578,9 @@ export class WasiHost {
           } else if (type === WASI_EVENTTYPE_FD_WRITE && target.type === 'pipe_write') {
             ready = target.pipe.hasCapacity;
             hangup = target.pipe.closed;
+          } else if (target.type === 'socket') {
+            ready = true;
+            nbytes = BigInt(1);
           } else if (target.type === 'static') {
             ready = true;
             nbytes = BigInt(target.data.byteLength - target.offset);

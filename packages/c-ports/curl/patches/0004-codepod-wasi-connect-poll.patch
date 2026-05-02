@@ -1,0 +1,20 @@
+diff --git a/lib/cf-socket.c b/lib/cf-socket.c
+index 6d6b9d8..a9f1e7c 100644
+--- a/lib/cf-socket.c
++++ b/lib/cf-socket.c
+@@ -1313,7 +1313,14 @@ static CURLcode cf_socket_connect(struct Curl_cfilter *cf,
+     }
+   }
+   else if(rc & CURL_CSELECT_ERR) {
+-    (void)verifyconnect(ctx->sock, &ctx->error);
++    if(verifyconnect(ctx->sock, &ctx->error)) {
++      ctx->connected_at = *Curl_pgrs_now(data);
++      set_local_ip(cf, data);
++      *done = TRUE;
++      cf->connected = TRUE;
++      CURL_TRC_CF(data, cf, "connected on fd=%" FMT_SOCKET_T, ctx->sock);
++      return CURLE_OK;
++    }
+     result = CURLE_COULDNT_CONNECT;
+   }
+ 

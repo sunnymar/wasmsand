@@ -350,6 +350,11 @@ export class NetworkBridge implements NetworkBridgeLike {
             resolve();
             return;
           }
+          if (req.nonblocking) {
+            writeErr('EAGAIN');
+            resolve();
+            return;
+          }
           // No data available yet — wait for readable or end
           let settled = false;
           const onReadable = () => {

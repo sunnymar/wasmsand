@@ -73,7 +73,7 @@ $(WORK_DIR)/Makefile: $(WORK_DIR)/configure ensure-toolchain ensure-compat ensur
 			--disable-shared \
 			--enable-static \
 			--disable-threaded-resolver \
-			--disable-verbose \
+			--disable-ipv6 \
 			--disable-docs \
 			--disable-manual \
 			--disable-libcurl-option \

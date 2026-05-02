@@ -25,7 +25,7 @@ export type FdTarget =
       readShutdown?: boolean;
       writeShutdown?: boolean;
       send: (socket: SocketHandle, dataB64: string) => SocketBackendResult;
-      recv: (socket: SocketHandle, maxBytes: number) => SocketBackendResult;
+      recv: (socket: SocketHandle, maxBytes: number, opts?: { nonblocking?: boolean }) => SocketBackendResult;
       setNoDelay?: (socket: SocketHandle, enabled: boolean) => SocketBackendResult;
       close: (socket: SocketHandle) => void;
       closeListener?: (listener: SocketListenerHandle) => void;

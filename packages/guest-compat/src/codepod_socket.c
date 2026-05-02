@@ -59,6 +59,7 @@ CODEPOD_DEFINE_MARKER(recv,     0x72656376u) /* "recv" */
 CODEPOD_DEFINE_MARKER(shutdown, 0x73687574u) /* "shut" */
 
 #define CODEPOD_SOCKET_RESP_CAP 4096
+#define CODEPOD_SOCKET_RECV_MAX_RAW 3000
 
 /* wasi-libc already ships strong definitions for some POSIX socket names.
  * cpcc/cargo-codepod pass --wrap for the duplicate-owned symbols we implement
@@ -583,6 +584,10 @@ static ssize_t codepod_recv_impl(int sockfd, void *buf, size_t len, int flags) {
     return -1;
   }
 
+  if (len > CODEPOD_SOCKET_RECV_MAX_RAW) {
+    len = CODEPOD_SOCKET_RECV_MAX_RAW;
+  }
+
   req_len = snprintf(
     req,
     sizeof(req),
@@ -703,24 +708,23 @@ static int codepod_getsockopt_impl(int sockfd, int level, int optname, void *opt
     return -1;
   }
 
-  if (level == SOL_SOCKET) {
-    switch (optname) {
-      case SO_TYPE:
-        value = SOCK_STREAM;
-        break;
-      case SO_ERROR:
+  (void)level;
+
+  switch (optname) {
+    case SO_TYPE:
+      value = SOCK_STREAM;
+      break;
+    case SO_ERROR:
 #if CODEPOD_SO_ERROR != SO_ERROR
-      case CODEPOD_SO_ERROR:
+    case CODEPOD_SO_ERROR:
 #endif
-        value = 0;
-        break;
-      default:
-        errno = EOPNOTSUPP;
-        return -1;
-    }
-  } else {
-    if ((level == IPPROTO_TCP || level == CODEPOD_IPPROTO_TCP)
-        && (optname == TCP_NODELAY || optname == CODEPOD_TCP_NODELAY)) {
+      value = 0;
+      break;
+    case TCP_NODELAY:
+#if CODEPOD_TCP_NODELAY != TCP_NODELAY
+    case CODEPOD_TCP_NODELAY:
+#endif
+    {
       char req[128];
       char resp[CODEPOD_SOCKET_RESP_CAP];
       int req_len = snprintf(req, sizeof(req), "{\"fd\":%d,\"option\":\"no_delay\"}", sockfd);
@@ -735,14 +739,16 @@ static int codepod_getsockopt_impl(int sockfd, int level, int optname, void *opt
         errno = EOPNOTSUPP;
         return -1;
       }
-    } else {
+      break;
+    }
+    default:
       errno = EOPNOTSUPP;
       return -1;
-    }
   }
 
   memcpy(optval, &value, sizeof(value));
   *optlen = (socklen_t)sizeof(value);
+  errno = 0;
   return 0;
 }
 

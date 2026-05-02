@@ -70,6 +70,64 @@ describe('curl/libcurl conformance', () => {
     return { sandbox, bridge };
   }
 
+  async function createSocketSandbox() {
+    sandbox = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      adapter: new NodeAdapter(),
+      network: { allowedHosts: ['127.0.0.1', 'localhost'] },
+    });
+    return sandbox;
+  }
+
+  async function readFirstLine(stream: ReadableStream<Uint8Array>): Promise<string> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('TLS test server exited before reporting a port');
+      text += decoder.decode(value, { stream: true });
+      const newline = text.indexOf('\n');
+      if (newline !== -1) {
+        const line = text.slice(0, newline);
+        await reader.cancel();
+        return line;
+      }
+    }
+  }
+
+  async function withLocalHttpsServer(body: string, fn: (url: string) => Promise<void>) {
+    const certPath = resolve(import.meta.dirname!, 'fixtures/tls/server-cert.pem');
+    const keyPath = resolve(import.meta.dirname!, 'fixtures/tls/server-key.pem');
+    const script = `
+      import { createServer } from "node:https";
+      const cert = await Deno.readTextFile(${JSON.stringify(certPath)});
+      const key = await Deno.readTextFile(${JSON.stringify(keyPath)});
+      const server = createServer({ key, cert }, (_req, res) => {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end(${JSON.stringify(body)});
+      });
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const addr = server.address();
+      if (!addr || typeof addr === "string") throw new Error("expected TCP listener address");
+      console.log(JSON.stringify({ port: addr.port }));
+      await new Promise(() => {});
+    `;
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ['eval', '--no-check', script],
+      stdout: 'piped',
+      stderr: 'inherit',
+    }).spawn();
+    const firstLine = await readFirstLine(child.stdout);
+    const { port } = JSON.parse(firstLine) as { port: number };
+    try {
+      await fn(`https://127.0.0.1:${port}/data`);
+    } finally {
+      child.kill('SIGTERM');
+      await child.status.catch(() => undefined);
+    }
+  }
+
   it('curl --version reports curl', async () => {
     const { sandbox } = await createSandbox();
     const result = await sandbox.run('curl --version');
@@ -184,6 +242,25 @@ describe('curl/libcurl conformance', () => {
 
   it.skip('socket-forced libcurl canary uses socket backend when available', () => {
     // Deferred until deterministic in-sandbox HTTP listener exists.
+  });
+
+  it('socket-forced curl completes a real local TLS transfer', async () => {
+    await withLocalHttpsServer('tls socket hello', async (url) => {
+      const sandbox = await createSocketSandbox();
+      const result = await sandbox.run(`curl --codepod-network=socket -k ${url}`);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('tls socket hello');
+    });
+  });
+
+  it('libcurl socket canary completes a real local TLS transfer', async () => {
+    await withLocalHttpsServer('tls libcurl hello', async (url) => {
+      const sandbox = await createSocketSandbox();
+      const result = await sandbox.run(`libcurl-socket-canary --insecure ${url}`);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('status=200');
+      expect(result.stdout).toContain('tls libcurl hello');
+    });
   });
 
   it('socket-forced curl fails without falling back to fetch when socket backend is unavailable', async () => {
