@@ -5,6 +5,7 @@
  * accept either the real VFS (main thread) or VfsProxy (Worker thread).
  */
 import type { DirEntry, StatResult } from './inode.js';
+import type { VirtualProvider } from './provider.js';
 
 export interface VfsLike {
   readFile(path: string): Uint8Array;
@@ -31,6 +32,13 @@ export interface VfsLike {
   chmod(path: string, mode: number): void;
   chown?(path: string, uid: number, gid: number): void;
   withWriteAccess(fn: () => void): void;
+  mount?(mountPath: string, provider: VirtualProvider): void;
+  snapshot?(): string;
+  restore?(id: string): void;
+  getProviderPaths?(): string[];
+  clearFileContents?(): void;
+  cowClone?(): VfsLike;
+  setOnChange?(cb: (() => void) | null): void;
   /**
    * Optional: detect a streaming-capable provider entry (e.g.
    * /dev/urandom, /dev/zero) so the FdTable can skip the

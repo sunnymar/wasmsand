@@ -6,7 +6,7 @@
  */
 
 import type { Worker } from 'node:worker_threads';
-import type { VFS } from '../vfs/vfs.js';
+import type { VfsLike } from '../vfs/vfs-like.js';
 import type { RunResult } from '../run-result.js';
 import {
   SAB_SIZE,
@@ -19,7 +19,7 @@ import { VfsError } from '../vfs/inode.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
 
 export interface WorkerConfig {
-  vfs: VFS;
+  vfs: VfsLike;
   wasmDir: string;
   shellExecWasmPath: string;
   toolRegistry: [string, string][];

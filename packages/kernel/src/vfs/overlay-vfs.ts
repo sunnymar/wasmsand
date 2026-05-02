@@ -58,7 +58,8 @@ function ancestorPaths(path: string): string[] {
 }
 
 function isEnoent(error: unknown): boolean {
-  return error instanceof VfsError && error.errno === 'ENOENT';
+  return (error instanceof VfsError && error.errno === 'ENOENT') ||
+    (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'ENOENT');
 }
 
 function isEexist(error: unknown): boolean {
@@ -80,6 +81,7 @@ function canWrite(stat: StatResult, credential: FsCredential): boolean {
 
 export class OverlayVFS implements VfsLike {
   private readonly whiteouts = new Set<string>();
+  private readonly overlaySnapshots = new Map<string, string[]>();
   private readonly credential: FsCredential;
   private privileged = false;
 
@@ -118,6 +120,23 @@ export class OverlayVFS implements VfsLike {
     path = normalizeOverlayPath(path);
     const wasWhiteouted = this.whiteouts.has(path);
     if (!this.privileged) this.assertCanWritePath(path, wasWhiteouted);
+    let shouldCopyUpMetadata = false;
+    if (!wasWhiteouted) {
+      try {
+        this.options.upper.lstat(path);
+      } catch (e) {
+        if (!isEnoent(e)) throw e;
+        try {
+          const baseStat = this.options.base.lstat(path);
+          shouldCopyUpMetadata = baseStat.type === 'file';
+        } catch (baseErr) {
+          if (!isEnoent(baseErr)) throw baseErr;
+        }
+      }
+    }
+    if (shouldCopyUpMetadata) {
+      this.copyUpMetadataOnly(path);
+    }
     this.ensureUpperParentDirectory(path);
     this.options.upper.withWriteAccess(() => {
       this.options.upper.writeFile(path, data);
@@ -353,6 +372,39 @@ export class OverlayVFS implements VfsLike {
     });
     clone.importOverlayState(this.exportOverlayState());
     return clone;
+  }
+
+  snapshot(): string {
+    const upper = this.options.upper as VfsLike & { snapshot?: () => string };
+    if (!upper.snapshot) throw new Error('OverlayVFS upper layer does not support snapshot()');
+    const id = upper.snapshot();
+    this.overlaySnapshots.set(id, Array.from(this.whiteouts));
+    return id;
+  }
+
+  restore(id: string): void {
+    const upper = this.options.upper as VfsLike & { restore?: (id: string) => void };
+    if (!upper.restore) throw new Error('OverlayVFS upper layer does not support restore()');
+    upper.restore(id);
+    this.whiteouts.clear();
+    for (const path of this.overlaySnapshots.get(id) ?? []) this.whiteouts.add(path);
+  }
+
+  getProviderPaths(): string[] {
+    const upper = this.options.upper as VfsLike & { getProviderPaths?: () => string[] };
+    return upper.getProviderPaths?.() ?? [];
+  }
+
+  clearFileContents(): void {
+    const upper = this.options.upper as VfsLike & { clearFileContents?: () => void };
+    if (!upper.clearFileContents) throw new Error('OverlayVFS upper layer does not support clearFileContents()');
+    upper.clearFileContents();
+  }
+
+  setOnChange(cb: (() => void) | null): void {
+    const upper = this.options.upper as VfsLike & { setOnChange?: (cb: (() => void) | null) => void };
+    if (!upper.setOnChange) throw new Error('OverlayVFS upper layer does not support setOnChange()');
+    upper.setOnChange(cb);
   }
 
   private copyUpMetadataOnly(path: string): void {
