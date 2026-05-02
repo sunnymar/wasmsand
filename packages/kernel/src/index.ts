@@ -15,6 +15,8 @@ export { BrowserAdapter } from './platform/browser-adapter.js';
 // Node consumers: import { NodeAdapter } from '@codepod/kernel/node'
 export type { PlatformAdapter } from './platform/adapter.js';
 export type { SpawnOptions, SpawnResult } from './process/process.js';
+export type { WasmModuleCache, WasmModuleCacheStats } from './process/module-cache.js';
+export { MemoryWasmModuleCache, defaultWasmModuleCache, sha256Hex } from './process/module-cache.js';
 export type { RunResult } from './run-result.js';
 export { NetworkGateway, NetworkAccessDenied } from './network/gateway.js';
 export type { NetworkPolicy } from './network/gateway.js';

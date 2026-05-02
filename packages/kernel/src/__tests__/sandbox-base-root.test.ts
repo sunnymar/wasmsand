@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Sandbox } from '../sandbox.ts';
 import { NodeAdapter } from '../platform/node-adapter.ts';
+import { MemoryWasmModuleCache } from '../process/module-cache.ts';
 
 const WASM_DIR = resolve(decodeURIComponent(new URL('../platform/__tests__/fixtures', import.meta.url).pathname));
 const enc = new TextEncoder();
@@ -106,6 +107,39 @@ describe('Sandbox baseRoot', { sanitizeResources: false, sanitizeOps: false }, (
     } finally {
       child?.destroy();
       parent.destroy();
+    }
+  });
+
+  it('shares compiled boot modules across instances when using the same cache', async () => {
+    const baseRoot = await createBaseRoot();
+    let compiles = 0;
+    const moduleCache = new MemoryWasmModuleCache(async (bytes) => {
+      compiles++;
+      return await WebAssembly.compile(bytes as BufferSource);
+    });
+
+    const a = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      adapter: new NodeAdapter(),
+      baseRoot,
+      bootArgv: ['/bin/true'],
+      bootWasmPath: join(WASM_DIR, 'true-cmd.wasm'),
+      moduleCache,
+    });
+    const b = await Sandbox.create({
+      wasmDir: WASM_DIR,
+      adapter: new NodeAdapter(),
+      baseRoot,
+      bootArgv: ['/bin/true'],
+      bootWasmPath: join(WASM_DIR, 'true-cmd.wasm'),
+      moduleCache,
+    });
+
+    try {
+      expect(compiles).toBe(1);
+    } finally {
+      a.destroy();
+      b.destroy();
     }
   });
 });

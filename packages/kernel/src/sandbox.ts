@@ -54,6 +54,7 @@ import { createKernelImports } from './host-imports/kernel-imports.js';
 import { WasiHost } from './wasi/wasi-host.js';
 import { bufferToString, createBufferTarget, type FdTarget } from './wasi/fd-target.js';
 import type { RunCommandHandler } from './run-command.js';
+import { defaultWasmModuleCache, type WasmModuleCache } from './process/module-cache.js';
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -70,6 +71,8 @@ export interface SandboxOptions {
   wasmDir: string;
   /** Platform adapter. Auto-detected if not provided (Node vs browser). */
   adapter?: PlatformAdapter;
+  /** Optional wasm module cache. Defaults to the process-wide cache. */
+  moduleCache?: WasmModuleCache;
   /** Per-command wall-clock timeout in ms. Default 30000. */
   timeoutMs?: number;
   /** Max VFS size in bytes. Default 256MB. */
@@ -136,6 +139,7 @@ interface SandboxParts {
   adapter: PlatformAdapter;
   wasmDir: string;
   bootWasmPath: string;
+  moduleCache: WasmModuleCache;
   mgr: ProcessManager;
   bridge?: NetworkBridgeLike;
   socketBackend?: SocketBackend;
@@ -164,6 +168,7 @@ export class Sandbox {
   private adapter: PlatformAdapter;
   private wasmDir: string;
   private bootWasmPath: string;
+  private moduleCache: WasmModuleCache;
   private mgr: ProcessManager;
   private envSnapshots: Map<string, Map<string, string>> = new Map();
   private bridge: NetworkBridgeLike | null = null;
@@ -192,6 +197,7 @@ export class Sandbox {
     this.adapter = parts.adapter;
     this.wasmDir = parts.wasmDir;
     this.bootWasmPath = parts.bootWasmPath;
+    this.moduleCache = parts.moduleCache;
     this.mgr = parts.mgr;
     this.bridge = parts.bridge ?? null;
     this.socketBackend = parts.socketBackend;
@@ -225,6 +231,7 @@ export class Sandbox {
     const adapter = options.adapter ?? await Sandbox.detectAdapter();
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fsLimitBytes = options.fsLimitBytes ?? DEFAULT_FS_LIMIT;
+    const moduleCache = options.moduleCache ?? defaultWasmModuleCache;
 
     const upper = new VFS({
       fsLimitBytes,
@@ -248,7 +255,7 @@ export class Sandbox {
     const { bridge } = options.networkBridge
       ? { bridge: options.networkBridge }
       : await Sandbox.createNetworkBridge(options.network);
-    const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist);
+    const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist, moduleCache);
     const tools = options.baseRoot
       ? Sandbox.registerBaseRootTools(mgr, vfs)
       : await Sandbox.registerTools(mgr, adapter, options.wasmDir, upper);
@@ -329,6 +336,7 @@ export class Sandbox {
       stdoutLimit: secLimits?.stdoutBytes,
       stderrLimit: secLimits?.stderrBytes,
       toolAllowlist: options.security?.toolAllowlist,
+      moduleCache,
     });
 
     const bootProcess = await loadProcess(loaderCtx, {
@@ -530,7 +538,7 @@ export class Sandbox {
 
     const sb = new Sandbox({
       vfs, kernel, processes, bootProcess, env, timeoutMs, adapter,
-      wasmDir: options.wasmDir, bootWasmPath,
+      wasmDir: options.wasmDir, bootWasmPath, moduleCache,
       mgr, bridge, networkPolicy: options.network,
       socketBackend: options.socketBackend,
       serverSockets: options.serverSockets,
@@ -795,6 +803,7 @@ export class Sandbox {
     stdoutLimit?: number;
     stderrLimit?: number;
     toolAllowlist?: string[];
+    moduleCache?: WasmModuleCache;
   }): LoaderContext {
     const {
       vfs,
@@ -813,6 +822,7 @@ export class Sandbox {
       stdoutLimit,
       stderrLimit,
       toolAllowlist,
+      moduleCache,
     } = opts;
     const allowedTools = toolAllowlist ? new Set(toolAllowlist) : null;
 
@@ -927,6 +937,7 @@ export class Sandbox {
           },
         }),
       makeFdReadAndClear,
+      moduleCache,
     });
 
     return makeContextWithAllocator((argv) => kernel.allocPid(NO_PARENT_PID, argv[0]));
@@ -1266,6 +1277,7 @@ export class Sandbox {
       stdoutLimit: this.security?.limits?.stdoutBytes,
       stderrLimit: this.security?.limits?.stderrBytes,
       toolAllowlist: this.security?.toolAllowlist,
+      moduleCache: this.moduleCache,
     });
     const proc = await loadProcess(loaderCtx, {
       argv,
@@ -1436,7 +1448,7 @@ export class Sandbox {
     if (!this.vfs.cowClone) throw new Error('Configured VFS does not support fork');
     const childVfs = this.vfs.cowClone();
     const { bridge } = await Sandbox.createNetworkBridge(this.networkPolicy);
-    const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist);
+    const childMgr = new ProcessManager(childVfs, this.adapter, bridge, this.security?.toolAllowlist, this.moduleCache);
     const tools = childVfs instanceof OverlayVFS
       ? Sandbox.registerBaseRootTools(childMgr, childVfs)
       : await Sandbox.registerTools(childMgr, this.adapter, this.wasmDir, childVfs as VFS);
@@ -1464,6 +1476,7 @@ export class Sandbox {
       stdoutLimit: this.security?.limits?.stdoutBytes,
       stderrLimit: this.security?.limits?.stderrBytes,
       toolAllowlist: this.security?.toolAllowlist,
+      moduleCache: this.moduleCache,
     });
     const childEnv = this.getEnvMap();
     const childBootProcess = await loadProcess(childCtx, {
@@ -1507,6 +1520,7 @@ export class Sandbox {
       bootArgv: this.bootArgv,
       bootImports: this.bootImports,
       runCommandHandler: this.runCommandHandler,
+      moduleCache: this.moduleCache,
     });
     childRef = child;
     return child;

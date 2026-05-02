@@ -6,7 +6,8 @@ import { VFS } from "../../vfs/vfs.ts";
 import { bufferToString, type FdTarget } from "../../wasi/fd-target.ts";
 import { WasiHost } from "../../wasi/wasi-host.ts";
 import { NO_PARENT_PID, ProcessKernel } from "../kernel.ts";
-import { loadProcess } from "../loader.ts";
+import { loadProcess, type LoaderContext } from "../loader.ts";
+import { MemoryWasmModuleCache } from "../module-cache.ts";
 import { Sandbox } from "../../sandbox.ts";
 
 const WASM_DIR = resolve(
@@ -14,7 +15,7 @@ const WASM_DIR = resolve(
   "../../platform/__tests__/fixtures",
 );
 
-async function makeLoaderContext() {
+async function makeLoaderContext(overrides: Partial<LoaderContext> = {}): Promise<LoaderContext> {
   const vfs = new VFS();
   const adapter = new NodeAdapter();
   const kernel = new ProcessKernel();
@@ -76,6 +77,7 @@ async function makeLoaderContext() {
       target.truncated = false;
       return { data, truncated };
     },
+    ...overrides,
   };
 }
 
@@ -92,6 +94,23 @@ Deno.test("loadProcess instantiates a CLI wasm at a VFS path and returns a Proce
 
   await proc.terminate();
   assertEquals(await ctx.kernel.waitpid(proc.pid), 0);
+});
+
+Deno.test("loadProcess compiles identical executable bytes once through the module cache", async () => {
+  let compiles = 0;
+  const moduleCache = new MemoryWasmModuleCache(async (bytes) => {
+    compiles++;
+    return await WebAssembly.compile(bytes as BufferSource);
+  });
+
+  const ctx = await makeLoaderContext({ moduleCache });
+
+  const first = await loadProcess(ctx, { argv: ["/bin/true"], mode: "cli" });
+  const second = await loadProcess(ctx, { argv: ["/bin/true"], mode: "cli" });
+
+  assertEquals(first.exitCode, 0);
+  assertEquals(second.exitCode, 0);
+  assertEquals(compiles, 1);
 });
 
 Deno.test("loader-backed resident shell supports Asyncify fallback without JSPI", async () => {
