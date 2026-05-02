@@ -31,3 +31,16 @@ Deno.test('sandbox.spawn with mode: cli runs _start to completion', async () => 
     sb.destroy();
   }
 });
+
+Deno.test('sandbox.spawn with mode: cli preserves captured stdout', async () => {
+  const adapter = new NodeAdapter();
+  const sb = await Sandbox.create({ wasmDir: WASM_DIR, adapter });
+  try {
+    sb.writeFile('/tmp/echo-args.wasm', await adapter.readBytes(`${WASM_DIR}/echo-args.wasm`));
+    const child = await sb.spawn(['/tmp/echo-args.wasm', 'hello', 'world'], { mode: 'cli' });
+    assertEquals(child.exitCode, 0);
+    assertEquals(child.fdReadAndClear(1).data, 'hello\nworld\n');
+  } finally {
+    sb.destroy();
+  }
+});

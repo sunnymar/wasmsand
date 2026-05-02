@@ -296,6 +296,8 @@ export class Sandbox {
       getSandbox: () => sandboxRef,
       getDeadlineMs: () => sandboxRef?.activeDeadlineMs,
       memoryBytes: secLimits?.memoryBytes,
+      stdoutLimit: secLimits?.stdoutBytes,
+      stderrLimit: secLimits?.stderrBytes,
       toolAllowlist: options.security?.toolAllowlist,
     });
 
@@ -303,6 +305,8 @@ export class Sandbox {
       argv: bootArgv,
       mode: 'resident',
       env: Object.fromEntries(env),
+      stdoutLimit: secLimits?.stdoutBytes,
+      stderrLimit: secLimits?.stderrBytes,
       extraCodepodImports: Sandbox.createBootImportFactory(vfs, mgr, options.bootImports),
     });
     Sandbox.applyOutputLimits(kernel, bootProcess.pid, secLimits?.stdoutBytes, secLimits?.stderrBytes);
@@ -696,6 +700,8 @@ export class Sandbox {
     getSandbox: () => Sandbox | undefined;
     getDeadlineMs?: () => number | undefined;
     memoryBytes?: number;
+    stdoutLimit?: number;
+    stderrLimit?: number;
     toolAllowlist?: string[];
   }): LoaderContext {
     const {
@@ -712,6 +718,8 @@ export class Sandbox {
       getSandbox,
       getDeadlineMs,
       memoryBytes,
+      stdoutLimit,
+      stderrLimit,
       toolAllowlist,
     } = opts;
     const allowedTools = toolAllowlist ? new Set(toolAllowlist) : null;
@@ -813,6 +821,8 @@ export class Sandbox {
               env: Object.fromEntries(req.env),
               cwd: req.cwd || '/',
               memoryBytes,
+              stdoutLimit,
+              stderrLimit,
             }).then(async (proc) => {
               processes.set(childPid, proc);
               await proc.terminate();
@@ -1161,6 +1171,8 @@ export class Sandbox {
       getSandbox: () => this,
       getDeadlineMs: () => this.activeDeadlineMs,
       memoryBytes: this.security?.limits?.memoryBytes,
+      stdoutLimit: this.security?.limits?.stdoutBytes,
+      stderrLimit: this.security?.limits?.stderrBytes,
       toolAllowlist: this.security?.toolAllowlist,
     });
     const proc = await loadProcess(loaderCtx, {
@@ -1168,18 +1180,22 @@ export class Sandbox {
       mode: opts.mode ?? 'cli',
       env: opts.env ?? Object.fromEntries(this.env),
       cwd: opts.cwd ?? '/',
+      stdoutLimit: this.security?.limits?.stdoutBytes,
+      stderrLimit: this.security?.limits?.stderrBytes,
       extraCodepodImports: Sandbox.createBootImportFactory(
         this.vfs,
         this.mgr,
         opts.bootImports ?? this.bootImports,
       ),
     });
-    Sandbox.applyOutputLimits(
-      this.kernel,
-      proc.pid,
-      this.security?.limits?.stdoutBytes,
-      this.security?.limits?.stderrBytes,
-    );
+    if (proc.mode === 'resident') {
+      Sandbox.applyOutputLimits(
+        this.kernel,
+        proc.pid,
+        this.security?.limits?.stdoutBytes,
+        this.security?.limits?.stderrBytes,
+      );
+    }
     this.processes.set(proc.pid, proc);
     return proc;
   }
@@ -1346,6 +1362,8 @@ export class Sandbox {
       getSandbox: () => childRef,
       getDeadlineMs: () => childRef?.activeDeadlineMs,
       memoryBytes: this.security?.limits?.memoryBytes,
+      stdoutLimit: this.security?.limits?.stdoutBytes,
+      stderrLimit: this.security?.limits?.stderrBytes,
       toolAllowlist: this.security?.toolAllowlist,
     });
     const childEnv = this.getEnvMap();
@@ -1353,6 +1371,8 @@ export class Sandbox {
       argv: this.bootArgv,
       mode: 'resident',
       env: Object.fromEntries(childEnv),
+      stdoutLimit: this.security?.limits?.stdoutBytes,
+      stderrLimit: this.security?.limits?.stderrBytes,
       extraCodepodImports: Sandbox.createBootImportFactory(childVfs, childMgr, this.bootImports),
     });
     Sandbox.applyOutputLimits(

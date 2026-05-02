@@ -78,6 +78,8 @@ class WorkerResidentRunner {
       mode: 'resident',
       env: Object.fromEntries(this.env),
       cwd: '/',
+      stdoutLimit,
+      stderrLimit,
     });
     this.processes.set(this.bootProcess.pid, this.bootProcess);
     this.applyOutputLimits(this.bootProcess.pid);
@@ -118,6 +120,8 @@ class WorkerResidentRunner {
       mode: 'resident',
       env: Object.fromEntries(this.env),
       cwd: '/',
+      stdoutLimit: this.stdoutLimit,
+      stderrLimit: this.stderrLimit,
     });
     this.processes.set(child.pid, child);
     this.applyOutputLimits(child.pid);
@@ -269,6 +273,8 @@ class WorkerResidentRunner {
               mode: 'cli',
               env: Object.fromEntries(req.env),
               cwd: req.cwd || '/',
+              stdoutLimit: this.stdoutLimit,
+              stderrLimit: this.stderrLimit,
             }).then(async (proc) => {
               processes.set(childPid, proc);
               await proc.terminate();

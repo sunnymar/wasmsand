@@ -43,6 +43,8 @@ export interface LoadProcessOptions {
   env?: Record<string, string>;
   cwd?: string;
   memoryBytes?: number;
+  stdoutLimit?: number;
+  stderrLimit?: number;
   extraCodepodImports?: (
     memory: WebAssembly.Memory,
     wasiHost: WasiHost,
@@ -85,10 +87,10 @@ export async function loadProcess(
     ctx.kernel.setFdTarget(pid, 0, createNullTarget());
   }
   if (!ctx.kernel.getFdTarget(pid, 1)) {
-    ctx.kernel.setFdTarget(pid, 1, createBufferTarget());
+    ctx.kernel.setFdTarget(pid, 1, createBufferTarget(opts.stdoutLimit ?? Infinity));
   }
   if (!ctx.kernel.getFdTarget(pid, 2)) {
-    ctx.kernel.setFdTarget(pid, 2, createBufferTarget());
+    ctx.kernel.setFdTarget(pid, 2, createBufferTarget(opts.stderrLimit ?? Infinity));
   }
 
   const proc = Process.__forLoader({ pid, mode });
