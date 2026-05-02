@@ -162,23 +162,23 @@ Run: `source scripts/dev-init.sh && deno test -A --no-check packages/kernel/src/
 - Modify: `packages/guest-compat/Makefile`
 - Create: `packages/guest-compat/conformance/c/fork-canary.c`
 
-- [ ] **Step 1: Write a default fork canary expectation**
+- [x] **Step 1: Write a default fork canary expectation**
 
 Default build still returns `-1` with `errno=ENOSYS`.
 
-- [ ] **Step 2: Write a continuation fork canary**
+- [x] **Step 2: Write a continuation fork canary**
 
 The continuation canary has cases for return split, PID relationship, memory divergence, and waitpid.
 
-- [ ] **Step 3: Make default stubs weak**
+- [x] **Step 3: Make default stubs weak**
 
 Mark default `fork()` / `vfork()` stubs in `codepod_process.c` weak or split them so `codepod_fork.c` wins in the continuation archive.
 
-- [ ] **Step 4: Add `host_fork` declaration and shim**
+- [x] **Step 4: Add `host_fork` declaration and shim**
 
 `codepod_fork.c` imports `codepod.host_fork`, maps negative errno returns, and provides a strong `fork()`.
 
-- [ ] **Step 5: Rename setjmp archive to continuations**
+- [x] **Step 5: Rename setjmp archive to continuations**
 
 Build `libcodepod_continuations.a` from `codepod_setjmp.o` and `codepod_fork.o`. Keep old archive env aliases in cpcc only.
 

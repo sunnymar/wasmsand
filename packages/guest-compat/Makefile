@@ -20,7 +20,7 @@ CPCC := $(REPO_ROOT)/target/release/cpcc
 CPAR := $(REPO_ROOT)/target/release/cpar
 
 LIB := $(BUILD_DIR)/libcodepod_guest_compat.a
-SETJMP_LIB := $(BUILD_DIR)/libcodepod_setjmp.a
+CONTINUATIONS_LIB := $(BUILD_DIR)/libcodepod_continuations.a
 LIB_OBJS := \
   $(BUILD_DIR)/codepod_command.o \
   $(BUILD_DIR)/codepod_dup.o \
@@ -42,7 +42,7 @@ LIB_OBJS := \
   $(BUILD_DIR)/codepod_unistd.o \
   $(BUILD_DIR)/codepod_version.o
 
-CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp pipe spawn spawn-wait resource exec socket socket-address socket-listen socket-listen-denied fetch pthread
+CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp fork-default fork pipe spawn spawn-wait resource exec socket socket-address socket-listen socket-listen-denied fetch pthread
 CANARIES := $(addprefix $(BUILD_DIR)/,$(addsuffix -canary.wasm,$(CANARY_NAMES)))
 
 .PHONY: all lib canaries copy-fixtures clean ensure-toolchain
@@ -67,21 +67,36 @@ $(BUILD_DIR)/%.o: src/%.c $(wildcard include/*.h) src/codepod_runtime.h src/code
 
 lib: $(LIB)
 
-SETJMP_OBJS := \
-  $(BUILD_DIR)/codepod_setjmp.o
+CONTINUATIONS_OBJS := \
+  $(BUILD_DIR)/codepod_setjmp.o \
+  $(BUILD_DIR)/codepod_fork.o
 
 $(LIB): $(LIB_OBJS) | $(BUILD_DIR) ensure-toolchain
 	$(CPAR) rcs $@ $(LIB_OBJS)
 
-$(SETJMP_LIB): $(SETJMP_OBJS) | $(BUILD_DIR) ensure-toolchain
-	$(CPAR) rcs $@ $(SETJMP_OBJS)
+$(CONTINUATIONS_LIB): $(CONTINUATIONS_OBJS) | $(BUILD_DIR) ensure-toolchain
+	$(CPAR) rcs $@ $(CONTINUATIONS_OBJS)
 
-$(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(wildcard include/*.h) $(LIB) $(SETJMP_LIB) | $(BUILD_DIR) ensure-toolchain
+$(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(wildcard include/*.h) $(LIB) $(CONTINUATIONS_LIB) | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE=$(abspath $(LIB)) \
-	CPCC_SETJMP_ARCHIVE=$(abspath $(SETJMP_LIB)) \
-	CPCC_USE_SETJMP=1 \
+	CPCC_CONTINUATIONS_ARCHIVE=$(abspath $(CONTINUATIONS_LIB)) \
+	CPCC_USE_CONTINUATIONS=1 \
 	CPCC_INCLUDE=$(INCLUDE) \
 	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/setjmp-canary.pre-opt.wasm \
+	$(CPCC) $< -o $@
+
+$(BUILD_DIR)/fork-canary.wasm: $(CANARY_DIR)/fork-canary.c $(wildcard include/*.h) $(LIB) $(CONTINUATIONS_LIB) | $(BUILD_DIR) ensure-toolchain
+	CPCC_ARCHIVE=$(abspath $(LIB)) \
+	CPCC_CONTINUATIONS_ARCHIVE=$(abspath $(CONTINUATIONS_LIB)) \
+	CPCC_USE_CONTINUATIONS=1 \
+	CPCC_INCLUDE=$(INCLUDE) \
+	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/fork-canary.pre-opt.wasm \
+	$(CPCC) $< -o $@
+
+$(BUILD_DIR)/fork-default-canary.wasm: $(CANARY_DIR)/fork-canary.c $(wildcard include/*.h) $(LIB) | $(BUILD_DIR) ensure-toolchain
+	CPCC_ARCHIVE=$(abspath $(LIB)) \
+	CPCC_INCLUDE=$(INCLUDE) \
+	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/fork-default-canary.pre-opt.wasm \
 	$(CPCC) $< -o $@
 
 $(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(wildcard include/*.h) $(LIB) | $(BUILD_DIR) ensure-toolchain

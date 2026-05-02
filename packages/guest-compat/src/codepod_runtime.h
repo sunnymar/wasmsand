@@ -2,6 +2,7 @@
 #define CODEPOD_RUNTIME_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 __attribute__((import_module("codepod"), import_name("host_run_command")))
 int codepod_host_run_command(int req_ptr, int req_len, int out_ptr, int out_cap);
@@ -55,6 +56,12 @@ int codepod_host_dup(int fd, int out_ptr, int out_cap);
  * packages/kernel/src/process/kernel.ts for the JSON shape. */
 __attribute__((import_module("codepod"), import_name("host_spawn")))
 int codepod_host_spawn(int req_ptr, int req_len);
+
+/* host_fork duplicates the calling process when the module is built in
+ * continuation mode.  Return convention follows fork(2): parent receives
+ * the child PID, child receives 0.  Negative returns are -errno. */
+__attribute__((import_module("codepod"), import_name("host_fork")))
+int codepod_host_fork(void);
 
 /* host_waitpid blocks until the named child exits and writes JSON
  * `{"exit_code":N}` to the output buffer.  Returns byte count or -1.

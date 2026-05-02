@@ -290,6 +290,13 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       return opts.kernel ? opts.kernel.getPpid(callerPid) : 0;
     },
 
+    // host_fork() -> i32
+    // Returns negative errno until the Asyncify continuation runtime wires the
+    // fork controller.  Guest continuation builds map -ENOSYS to fork() failure.
+    host_fork(): number {
+      return -38; // ENOSYS
+    },
+
     // host_kill(pid, sig) -> i32
     // Best-effort signal delivery: cancels the target's WASI host so it
     // exits with WasiExitError(124).  This is enough for `kill -TERM` /
