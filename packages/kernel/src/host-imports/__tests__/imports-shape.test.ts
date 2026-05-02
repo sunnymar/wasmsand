@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@^1.0.19";
 import { createKernelImports } from "../kernel-imports.ts";
 import { readString } from "../common.ts";
+import { ProcessKernel } from "../../process/kernel.ts";
 
 const encoder = new TextEncoder();
 
@@ -49,4 +50,39 @@ Deno.test("kernel host_spawn preserves shell's legacy synchronous result ABI", (
     stdout: "hello\n",
     stderr: "",
   });
+});
+
+Deno.test("kernel host_spawn reserves a process slot before fd cloning", () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const kernel = new ProcessKernel({ maxProcesses: 1 });
+  const parentPid = kernel.allocPid();
+  const request = JSON.stringify({
+    prog: "/bin/cat",
+    args: [],
+    env: [],
+    cwd: "/",
+    stdin_fd: 0,
+    stdout_fd: 1,
+    stderr_fd: 2,
+  });
+  const reqLen = writeString(memory, 0, request);
+  let spawned = false;
+
+  const imports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: parentPid,
+    spawnProcess: () => {
+      spawned = true;
+      return 123;
+    },
+  });
+
+  const pid = (imports.host_spawn as (...args: number[]) => number)(0, reqLen);
+  assertEquals(pid, -1);
+  assertEquals(spawned, false);
+  assertEquals(kernel.getReservedProcessCount(), 1);
+  assertEquals(kernel.getPpid(2), 0);
+  assertEquals(kernel.getFdTarget(2, 0), null);
+  kernel.dispose();
 });

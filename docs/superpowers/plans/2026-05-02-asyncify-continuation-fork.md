@@ -122,7 +122,7 @@ Run: `source scripts/dev-init.sh && deno test -A --no-check packages/kernel/src/
 - Modify: `packages/kernel/src/process/__tests__/kernel.test.ts`
 - Modify: call sites that allocate PIDs through `ProcessKernel`
 
-- [ ] **Step 1: Write failing process-limit tests**
+- [x] **Step 1: Write failing process-limit tests**
 
 Tests cover:
 
@@ -131,7 +131,7 @@ Tests cover:
 - failed reservation leaves no process table or fd table side effects.
 - `host_spawn` and fork reservation use the same allocator.
 
-- [ ] **Step 2: Add `SecurityLimits.processes`**
+- [x] **Step 2: Add `SecurityLimits.processes`**
 
 Add:
 
@@ -141,15 +141,15 @@ processes?: number;
 
 and a `DEFAULT_MAX_PROCESSES = 64` constant near process-kernel construction.
 
-- [ ] **Step 3: Add synchronous reservation APIs**
+- [x] **Step 3: Add synchronous reservation APIs**
 
 Add `tryReserveProcessSlot()` / `commitReservedProcess()` or an equivalent single allocator that reserves before side effects.
 
-- [ ] **Step 4: Route PID allocation through reservation**
+- [x] **Step 4: Route PID allocation through reservation**
 
 Update `allocPid`, pending registration, and spawn paths so limit failures leave no PID/fd/memory side effects.
 
-- [ ] **Step 5: Verify process-kernel tests**
+- [x] **Step 5: Verify process-kernel tests**
 
 Run: `source scripts/dev-init.sh && deno test -A --no-check packages/kernel/src/process/__tests__/kernel.test.ts`.
 
