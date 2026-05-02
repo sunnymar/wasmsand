@@ -378,7 +378,7 @@ Create `scripts/run-busybox-ash-smoke-in-sandbox.ts`:
 ```ts
 #!/usr/bin/env -S deno run -A
 
-import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { Sandbox } from '../packages/kernel/src/sandbox.js';
