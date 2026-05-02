@@ -16,6 +16,7 @@
       "find",
       "grep",
       "head",
+      "kill",
       "ln",
       "ls",
       "md5sum",

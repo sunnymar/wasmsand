@@ -331,6 +331,19 @@ describe('WasiHost', () => {
   });
 
   describe('path_open', () => {
+    it('reuses closed stdin for /dev/null background redirection', () => {
+      const { wasi, view, bytes } = getImportsAndView(host, memory);
+
+      expect(wasi.fd_close(0)).toBe(WASI_ESUCCESS);
+
+      const pathStr = '/dev/null';
+      bytes.set(new TextEncoder().encode(pathStr), 500);
+      const errno = wasi.path_open(3, 0, 500, pathStr.length, 0, BigInt(0), BigInt(0), 0, 400);
+
+      expect(errno).toBe(WASI_ESUCCESS);
+      expect(view.getUint32(400, true)).toBe(0);
+    });
+
     it('opens an existing file for reading', () => {
       vfs.writeFile('/tmp/data.txt', new TextEncoder().encode('content'));
       const { wasi, view, bytes } = getImportsAndView(host, memory);

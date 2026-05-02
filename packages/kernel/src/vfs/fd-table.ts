@@ -52,8 +52,27 @@ export class FdTable {
     this.vfs = vfs;
   }
 
+  private allocateFd(preferredFd?: number): number {
+    if (preferredFd !== undefined) {
+      if (this.entries.has(preferredFd)) {
+        throw new Error(`EBADF: file descriptor already open ${preferredFd}`);
+      }
+      if (preferredFd >= this.nextFd) {
+        this.nextFd = preferredFd + 1;
+      }
+      return preferredFd;
+    }
+
+    let fd = FIRST_FD;
+    while (this.entries.has(fd)) fd++;
+    if (fd >= this.nextFd) {
+      this.nextFd = fd + 1;
+    }
+    return fd;
+  }
+
   /** Open a file and return its fd number. */
-  open(path: string, mode: OpenMode): number {
+  open(path: string, mode: OpenMode, preferredFd?: number): number {
     // Streaming providers (/dev/urandom, /dev/zero, /dev/null,
     // /dev/full) bypass the materialize-at-open path entirely:
     // every read/write per fd_read/fd_write syscall calls the
@@ -61,7 +80,7 @@ export class FdTable {
     // a Uint8Array.
     const stream = this.vfs.streamFile?.(path) ?? null;
     if (stream) {
-      const fd = this.nextFd++;
+      const fd = this.allocateFd(preferredFd);
       this.entries.set(fd, {
         path,
         mode,
@@ -94,7 +113,7 @@ export class FdTable {
 
     const offset = mode === 'a' ? buffer.byteLength : 0;
 
-    const fd = this.nextFd++;
+    const fd = this.allocateFd(preferredFd);
     this.entries.set(fd, {
       path,
       mode,

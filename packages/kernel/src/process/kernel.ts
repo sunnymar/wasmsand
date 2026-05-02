@@ -213,6 +213,13 @@ export class ProcessKernel {
     promise.then(onExit, onExit);
   }
 
+  attachWasiHost(pid: number, wasiHost: WasiHost): void {
+    const entry = this.processTable.get(pid);
+    if (entry && entry.state === 'running') {
+      entry.wasiHost = wasiHost;
+    }
+  }
+
   registerProcess(pid: number, promise: Promise<void>, wasiHost: WasiHost): void {
     this.reservePid(pid);
     this.processTable.set(pid, {
@@ -250,9 +257,10 @@ export class ProcessKernel {
     return this.parentPids.get(pid) === parentPid;
   }
 
-  killProcess(pid: number, _sig: number): boolean {
+  killProcess(pid: number, sig: number): boolean {
     const entry = this.processTable.get(pid);
     if (!entry || entry.state === 'exited') return false;
+    if (entry.wasiHost?.queueSignal(sig)) return true;
     entry.wasiHost?.cancelExecution();
     return true;
   }

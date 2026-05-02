@@ -26,6 +26,8 @@ Deno.test({
         'ash-misc/exec.tests',
         'ash-misc/exitcode_EACCES.tests',
         'ash-misc/exitcode_ENOENT.tests',
+        'ash-misc/exitcode_trap2.tests',
+        'ash-misc/exitcode_trap3.tests',
       ],
       {
         cwd: repoRoot,
@@ -40,6 +42,6 @@ Deno.test({
     const summary = JSON.parse(Deno.readTextFileSync(summaryPath));
     assertEquals(summary.failed, 0);
     assertEquals(summary.skipped, 0);
-    assertEquals(summary.passed, 42);
+    assertEquals(summary.passed, 44);
   },
 });

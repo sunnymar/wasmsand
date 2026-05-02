@@ -4,7 +4,8 @@ use std::ffi::OsString;
 use std::process::{Command, ExitCode};
 
 use cpcc_toolchain::{
-    archive, env, features, preserve, wasi_sdk, wasm_opt, TIER1, WRAPPED_WASI_LIBC_SYMBOLS,
+    archive, env, features, preserve, wasi_sdk, wasm_opt, CODEPOD_INTERNAL_EXPORTS, TIER1,
+    WRAPPED_WASI_LIBC_SYMBOLS,
 };
 
 #[derive(Parser, Debug)]
@@ -107,6 +108,9 @@ fn build_clang_invocation(
                         format!("-Wl,--export=__codepod_guest_compat_marker_{sym}").into(),
                     );
                 }
+            }
+            for sym in CODEPOD_INTERNAL_EXPORTS {
+                argv.push(format!("-Wl,--export={sym}").into());
             }
         }
     }

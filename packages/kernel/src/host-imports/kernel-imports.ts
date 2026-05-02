@@ -1046,5 +1046,15 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       tb.condBroadcast(condPtr)) as unknown as WebAssembly.ImportValue;
   }
 
+  if (opts.wasiHost) {
+    for (const [name, value] of Object.entries(imports)) {
+      if (typeof value !== 'function') continue;
+      imports[name] = ((...args: unknown[]) => {
+        opts.wasiHost?.drainPendingSignals();
+        return (value as (...args: unknown[]) => unknown)(...args);
+      }) as WebAssembly.ImportValue;
+    }
+  }
+
   return imports;
 }

@@ -213,6 +213,9 @@ export class WasiHost {
   private kernel?: ProcessKernel;
   private pid?: number;
   private canSuspendPipeReads = false;
+  private signalDeliverer: ((sig: number) => void) | null = null;
+  private pendingSignals: number[] = [];
+  private drainingSignals = false;
 
   constructor(options: WasiHostOptions) {
     this.vfs = options.vfs;
@@ -345,6 +348,31 @@ export class WasiHost {
     this.canSuspendPipeReads = enabled;
   }
 
+  setSignalDeliverer(deliverer: ((sig: number) => void) | null): void {
+    this.signalDeliverer = deliverer;
+  }
+
+  queueSignal(sig: number): boolean {
+    if (!this.signalDeliverer) return false;
+    this.pendingSignals.push(sig);
+    return true;
+  }
+
+  drainPendingSignals(): void {
+    if (!this.signalDeliverer || this.drainingSignals) return;
+    this.drainingSignals = true;
+    try {
+      while (this.pendingSignals.length > 0) {
+        const sig = this.pendingSignals.shift();
+        if (sig !== undefined) {
+          this.signalDeliverer(sig);
+        }
+      }
+    } finally {
+      this.drainingSignals = false;
+    }
+  }
+
   /** Signal cancellation — next syscall check will throw WasiExitError. */
   cancelExecution(): void {
     this.cancelled = true;
@@ -352,6 +380,7 @@ export class WasiHost {
 
   /** Throw WasiExitError(124) if cancelled or past deadline. */
   private checkDeadline(): void {
+    this.drainPendingSignals();
     if (this.cancelled || Date.now() > this.deadlineMs) {
       throw new WasiExitError(124);
     }
@@ -883,12 +912,15 @@ export class WasiHost {
     if (this.ioFds.has(fd)) {
       if (this.kernel && this.pid !== undefined) {
         try {
-          return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+          if (!this.kernel.closeFd(this.pid, fd)) return WASI_EBADF;
+          this.ioFds.delete(fd);
+          return WASI_ESUCCESS;
         } catch (err) {
           return fdErrorToWasi(err);
         }
       }
-      return WASI_EBADF;
+      this.ioFds.delete(fd);
+      return WASI_ESUCCESS;
     }
 
     if (this.kernel && this.pid !== undefined) {
@@ -1191,7 +1223,7 @@ export class WasiHost {
         }
       }
 
-      const fd = this.fdTable.open(absPath, mode);
+      const fd = this.fdTable.open(absPath, mode, this.lowestAvailableFd());
       if (this.kernel && this.pid !== undefined) {
         this.kernel.setFdTarget(this.pid, fd, createVfsFileTarget(this.fdTable, fd));
       }
@@ -1204,6 +1236,14 @@ export class WasiHost {
       }
       return fdErrorToWasi(err);
     }
+  }
+
+  private lowestAvailableFd(): number {
+    let fd = 0;
+    while (this.ioFds.has(fd) || this.dirFds.has(fd) || this.fdTable.isOpen(fd)) {
+      fd++;
+    }
+    return fd;
   }
 
   private pathFilestatGet(

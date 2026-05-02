@@ -256,6 +256,10 @@ int raise(int sig) {
   return 0;
 }
 
+int codepod_deliver_signal(int sig) {
+  return raise(sig);
+}
+
 unsigned alarm(unsigned seconds) {
   CODEPOD_MARKER_CALL(alarm);
   unsigned previous = codepod_alarm_seconds;

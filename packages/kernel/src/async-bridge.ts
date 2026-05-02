@@ -82,6 +82,10 @@ export interface AsyncifyForkController {
   forkFromContinuation(snapshot: AsyncifyForkSnapshot): number;
 }
 
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 // ── JSPI ──────────────────────────────────────────────────────────────────────
 
 class JspiAsyncBridge implements AsyncBridge {
@@ -398,6 +402,7 @@ class AsyncifyAsyncBridge implements AsyncBridge {
             ? this.forkController.forkFromContinuation(this.snapshotForkContinuation())
             : -38; // ENOSYS
           this.pendingForkReturn = childPid;
+          await yieldToEventLoop();
           exps.startRewind(exps.dataAddr);
           result = fn(...args);
         } else if (this.pendingSetjmp !== null) {
@@ -447,6 +452,7 @@ class AsyncifyAsyncBridge implements AsyncBridge {
             ? this.forkController.forkFromContinuation(this.snapshotForkContinuation())
             : -38; // ENOSYS
           this.pendingForkReturn = childPid;
+          await yieldToEventLoop();
         } else if (this.pendingSetjmp !== null) {
           const envPtr = this.pendingSetjmp;
           this.pendingSetjmp = null;
