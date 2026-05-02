@@ -13,12 +13,39 @@ pub fn canary_symbol_map() -> &'static [(&'static str, &'static [&'static str])]
     &[
         ("dup2-canary", &["dup2"]),
         ("getgroups-canary", &["getgroups"]),
-        ("affinity-canary", &["sched_getaffinity", "sched_setaffinity", "sched_getcpu"]),
-        ("signal-canary", &[
-            "signal", "sigaction", "raise", "alarm",
-            "sigemptyset", "sigfillset", "sigaddset", "sigdelset",
-            "sigismember", "sigprocmask", "sigsuspend",
-        ]),
+        (
+            "affinity-canary",
+            &["sched_getaffinity", "sched_setaffinity", "sched_getcpu"],
+        ),
+        (
+            "signal-canary",
+            &[
+                "signal",
+                "sigaction",
+                "raise",
+                "alarm",
+                "sigemptyset",
+                "sigfillset",
+                "sigaddset",
+                "sigdelset",
+                "sigismember",
+                "sigprocmask",
+                "sigsuspend",
+            ],
+        ),
+        (
+            "pthread-canary",
+            &[
+                "pthread_create",
+                "pthread_join",
+                "pthread_self",
+                "pthread_mutex_lock",
+                "pthread_mutex_unlock",
+                "pthread_key_create",
+                "pthread_setspecific",
+                "pthread_getspecific",
+            ],
+        ),
     ]
 }
 

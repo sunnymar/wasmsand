@@ -24,6 +24,7 @@ import type { ExtensionRegistry } from '../extension/registry.js';
 import type { NativeModuleRegistry } from '../process/native-modules.js';
 import type { ProcessKernel, SpawnRequest } from '../process/kernel.js';
 import type { WasiHost } from '../wasi/wasi-host.js';
+import type { ThreadsBackend } from '../process/threads/backend.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
 import type { FdTarget } from '../wasi/fd-target.js';
 import { createStaticTarget } from '../wasi/fd-target.js';
@@ -103,6 +104,9 @@ export interface KernelImportsOptions {
 
   /** Active WASI host for guest-side fd operations such as dup2 on stdio. */
   wasiHost?: WasiHost;
+
+  /** Backend for guest pthread/std::thread host imports. */
+  threadsBackend?: ThreadsBackend;
 }
 
 export function createKernelImports(opts: KernelImportsOptions): Record<string, WebAssembly.ImportValue> {
@@ -188,7 +192,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     return { ok: true, mapping };
   }
 
-  return {
+  const imports: Record<string, WebAssembly.ImportValue> = {
     // ── Process management (new) ──
 
     // host_pipe(out_ptr, out_cap) -> i32
@@ -990,4 +994,30 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     },
 
   };
+
+  if (opts.threadsBackend) {
+    const tb = opts.threadsBackend;
+    imports.host_thread_spawn = (async (fnPtr: number, arg: number) =>
+      tb.spawn(fnPtr, arg)) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_join = (async (tid: number) =>
+      tb.join(tid)) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_detach = (async (tid: number) =>
+      tb.detach(tid)) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_self = (() => tb.self()) as unknown as WebAssembly.ImportValue;
+    imports.host_thread_yield = (async () => tb.yield_()) as unknown as WebAssembly.ImportValue;
+    imports.host_mutex_lock = (async (mutexPtr: number) =>
+      tb.mutexLock(mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_mutex_unlock = ((mutexPtr: number) =>
+      tb.mutexUnlock(mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_mutex_trylock = ((mutexPtr: number) =>
+      tb.mutexTryLock(mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_cond_wait = (async (condPtr: number, mutexPtr: number) =>
+      tb.condWait(condPtr, mutexPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_cond_signal = ((condPtr: number) =>
+      tb.condSignal(condPtr)) as unknown as WebAssembly.ImportValue;
+    imports.host_cond_broadcast = ((condPtr: number) =>
+      tb.condBroadcast(condPtr)) as unknown as WebAssembly.ImportValue;
+  }
+
+  return imports;
 }

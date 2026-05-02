@@ -76,6 +76,11 @@ fn build_clang_invocation(
     if let Some(archive) = env.archive.as_ref() {
         if is_link_invocation(user_args) {
             argv.push("--no-wasm-opt".into());
+            argv.push("-Wl,--allow-multiple-definition".into());
+            argv.push("-Wl,--export-table".into());
+            for sym in WRAPPED_WASI_LIBC_SYMBOLS {
+                argv.push(format!("-Wl,--wrap={sym}").into());
+            }
             argv.push("-Wl,--whole-archive".into());
             argv.push(archive.clone().into_os_string());
             argv.push("-Wl,--no-whole-archive".into());

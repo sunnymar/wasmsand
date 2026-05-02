@@ -10,6 +10,9 @@ import type { ProcessKernel } from "./kernel.js";
 import { WasiHost } from "../wasi/wasi-host.js";
 import { createBufferTarget, createNullTarget, createStaticTarget } from "../wasi/fd-target.js";
 import { AsyncifyAsyncBridge } from "../async-bridge.js";
+import { CooperativeSerialBackend } from "./threads/cooperative-serial.js";
+import { makeIndirectCallTable } from "./threads/indirect-call-table.js";
+import type { ThreadsBackend } from "./threads/backend.js";
 
 export interface LoaderContext {
   vfs: VfsLike;
@@ -27,6 +30,7 @@ export interface LoaderContext {
     pid: number,
     memory: WebAssembly.Memory,
     wasiHost: WasiHost,
+    threadsBackend: ThreadsBackend,
   ): Record<string, WebAssembly.ImportValue>;
   makeFdReadAndClear(
     pid: number,
@@ -105,9 +109,10 @@ export async function loadProcess(
       typeof WebAssembly.Suspending !== "function"
     ? new AsyncifyAsyncBridge()
     : null;
+  const threadsBackend = new CooperativeSerialBackend();
 
   const codepodImports: Record<string, WebAssembly.ImportValue> = {
-    ...ctx.buildKernelImports(pid, memoryProxy, wasi),
+    ...ctx.buildKernelImports(pid, memoryProxy, wasi, threadsBackend),
     ...(opts.extraCodepodImports?.(memoryProxy, wasi) ?? {}),
   };
   if (asyncifyBridge) {
@@ -124,6 +129,12 @@ export async function loadProcess(
     "host_socket_accept",
     "host_extension_invoke",
     "host_run_command",
+    "host_thread_spawn",
+    "host_thread_join",
+    "host_thread_detach",
+    "host_thread_yield",
+    "host_mutex_lock",
+    "host_cond_wait",
   ], asyncifyBridge);
   wrapAsyncImports(
     wasiImports as Record<string, WebAssembly.ImportValue>,
@@ -135,6 +146,16 @@ export async function loadProcess(
     wasi_snapshot_preview1: wasiImports,
     codepod: codepodImports,
   });
+  const table = instance.exports.__indirect_function_table;
+  if (table instanceof WebAssembly.Table) {
+    const promising =
+      typeof WebAssembly.promising === "function"
+        ? ((fn: unknown) => WebAssembly.promising(fn as Function))
+        : ((fn: unknown) => fn);
+    threadsBackend.setIndirectCallTable(
+      makeIndirectCallTable(table, promising),
+    );
+  }
 
   memoryRef = instance.exports.memory as WebAssembly.Memory;
   if (opts.memoryBytes !== undefined && memoryRef.buffer.byteLength > opts.memoryBytes) {

@@ -76,6 +76,19 @@ pub const TIER1: &[&str] = &[
     "tzset",
     "wait",
     "waitpid",
+    "pthread_create",
+    "pthread_join",
+    "pthread_detach",
+    "pthread_exit",
+    "pthread_self",
+    "pthread_mutex_lock",
+    "pthread_mutex_unlock",
+    "pthread_cond_wait",
+    "pthread_cond_signal",
+    "pthread_key_create",
+    "pthread_setspecific",
+    "pthread_getspecific",
+    "pthread_once",
 ];
 
 /// POSIX symbols that are also present as strong wasi-libc definitions.

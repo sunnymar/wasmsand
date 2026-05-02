@@ -1,24 +1,22 @@
 --- a/library/std/src/sys/thread/mod.rs
 +++ b/library/std/src/sys/thread/mod.rs
-@@ -96,12 +96,13 @@
+@@ -95,13 +95,10 @@
+     all(target_os = "wasi", target_env = "p1") => {
          mod wasip1;
          pub use wasip1::{DEFAULT_MIN_STACK_SIZE, sleep, yield_now};
-         #[cfg(target_feature = "atomics")]
--        pub use wasip1::{Thread, available_parallelism};
-+        pub use wasip1::Thread;
-+        pub use wasip1::available_parallelism;
+-        #[cfg(target_feature = "atomics")]
+         pub use wasip1::{Thread, available_parallelism};
          #[expect(dead_code)]
          mod unsupported;
          pub use unsupported::{current_os_id, set_name};
-         #[cfg(not(target_feature = "atomics"))]
+-        #[cfg(not(target_feature = "atomics"))]
 -        pub use unsupported::{Thread, available_parallelism};
-+        pub use unsupported::Thread;
      }
      all(target_os = "wasi", any(target_env = "p2", target_env = "p3")) => {
          mod wasip2;
 --- a/library/std/src/sys/thread/wasip1.rs
 +++ b/library/std/src/sys/thread/wasip1.rs
-@@ -1,11 +1,8 @@
+@@ -1,20 +1,14 @@
  #![forbid(unsafe_op_in_unsafe_fn)]
 
 -#[cfg(target_feature = "atomics")]
@@ -28,9 +26,10 @@
  use crate::num::NonZero;
 -#[cfg(target_feature = "atomics")]
  use crate::sys::os;
- #[cfg(target_feature = "atomics")]
+-#[cfg(target_feature = "atomics")]
  use crate::thread::ThreadInit;
-@@ -14,7 +11,6 @@
+ use crate::time::Duration;
+-#[cfg(target_feature = "atomics")]
  use crate::{cmp, ptr};
 
  // Add a few symbols not in upstream `libc` just yet.
@@ -38,7 +37,28 @@
  mod libc {
      pub use libc::*;
 
-@@ -133,7 +129,6 @@
+@@ -57,12 +51,10 @@
+     }
+ }
+
+-#[cfg(target_feature = "atomics")]
+ pub struct Thread {
+     id: libc::pthread_t,
+ }
+
+-#[cfg(target_feature = "atomics")]
+ impl Drop for Thread {
+     fn drop(&mut self) {
+         let ret = unsafe { libc::pthread_detach(self.id) };
+@@ -72,7 +64,6 @@
+
+ pub const DEFAULT_MIN_STACK_SIZE: usize = 1024 * 1024;
+
+-#[cfg(target_feature = "atomics")]
+ impl Thread {
+     // unsafe: see thread::Builder::spawn_unchecked for safety requirements
+     pub unsafe fn new(stack: usize, init: Box<ThreadInit>) -> io::Result<Thread> {
+@@ -133,7 +124,6 @@
      }
  }
 
@@ -46,3 +66,74 @@
  pub fn available_parallelism() -> io::Result<NonZero<usize>> {
      match unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) } {
          -1 => Err(io::Error::last_os_error()),
+         cpus => NonZero::new(cpus as usize).ok_or(io::Error::UNKNOWN_THREAD_COUNT),
+     }
+ }
+--- a/library/std/src/sys/thread_local/mod.rs
++++ b/library/std/src/sys/thread_local/mod.rs
+@@ -24,8 +24,7 @@
+ cfg_select! {
+     any(
+-        all(target_family = "wasm", not(target_feature = "atomics")),
+         target_os = "uefi",
+         target_os = "zkvm",
+         target_os = "trusty",
+         target_os = "vexos",
+     ) => {
+@@ -38,7 +37,7 @@
+         pub use no_threads::{EagerStorage, LazyStorage, thread_local_inner};
+         pub(crate) use no_threads::{LocalPointer, local_pointer};
+     }
+-    target_thread_local => {
++    all(target_thread_local, not(all(target_family = "wasm", not(target_feature = "atomics")))) => {
+         mod native;
+         pub use native::{EagerStorage, LazyStorage, thread_local_inner};
+         pub(crate) use native::{LocalPointer, local_pointer};
+@@ -151,13 +150,13 @@
+             ),
+             all(not(target_thread_local), target_vendor = "apple"),
+             target_os = "teeos",
+-            all(target_os = "wasi", target_env = "p1", target_feature = "atomics"),
++            all(target_os = "wasi", target_env = "p1"),
+         ) => {
+             mod racy;
+             mod unix;
+             #[cfg(test)]
+             mod tests;
+             pub(super) use racy::LazyKey;
+             pub(super) use unix::{Key, set};
+-            #[cfg(any(not(target_thread_local), test))]
++            #[cfg(any(not(target_thread_local), test, all(target_family = "wasm", not(target_feature = "atomics"))))]
+             pub(super) use unix::get;
+             use unix::{create, destroy};
+--- a/library/std/src/sys/thread_local/key/unix.rs
++++ b/library/std/src/sys/thread_local/key/unix.rs
+@@ -1,7 +1,7 @@
+ use crate::mem;
+
+ // For WASI add a few symbols not in upstream `libc` just yet.
+-#[cfg(all(target_os = "wasi", target_env = "p1", target_feature = "atomics"))]
++#[cfg(all(target_os = "wasi", target_env = "p1"))]
+ mod libc {
+     use crate::ffi;
+
+@@ -38,7 +38,7 @@
+ }
+
+ #[inline]
+-#[cfg(any(not(target_thread_local), test))]
++#[cfg(any(not(target_thread_local), test, all(target_family = "wasm", not(target_feature = "atomics"))))]
+ pub unsafe fn get(key: Key) -> *mut u8 {
+     unsafe { libc::pthread_getspecific(key) as *mut u8 }
+ }
+--- a/library/std/src/thread/current.rs
++++ b/library/std/src/thread/current.rs
+@@ -23,7 +23,7 @@
+     use super::*;
+
+     cfg_select! {
+-        target_thread_local => {
++        all(target_thread_local, not(all(target_family = "wasm", not(target_feature = "atomics")))) => {
+             use crate::cell::Cell;
+
+             #[thread_local]

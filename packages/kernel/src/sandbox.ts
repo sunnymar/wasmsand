@@ -753,16 +753,18 @@ export class Sandbox {
           deadlineMs: getDeadlineMs?.(),
         });
       },
-      buildKernelImports: (pid, memory) =>
+      buildKernelImports: (pid, memory, _wasi, threadsBackend) =>
         createKernelImports({
           memory,
           callerPid: pid,
           kernel,
+          vfs,
           networkBridge: bridge,
           socketBackend,
           serverSockets,
           extensionRegistry,
           nativeModules: mgr.nativeModules,
+          threadsBackend,
           runCommand: async (cmd, stdin) => {
             const sandbox = getSandbox();
             if (!sandbox) {

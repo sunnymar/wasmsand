@@ -15,6 +15,9 @@ void codepod_host_yield(void);
 __attribute__((import_module("codepod"), import_name("host_file_lock")))
 int codepod_host_file_lock(int fd, int operation);
 
+__attribute__((import_module("codepod"), import_name("host_chmod")))
+int codepod_host_chmod(int path_ptr, int path_len, int mode);
+
 __attribute__((import_module("codepod"), import_name("host_network_fetch")))
 int codepod_host_network_fetch(int req_ptr, int req_len, int out_ptr, int out_cap);
 
@@ -69,6 +72,39 @@ int codepod_host_waitpid(int pid, int out_ptr, int out_cap);
  * doesn't unblock signal-style notifications. */
 __attribute__((import_module("codepod"), import_name("host_waitpid_nohang")))
 int codepod_host_waitpid_nohang(int pid);
+
+__attribute__((import_module("codepod"), import_name("host_thread_spawn")))
+int codepod_host_thread_spawn(int fn_ptr, int arg);
+
+__attribute__((import_module("codepod"), import_name("host_thread_join")))
+int codepod_host_thread_join(int tid);
+
+__attribute__((import_module("codepod"), import_name("host_thread_detach")))
+int codepod_host_thread_detach(int tid);
+
+__attribute__((import_module("codepod"), import_name("host_thread_self")))
+int codepod_host_thread_self(void);
+
+__attribute__((import_module("codepod"), import_name("host_thread_yield")))
+int codepod_host_thread_yield(void);
+
+__attribute__((import_module("codepod"), import_name("host_mutex_lock")))
+int codepod_host_mutex_lock(int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_mutex_unlock")))
+int codepod_host_mutex_unlock(int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_mutex_trylock")))
+int codepod_host_mutex_trylock(int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_cond_wait")))
+int codepod_host_cond_wait(int cond_ptr, int mutex_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_cond_signal")))
+int codepod_host_cond_signal(int cond_ptr);
+
+__attribute__((import_module("codepod"), import_name("host_cond_broadcast")))
+int codepod_host_cond_broadcast(int cond_ptr);
 
 __attribute__((import_module("codepod"), import_name("host_socket_open")))
 int codepod_host_socket_open(int domain, int type, int protocol);

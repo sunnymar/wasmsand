@@ -233,6 +233,18 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('signal-ok');
   });
 
+  it('runs the pthread-canary 4-thread mutex stress test', async () => {
+    sandbox = await Sandbox.create({
+      wasmDir: FIXTURES,
+      adapter: new NodeAdapter(),
+    });
+
+    const result = await sandbox.run('pthread-canary');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('pthread:ok');
+  });
+
   it('exposes the POSIX socket compatibility header surface', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
@@ -395,7 +407,7 @@ describe('Guest compatibility canaries', () => {
     expect(result.stdout.trim()).toBe('exclusive-blocks=true');
   });
 
-  it('runs Rust std available_parallelism through the Codepod std patch', async () => {
+  it('runs Rust std thread spawn/join through the Codepod std patch', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
       adapter: new NodeAdapter(),
@@ -404,7 +416,7 @@ describe('Guest compatibility canaries', () => {
     const result = await sandbox.run('std-thread-canary');
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toMatch(/^parallelism=\d+$/);
+    expect(result.stdout.trim()).toMatch(/^parallelism=\d+ joined=42 scoped=6$/);
   });
 
   it('runs Rust std::process::Command status through libcodepod spawn/wait', async () => {
