@@ -412,6 +412,7 @@ export class ProcessKernel {
     if (!srcTarget) throw new Error(`dup2: src fd ${srcFd} not found`);
     // If dst already exists, close it first (decrement pipe refcount)
     const existing = fdTable.get(dstFd);
+    if (existing === srcTarget) return;
     if (existing) {
       this.closeTarget(existing);
     }
@@ -489,7 +490,13 @@ export class ProcessKernel {
     if (target.type === 'vfs_file') {
       target.refs--;
       if (target.refs <= 0) {
-        target.fdTable.close(target.fd);
+        try {
+          target.fdTable.close(target.fd);
+        } catch (err) {
+          if (!(err instanceof Error) || !err.message.includes('EBADF')) {
+            throw err;
+          }
+        }
       }
     }
     if (target.type === 'socket') {

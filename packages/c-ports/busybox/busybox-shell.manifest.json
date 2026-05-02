@@ -18,6 +18,7 @@
       "head",
       "ln",
       "ls",
+      "md5sum",
       "mkdir",
       "mktemp",
       "mv",
@@ -36,10 +37,23 @@
       "true",
       "uname",
       "wc",
-      "xargs"
+      "xargs",
+      "yes"
     ]
   },
   "symlinks": [
+    {
+      "target": "/usr/bin/ash",
+      "link": "/bin/ash"
+    },
+    {
+      "target": "/usr/bin/cat",
+      "link": "/bin/cat"
+    },
+    {
+      "target": "/usr/bin/echo",
+      "link": "/bin/echo"
+    },
     {
       "target": "/usr/bin/sh",
       "link": "/bin/sh"

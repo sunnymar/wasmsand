@@ -20,7 +20,7 @@ const HELPER_DIR = resolve(BUSYBOX_DIR, 'build-shell/ash-test-helpers');
 const RESULTS_JSON = resolve(BUSYBOX_DIR, 'build/test-results/ash-upstream.json');
 const CPCC = resolve(REPO_ROOT, 'target/release/cpcc');
 
-const categories = ['ash-arith'];
+const categories = Deno.args.length > 0 ? Deno.args : ['ash-arith'];
 const helperNames = ['recho', 'zecho', 'printenv'];
 
 interface UpstreamCase {
@@ -36,9 +36,11 @@ interface UpstreamResult {
   expected: string;
   exitCode: number;
   pass: boolean;
+  skip: boolean;
 }
 
 function ensureBuilt(): void {
+  if (Deno.env.get('CODEPOD_BUSYBOX_ASH_SKIP_BUILD') === '1') return;
   execFileSync('make', ['-C', 'packages/c-ports/busybox', 'shell'], {
     cwd: REPO_ROOT,
     stdio: 'inherit',
@@ -125,11 +127,13 @@ async function runCase(sandbox: Sandbox, testCase: UpstreamCase): Promise<Upstre
   ]);
   const stdout = proc.fdReadAndClear(1).data;
   const exitCode = proc.exitCode ?? 0;
+  const skip = exitCode === 77;
   return {
     ...testCase,
     stdout,
     exitCode,
-    pass: stdout === testCase.expected,
+    pass: !skip && stdout === testCase.expected,
+    skip,
   };
 }
 
@@ -158,9 +162,9 @@ try {
   for (const testCase of collectCases()) {
     const result = await runCase(sandbox, testCase);
     results.push(result);
-    const status = result.pass ? 'PASS' : 'FAIL';
+    const status = result.skip ? 'SKIP' : result.pass ? 'PASS' : 'FAIL';
     console.log(`[busybox-ash-upstream] ${status} ${testCase.category}/${testCase.test}`);
-    if (!result.pass) {
+    if (!result.pass && !result.skip) {
       console.log(`  exit: ${result.exitCode}`);
       console.log(`  actual prefix:   ${JSON.stringify(result.stdout.slice(0, 400))}`);
       console.log(`  expected prefix: ${JSON.stringify(result.expected.slice(0, 400))}`);
@@ -174,7 +178,8 @@ const summary = {
   categories,
   total: results.length,
   passed: results.filter((result) => result.pass).length,
-  failed: results.filter((result) => !result.pass).length,
+  skipped: results.filter((result) => result.skip).length,
+  failed: results.filter((result) => !result.pass && !result.skip).length,
   results,
 };
 

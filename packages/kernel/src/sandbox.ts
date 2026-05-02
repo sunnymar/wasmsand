@@ -863,12 +863,13 @@ export class Sandbox {
           deadlineMs: getDeadlineMs?.(),
         });
       },
-      buildKernelImports: (pid, memory, _wasi, threadsBackend) =>
+      buildKernelImports: (pid, memory, wasiHost, threadsBackend) =>
         createKernelImports({
           memory,
           callerPid: pid,
           kernel,
           vfs,
+          wasiHost,
           networkBridge: bridge,
           socketBackend,
           serverSockets,
@@ -945,9 +946,24 @@ export class Sandbox {
 
   private static argvForSpawn(vfs: VfsLike, req: SpawnRequest): string[] {
     const prog = req.prog.includes('/')
-      ? req.prog
+      ? Sandbox.resolveSpawnPath(req.prog, req.cwd || '/')
       : Sandbox.resolveExecutablePathForVfs(vfs, req.prog);
     return Sandbox.expandScriptArgvForSpawn(vfs, [prog, ...req.args]);
+  }
+
+  private static resolveSpawnPath(path: string, cwd: string): string {
+    if (path.startsWith('/')) return Sandbox.normalizeVfsPath(path);
+    return Sandbox.normalizeVfsPath(`${cwd || '/'}${(cwd || '/') === '/' ? '' : '/'}${path}`);
+  }
+
+  private static normalizeVfsPath(path: string): string {
+    const segments: string[] = [];
+    for (const part of path.split('/')) {
+      if (part === '' || part === '.') continue;
+      if (part === '..') segments.pop();
+      else segments.push(part);
+    }
+    return `/${segments.join('/')}`;
   }
 
   private static expandScriptArgvForSpawn(vfs: VFS, argv: string[]): string[] {

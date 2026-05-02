@@ -371,7 +371,8 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     host_chmod(pathPtr: number, pathLen: number, mode: number): number {
       if (!opts.vfs) return -38; // ENOSYS
       try {
-        const path = readString(memory, pathPtr, pathLen);
+        const rawPath = readString(memory, pathPtr, pathLen);
+        const path = opts.wasiHost?.resolveGuestPath(rawPath) ?? rawPath;
         opts.vfs.chmod(path, mode);
         return 0;
       } catch (err) {

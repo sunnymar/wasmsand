@@ -540,6 +540,10 @@ export class WasiHost {
     }
   }
 
+  resolveGuestPath(path: string): string {
+    return this.resolvePath(3, path);
+  }
+
   // ---- Syscall implementations ----
 
   private argsSizesGet(argcPtr: number, argvBufSizePtr: number): number {
@@ -1536,7 +1540,6 @@ export class WasiHost {
   private fdRenumber(fromFd: number, toFd: number): number {
     const ioTarget = this.ioFds.get(fromFd);
     if (ioTarget) {
-      this.ioFds.set(toFd, ioTarget);
       if (this.kernel && this.pid !== undefined) {
         try {
           this.kernel.dup2(this.pid, fromFd, toFd);
@@ -1544,6 +1547,7 @@ export class WasiHost {
           // The local ioFds map is authoritative for this WasiHost.
         }
       }
+      this.ioFds.set(toFd, ioTarget);
       return WASI_ESUCCESS;
     }
 

@@ -6,14 +6,27 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '..');
 
 Deno.test({
-  name: 'BusyBox upstream ash arithmetic tests pass in sandbox',
+  name: 'BusyBox upstream ash core syntax tests pass in sandbox',
   sanitizeResources: false,
   sanitizeOps: false,
   fn() {
-    execFileSync('deno', ['run', '-A', 'scripts/run-busybox-ash-upstream-in-sandbox.ts'], {
-      cwd: repoRoot,
-      stdio: 'inherit',
-    });
+    execFileSync(
+      'deno',
+      [
+        'run',
+        '-A',
+        'scripts/run-busybox-ash-upstream-in-sandbox.ts',
+        'ash-arith',
+        'ash-alias',
+        'ash-getopts',
+        'ash-glob',
+        'ash-invert',
+      ],
+      {
+        cwd: repoRoot,
+        stdio: 'inherit',
+      },
+    );
 
     const summaryPath = resolve(
       repoRoot,
@@ -21,6 +34,7 @@ Deno.test({
     );
     const summary = JSON.parse(Deno.readTextFileSync(summaryPath));
     assertEquals(summary.failed, 0);
-    assertEquals(summary.passed, 19);
+    assertEquals(summary.skipped, 0);
+    assertEquals(summary.passed, 37);
   },
 });
