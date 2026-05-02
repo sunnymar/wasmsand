@@ -180,7 +180,7 @@ Expected: tests pass and commit succeeds.
 - Test: `packages/kernel/src/vfs/__tests__/root-provider.test.ts`
 - Modify: `packages/kernel/src/node-adapter.ts`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Create `packages/kernel/src/vfs/__tests__/root-provider.test.ts`:
 
@@ -245,7 +245,7 @@ describe("NodeDirectoryRootProvider", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -256,7 +256,7 @@ deno test -A --no-check packages/kernel/src/vfs/__tests__/root-provider.test.ts
 
 Expected: FAIL because `root-provider.ts` does not exist.
 
-- [ ] **Step 3: Implement the provider**
+- [x] **Step 3: Implement the provider**
 
 Create pure `packages/kernel/src/vfs/root-provider.ts`:
 
@@ -407,7 +407,7 @@ export class NodeDirectoryRootProvider implements RootProvider {
 }
 ```
 
-- [ ] **Step 4: Export Node provider**
+- [x] **Step 4: Export Node provider**
 
 Add to `packages/kernel/src/node-adapter.ts`:
 
@@ -416,7 +416,7 @@ export { NodeDirectoryRootProvider } from "./vfs/node-directory-root-provider.js
 export type { RootProvider, NodeDirectoryRootProviderOptions } from "./vfs/root-provider.js";
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
