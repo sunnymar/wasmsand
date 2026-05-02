@@ -515,11 +515,15 @@ running processes, suspended processes, and waitable exited children that have
 not been released. The root process counts toward the limit. Values below `1`
 are invalid configuration.
 
-PID allocation and fork registration must enforce the limit synchronously in
-the process kernel. `fork()` must not allocate a PID, clone memory, or register
-fd state if the limit is already reached. All process creation paths, including
-`posix_spawn` / `host_spawn`, should route through the same allocator so process
-limits are consistent and a fork bomb cannot bypass them.
+Every process creation path must synchronously reserve a process slot before
+PID allocation, fd state registration, memory clone, or Wasm instantiation.
+This includes `fork()`, `posix_spawn`, `host_spawn`, direct process-loader
+entrypoints, and any future exec helper that creates a temporary process record.
+If the limit is reached, creation must fail with no side effects: no PID is
+allocated, no fd state is registered, no memory is cloned, and no child
+instantiation is started. `fork()` reports this as `-1/EAGAIN`; spawn-style
+APIs report their existing spawn failure while preserving the same
+no-side-effect guarantee.
 
 Fork must never clone state across sandbox boundaries.
 
