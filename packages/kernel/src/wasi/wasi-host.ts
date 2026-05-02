@@ -1464,6 +1464,10 @@ export class WasiHost {
     return WASI_ESUCCESS;
   }
 
+  renumberFd(fromFd: number, toFd: number): number {
+    return this.fdRenumber(fromFd, toFd);
+  }
+
   private fdRenumber(fromFd: number, toFd: number): number {
     const ioTarget = this.ioFds.get(fromFd);
     if (ioTarget) {

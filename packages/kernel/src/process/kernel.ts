@@ -38,6 +38,7 @@ interface FileLockState {
 export class ProcessKernel {
   private processTable = new Map<number, ProcessEntry>();
   private nextPid = 1;
+  private parentPids = new Map<number, number>();
   private fdTables = new Map<number, Map<number, FdTarget>>();
   private nextFds = new Map<number, number>();
   private fileLocks = new Map<string, FileLockState>();
@@ -118,7 +119,9 @@ export class ProcessKernel {
   }
 
   /** Pre-register a process entry so waitpid can find it before async instantiation completes. */
-  registerPending(pid: number, command?: string): void {
+  registerPending(pid: number, command?: string, ppid: number = NO_PARENT_PID): void {
+    this.parentPids.set(pid, ppid);
+    this.initProcess(pid);
     if (!this.processTable.has(pid)) {
       this.processTable.set(pid, {
         pid, promise: null, exitCode: -1, state: 'running', wasiHost: null, waiters: [],
@@ -160,7 +163,24 @@ export class ProcessKernel {
     promise.then(onExit, onExit);
   }
 
-  allocPid(_ppid: number = NO_PARENT_PID, _command?: string): number { return this.nextPid++; }
+  allocPid(ppid: number = NO_PARENT_PID, command?: string): number {
+    const pid = this.nextPid++;
+    this.parentPids.set(pid, ppid);
+    this.initProcess(pid);
+    if (command) this.registerPending(pid, command, ppid);
+    return pid;
+  }
+
+  getPpid(pid: number): number {
+    return this.parentPids.get(pid) ?? NO_PARENT_PID;
+  }
+
+  killProcess(pid: number, _sig: number): boolean {
+    const entry = this.processTable.get(pid);
+    if (!entry || entry.state === 'exited') return false;
+    entry.wasiHost?.cancelExecution();
+    return true;
+  }
 
   releaseProcess(pid: number, exitCode: number): void {
     this.registerExited(pid, exitCode);
@@ -168,7 +188,9 @@ export class ProcessKernel {
   }
 
   /** Register a process as already exited (used for synchronous spawn). */
-  registerExited(pid: number, exitCode: number): void {
+  registerExited(pid: number, exitCode: number, ppid?: number): void {
+    if (ppid !== undefined) this.parentPids.set(pid, ppid);
+    this.initProcess(pid);
     const existing = this.processTable.get(pid);
     if (existing) {
       existing.state = 'exited';
@@ -358,6 +380,7 @@ export class ProcessKernel {
     }
     this.fdTables.clear();
     this.processTable.clear();
+    this.parentPids.clear();
     this.fileLocks.clear();
   }
 }

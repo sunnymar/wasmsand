@@ -155,7 +155,7 @@ class AsyncifyAsyncBridge implements AsyncBridge {
    *                  header + stack-save area).  The caller must have already
    *                  written the [start, end] header into WASM memory.
    */
-  initFromInstance(instance: WebAssembly.Instance, dataAddr: number): void {
+  initFromInstance(instance: WebAssembly.Instance, dataAddr: number, _dataSize?: number): void {
     const exp = instance.exports;
     this.exports = {
       startUnwind: exp.asyncify_start_unwind as (ptr: number) => void,
@@ -347,6 +347,10 @@ class AsyncifyAsyncBridge implements AsyncBridge {
       }
       return result;
     };
+  }
+
+  wrapExportSync(fn: (...args: number[]) => number): (...args: number[]) => number {
+    return (...args: number[]): number => fn(...args);
   }
 
   /**

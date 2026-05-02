@@ -2,6 +2,8 @@
   "unstable": ["sloppy-imports"],
   "nodeModulesDir": "auto",
   "imports": {
+    "@codepod/kernel": "./packages/kernel/src/index.ts",
+    "@codepod/kernel/node": "./packages/kernel/src/node-adapter.ts",
     "@std/testing": "jsr:@std/testing@^1",
     "@std/expect": "jsr:@std/expect@^1",
     "path": "node:path",
