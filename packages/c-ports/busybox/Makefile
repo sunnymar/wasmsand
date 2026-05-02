@@ -8,6 +8,8 @@ BUSYBOX_ARCHIVE := busybox-$(BUSYBOX_VERSION).tar.bz2
 BUSYBOX_URL := https://busybox.net/downloads/$(BUSYBOX_ARCHIVE)
 BUILD_DIR := build
 SRC_DIR := src
+SHELL_BUILD_DIR := build-shell
+SHELL_SRC_DIR := src-shell
 COMPAT_INCLUDE := $(abspath compat/include)
 GUEST_COMPAT_INCLUDE := $(abspath ../../guest-compat/include)
 GUEST_COMPAT_LIB := $(REPO_ROOT)/packages/guest-compat/build/libcodepod_guest_compat.a
@@ -27,9 +29,11 @@ CPRANLIB := $(REPO_ROOT)/target/release/cpranlib
 WASI_EMULATED_CFLAGS := -I$(COMPAT_INCLUDE) -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS -DSOCK_RAW=3 -DSOCK_RDM=4 -DSOCK_SEQPACKET=5
 WASI_EMULATED_LDFLAGS := -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-process-clocks -Wl,-u,__main_argc_argv
 
-.PHONY: all fetch configure copy-fixtures clean ensure-toolchain ensure-compat
+.PHONY: all shell fetch fetch-shell configure configure-shell copy-fixtures copy-shell-fixtures clean ensure-toolchain ensure-compat trace-ash-process-paths ensure-shell-source
 
 all: $(BUILD_DIR)/busybox.wasm
+
+shell: $(SHELL_BUILD_DIR)/busybox-shell.wasm
 
 # Always delegate to cargo / upstream make so edits propagate. Cargo's
 # and make's own up-to-date checks are the right source of truth;
@@ -46,6 +50,18 @@ fetch:
 	if [ ! -f $(SRC_DIR)/Makefile ]; then \
 		curl -L $(BUSYBOX_URL) | tar -xj -C src --strip-components=1; \
 	fi
+
+fetch-shell:
+	mkdir -p $(SHELL_BUILD_DIR) $(SHELL_SRC_DIR)
+	if [ ! -f $(SHELL_SRC_DIR)/Makefile ]; then \
+		curl -L $(BUSYBOX_URL) | tar -xj -C $(SHELL_SRC_DIR) --strip-components=1; \
+	fi
+
+ensure-shell-source:
+	@test -f $(SHELL_SRC_DIR)/Makefile || { \
+		echo "BusyBox shell source missing at $(SHELL_SRC_DIR). Run: make -C packages/c-ports/busybox fetch-shell"; \
+		exit 1; \
+	}
 
 configure: fetch busybox.config compat/include/paths.h ensure-toolchain
 	cd $(SRC_DIR) && \
@@ -92,6 +108,51 @@ configure: fetch busybox.config compat/include/paths.h ensure-toolchain
 			-e 's|-Wl,--sort-section,alignment||g' \
 			scripts/trylink
 
+configure-shell: ensure-shell-source busybox-shell.config compat/include/paths.h ensure-toolchain
+	cd $(SHELL_SRC_DIR) && \
+		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
+			KCONFIG_ALLCONFIG="$(abspath busybox-shell.config)" allnoconfig && \
+		awk '\
+			function key(line) { \
+				if (line ~ /^CONFIG_[A-Za-z0-9_]+=/) { \
+					split(line, parts, "="); \
+					return parts[1]; \
+				} \
+				if (line ~ /^# CONFIG_[A-Za-z0-9_]+ is not set$$/) { \
+					sub(/^# /, "", line); \
+					sub(/ is not set$$/, "", line); \
+					return line; \
+				} \
+				return ""; \
+			} \
+			FNR == NR { \
+				current_key = key($$0); \
+				if (current_key != "") seen[current_key] = 1; \
+				overrides[++count] = $$0; \
+				next; \
+			} \
+			{ \
+				current_key = key($$0); \
+				if (current_key != "" && seen[current_key]) next; \
+				print; \
+			} \
+			END { \
+				print ""; \
+				for (i = 1; i <= count; i++) print overrides[i]; \
+			} \
+		' "$(abspath busybox-shell.config)" .config > .config.merged && \
+		mv .config.merged .config && \
+		rm -rf include/config include/autoconf.h && \
+		sleep 1 && \
+		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" silentoldconfig && \
+		sed -i.bak \
+			-e 's|^START_GROUP=.*|START_GROUP=""|' \
+			-e 's|^END_GROUP=.*|END_GROUP=""|' \
+			-e 's|-Wl,--warn-common||g' \
+			-e 's|-Wl,--sort-common||g' \
+			-e 's|-Wl,--sort-section,alignment||g' \
+			scripts/trylink
+
 $(BUILD_DIR)/busybox.wasm: configure ensure-compat
 	cd $(SRC_DIR) && \
 		CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
@@ -103,6 +164,17 @@ $(BUILD_DIR)/busybox.wasm: configure ensure-compat
 			busybox
 	cp $(SRC_DIR)/busybox_unstripped $(BUILD_DIR)/busybox.wasm
 
+$(SHELL_BUILD_DIR)/busybox-shell.wasm: configure-shell ensure-compat
+	cd $(SHELL_SRC_DIR) && \
+		CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
+		CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
+		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
+			EXTRA_CFLAGS="$(WASI_EMULATED_CFLAGS)" \
+			EXTRA_LDFLAGS="$(WASI_EMULATED_LDFLAGS)" \
+			SKIP_STRIP=y \
+			busybox
+	cp $(SHELL_SRC_DIR)/busybox_unstripped $(SHELL_BUILD_DIR)/busybox-shell.wasm
+
 copy-fixtures: $(BUILD_DIR)/busybox.wasm manifest.json
 	cp $(BUILD_DIR)/busybox.wasm $(FIXTURES)/busybox.wasm
 	# Manifest declares the multicall applets list — kernel's
@@ -110,5 +182,9 @@ copy-fixtures: $(BUILD_DIR)/busybox.wasm manifest.json
 	# and override registry entries to dispatch through busybox.
 	cp manifest.json $(FIXTURES)/busybox.manifest.json
 
+copy-shell-fixtures: $(SHELL_BUILD_DIR)/busybox-shell.wasm busybox-shell.manifest.json
+	cp $(SHELL_BUILD_DIR)/busybox-shell.wasm $(FIXTURES)/busybox-shell.wasm
+	cp busybox-shell.manifest.json $(FIXTURES)/busybox-shell.manifest.json
+
 clean:
-	rm -rf $(BUILD_DIR) $(SRC_DIR)
+	rm -rf $(BUILD_DIR) $(SRC_DIR) $(SHELL_BUILD_DIR) $(SHELL_SRC_DIR)
