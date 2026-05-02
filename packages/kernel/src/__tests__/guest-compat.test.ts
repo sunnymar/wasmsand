@@ -280,7 +280,9 @@ describe('Guest compatibility canaries', () => {
     const socketBackend: SocketBackend = {
       connect: () => ({ ok: true, socket: 606 }),
       send: (_socket, dataB64) => ({ ok: true, bytes_sent: atob(dataB64).length }),
-      recv: () => ({ ok: true, data_b64: '' }),
+      recv: (_socket, _maxBytes, opts) => opts?.nonblocking
+        ? { ok: false, error: 'EAGAIN' }
+        : { ok: true, data_b64: '' },
       close: () => ({ ok: true }),
     };
     sandbox = await Sandbox.create({
@@ -755,9 +757,11 @@ describe('Guest compatibility canaries', () => {
     const socketBackend: SocketBackend = {
       connect: () => ({ ok: true, socket: 1002 }),
       send: (_socket, dataB64) => ({ ok: true, bytes_sent: atob(dataB64).length }),
-      recv: (socket, maxBytes) => {
-        requests.push({ op: 'recv', socket, maxBytes });
-        return { ok: true, data_b64: btoa('abc') };
+      recv: (socket, maxBytes, opts) => {
+        requests.push({ op: 'recv', socket, maxBytes, nonblocking: opts?.nonblocking === true });
+        return opts?.nonblocking
+          ? { ok: false, error: 'EAGAIN' }
+          : { ok: true, data_b64: btoa('abc') };
       },
       close: () => ({ ok: true }),
     };
@@ -771,7 +775,7 @@ describe('Guest compatibility canaries', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('nonblocking=ok');
-    expect(requests).toEqual([]);
+    expect(requests).toEqual([{ op: 'recv', socket: 1002, maxBytes: 3, nonblocking: true }]);
   });
 
   it('runs Rust std::net::TcpListener through libcodepod sockets', async () => {
