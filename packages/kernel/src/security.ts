@@ -57,6 +57,8 @@ export interface SecurityLimits {
   rpcBytes?: number;
   /** Max WASM linear memory in bytes. Rejects modules that exceed this. */
   memoryBytes?: number;
+  /** Max process records in a sandbox. Default 64. */
+  processes?: number;
 }
 
 /** Error classes returned in RunResult.errorClass. */

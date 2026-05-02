@@ -263,6 +263,9 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
       const req = JSON.parse(reqJson) as SpawnRequest;
       if (opts.spawnProcess && opts.kernel) {
+        if (!opts.kernel.canReserveProcessSlot()) {
+          return -1;
+        }
         const fdTable = opts.kernel.buildFdTableForSpawn(callerPid, req);
         // If stdin_data is provided, override fd 0 with a static target
         if (req.stdin_data) {

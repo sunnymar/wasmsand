@@ -314,7 +314,7 @@ export class Sandbox {
     await mgr.preloadModules();
 
     const secLimits = options.security?.limits;
-    const kernel = new ProcessKernel();
+    const kernel = new ProcessKernel({ maxProcesses: secLimits?.processes });
     const processes = new Map<number, Process>();
     const env = new Map<string, string>();
     let sandboxRef: Sandbox | undefined;
@@ -989,6 +989,7 @@ export class Sandbox {
       stderrBytes: security.limits?.stderrBytes,
       toolAllowlist: security.toolAllowlist,
       memoryBytes: security.limits?.memoryBytes,
+      processes: security.limits?.processes,
       bridgeSab: Sandbox.getBridgeSab(bridge),
       networkPolicy: networkPolicy ? {
         allowedHosts: networkPolicy.allowedHosts,
@@ -1456,7 +1457,7 @@ export class Sandbox {
     // Pre-load all tool modules so spawnSync can use them synchronously
     await childMgr.preloadModules();
 
-    const childKernel = new ProcessKernel();
+    const childKernel = new ProcessKernel({ maxProcesses: this.security?.limits?.processes });
     const childProcesses = new Map<number, Process>();
     let childRef: Sandbox | undefined;
     const childCtx = Sandbox.createLoaderContext({
