@@ -466,7 +466,7 @@ export class WasiHost {
         fd_fdstat_set_rights: this.fdNoOp.bind(this),
         fd_filestat_set_size: this.fdFilestatSetSize.bind(this),
         fd_filestat_set_times: this.fdNoOp.bind(this),
-        path_filestat_set_times: this.fdNoOp.bind(this),
+        path_filestat_set_times: this.pathFilestatSetTimes.bind(this),
         fd_pread: this.fdPread.bind(this),
         fd_pwrite: this.fdPwrite.bind(this),
         // Stubs that must remain ENOSYS (masking bugs or unimplemented semantics)
@@ -1216,6 +1216,34 @@ export class WasiHost {
       // flags bit 0 = SYMLINK_FOLLOW; when not set, use lstat
       const followSymlinks = (flags & 1) !== 0;
       return this.writeFilestat(bufPtr, absPath, followSymlinks);
+    } catch (err) {
+      if (err instanceof VfsError) {
+        return vfsErrnoToWasi(err.errno);
+      }
+      return fdErrorToWasi(err);
+    }
+  }
+
+  private pathFilestatSetTimes(
+    dirFd: number,
+    flags: number,
+    pathPtr: number,
+    pathLen: number,
+    _atim: bigint,
+    _mtim: bigint,
+    _fstflags: number,
+  ): number {
+    this.checkDeadline();
+    try {
+      const relativePath = this.readString(pathPtr, pathLen);
+      const absPath = this.resolvePath(dirFd, relativePath);
+      const followSymlinks = (flags & 1) !== 0;
+      if (followSymlinks) {
+        this.vfs.stat(absPath);
+      } else {
+        this.vfs.lstat(absPath);
+      }
+      return WASI_ESUCCESS;
     } catch (err) {
       if (err instanceof VfsError) {
         return vfsErrnoToWasi(err.errno);

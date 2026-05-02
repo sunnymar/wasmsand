@@ -1,7 +1,43 @@
 {
   "name": "busybox-shell",
   "multicall": {
-    "applets": ["ash", "cat", "chmod", "echo", "false", "printf", "sh", "test", "true"]
+    "applets": [
+      "ash",
+      "cat",
+      "chmod",
+      "cp",
+      "cut",
+      "diff",
+      "dirname",
+      "echo",
+      "env",
+      "expr",
+      "false",
+      "find",
+      "grep",
+      "head",
+      "ln",
+      "ls",
+      "mkdir",
+      "mktemp",
+      "mv",
+      "printf",
+      "pwd",
+      "rm",
+      "rmdir",
+      "sed",
+      "sh",
+      "sleep",
+      "sort",
+      "tail",
+      "test",
+      "touch",
+      "tr",
+      "true",
+      "uname",
+      "wc",
+      "xargs"
+    ]
   },
   "symlinks": [
     {

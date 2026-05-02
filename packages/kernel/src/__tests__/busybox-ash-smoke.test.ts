@@ -21,6 +21,6 @@ Deno.test({
     );
     const summary = JSON.parse(Deno.readTextFileSync(summaryPath));
     assertEquals(summary.failed, 0);
-    assertEquals(summary.passed, 6);
+    assertEquals(summary.passed, 10);
   },
 });

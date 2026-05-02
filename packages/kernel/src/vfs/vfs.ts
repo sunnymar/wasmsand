@@ -590,12 +590,12 @@ export class VFS {
 
   mkdir(path: string): void {
     const { parent, name } = this.resolveParent(path);
-    this.assertWritePermission(parent);
 
     if (parent.children.has(name)) {
       throw new VfsError('EEXIST', `file exists: ${path}`);
     }
 
+    this.assertWritePermission(parent);
     this.assertFileCountLimit();
     parent.children.set(name, createDirInode(0o755, this.createdUid(), this.createdGid()));
     this.currentFileCount++;

@@ -404,6 +404,26 @@ describe('WasiHost', () => {
     });
   });
 
+  describe('path_filestat_set_times', () => {
+    it('returns ENOENT for a missing path', () => {
+      const { wasi, bytes } = getImportsAndView(host, memory);
+
+      const pathStr = 'tmp/missing-touch-target';
+      bytes.set(new TextEncoder().encode(pathStr), 500);
+
+      const errno = wasi.path_filestat_set_times(
+        3,
+        0,
+        500,
+        pathStr.length,
+        BigInt(0),
+        BigInt(0),
+        0,
+      );
+      expect(errno).toBe(WASI_ENOENT);
+    });
+  });
+
   describe('path_remove_directory', () => {
     it('removes an empty directory', () => {
       vfs.mkdir('/tmp/removeme');

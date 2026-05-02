@@ -43,6 +43,30 @@ const smokes: Smoke[] = [
     expectedStdout: 'script-ok\n',
     expectedExitCode: 0,
   },
+  {
+    name: 'userland-diff-cp',
+    script: "printf 'a\\nb\\n' > /tmp/a.txt && cp /tmp/a.txt /tmp/b.txt && diff /tmp/a.txt /tmp/b.txt; echo diff:$?",
+    expectedStdout: 'diff:0\n',
+    expectedExitCode: 0,
+  },
+  {
+    name: 'userland-tail-head-wc',
+    script: "printf 'a\\nb\\nc\\n' > /tmp/lines.txt && head -n 2 /tmp/lines.txt | tail -n 1 && wc -l /tmp/lines.txt | cut -d' ' -f1",
+    expectedStdout: 'b\n3\n',
+    expectedExitCode: 0,
+  },
+  {
+    name: 'userland-find-sort-grep',
+    script: "mkdir -p /tmp/tree && touch /tmp/tree/b /tmp/tree/a && find /tmp/tree -type f | sort | grep '/a$'",
+    expectedStdout: '/tmp/tree/a\n',
+    expectedExitCode: 0,
+  },
+  {
+    name: 'userland-xargs-paths',
+    script: "printf 'hello world\\n' | xargs echo; dirname /tmp/tree/a; pwd; uname",
+    expectedStdout: 'hello world\n/tmp/tree\n/\ncodepod\n',
+    expectedExitCode: 0,
+  },
 ];
 
 function ensureBuilt(): void {
