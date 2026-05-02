@@ -14,11 +14,19 @@ Codepod currently has process identity, `posix_spawn`, specific-child
 `waitpid`, pipes, sockets, and fd ownership, but `fork()` and `vfork()` return
 `ENOSYS`.
 
-Some real ports still need `fork()`:
+Some real ports need `fork()` as one part of their process model:
 
 - shells that fork for subshells, pipelines, and command execution
 - BusyBox applets that expect Unix process duplication
 - future ports that use fork before a more specific process API can replace it
+
+Fork alone is not enough to claim shell or BusyBox compatibility. Programs
+that use the classic `fork()` then child-side `execve()` pattern also need real
+process-image replacement. Codepod's current `exec*` implementation is
+spawn-and-wait emulation: it does not preserve the child's PID and only carries
+the current spawn fd surface. This spec defines fork as the first continuation
+primitive and makes real `execve()` a required companion before shell/BusyBox
+acceptance can be claimed.
 
 WebAssembly does not expose an engine-level way to clone a live instance.
 The JS API can instantiate a module and read linear memory, but it cannot clone
@@ -49,11 +57,15 @@ copy the process state, then rewind twice with different return values.
 8. Inherit fd tables with POSIX-style shared open file descriptions.
 9. Share the sandbox VFS namespace between parent and child.
 10. Fail closed for unsupported module/runtime states.
+11. Define the `execve()` companion requirements needed before fork can be used
+    to claim shell or BusyBox process compatibility.
 
 ## Non-Goals
 
 - `vfork()` semantics in the first fork slice.
-- `execve()` / process image replacement.
+- `execve()` / process image replacement in the first fork implementation
+  slice. Real `execve()` is still a required companion before shell/BusyBox
+  acceptance.
 - Unix job control, controlling terminals, process groups beyond current
   Codepod behavior, or full signal delivery.
 - Forking multi-threaded Wasm guests or SharedArrayBuffer-backed memories.
@@ -63,6 +75,7 @@ copy the process state, then rewind twice with different return values.
 - Duplicating in-flight network requests, timers, or other external host work.
 - Copy-on-write linear memory in the first implementation. Full memory copy is
   acceptable initially.
+- Full shell, BusyBox, or fork/exec compatibility in the fork-only milestone.
 
 ## Terminology
 
@@ -204,7 +217,7 @@ depends on parent suspension and shared address space. Treat it as a follow-up.
 
 ## Loader Validation
 
-The process loader must fail closed:
+Every process execution path must fail closed:
 
 1. If a module imports `codepod.host_fork`, it must declare continuation support
    through `codepod.features`.
@@ -219,6 +232,31 @@ The process loader must fail closed:
    available.
 4. Non-continuation modules must not be forced onto Asyncify because they import
    unrelated async host functions.
+
+The implementation must centralize this logic in one helper instead of copying
+feature parsing across loaders. The helper should produce a profile similar to:
+
+```ts
+interface CodepodModuleProfile {
+  importsSetjmp: boolean;
+  importsFork: boolean;
+  hasAsyncify: boolean;
+  hasContinuationsFeature: boolean;
+  requiresContinuations: boolean;
+  bridge: "asyncify" | "jspi" | "sync";
+}
+```
+
+At minimum, these entrypoints must use the shared helper:
+
+- `loadProcess()`
+- `ProcessManager.spawn()`
+- `ProcessManager.spawnSync()`
+- any resident-bash child process path that instantiates child modules directly
+
+If a legacy manager path cannot support continuation modules yet, it must reject
+them with the same fail-closed loader error rather than silently choosing a
+different bridge or import set.
 
 The loader should produce clear errors such as:
 
@@ -351,12 +389,24 @@ one or more successful `setjmp` calls must inherit those saved jump targets.
 - cwd
 - process mode
 - deadline / resource limit references
-- fd table snapshot
+- process-kernel fd target table snapshot
+- WASI file table snapshot, including regular file entries, directory entries,
+  fd flags, rights, and allocator state
+- `WasiHost.dirFds` directory-fd map
+- preopen state
+- stdio/custom `ioFds`
+- next-fd counters for both kernel-owned and WASI-owned fd allocation
 - signal/process metadata currently tracked by the kernel
 
 The snapshot is created after `asyncify_stop_unwind()`, while the unwound stack
 is represented in linear memory. The implementation must copy memory before
 rewinding the parent.
+
+Current WASI directory fds are private to `WasiHost`, so the implementation must
+make `WasiHost` explicitly snapshotable/restorable before `fork()` can be
+correct. Kernel fd targets alone are not sufficient: a child must be able to use
+an inherited directory fd as the base for later `path_open`, `fd_readdir`,
+`fd_fdstat_get`, and close operations.
 
 ## Memory Semantics
 
@@ -386,9 +436,11 @@ rejected, or made snapshot-safe.
 The copied entries reference the same underlying open file descriptions:
 
 - regular-file offsets are shared
+- directory fds remain usable in both processes
 - pipe endpoints are shared and refcounted
 - socket endpoints are shared and refcounted
 - stdout/stderr buffer targets are shared unless redirected
+- fd flags, including future `FD_CLOEXEC` state, are copied by value
 - close in one process decrements the reference and does not invalidate the
   other process's fd number
 - EOF on a pipe is delayed until all write-end references are closed
@@ -396,8 +448,8 @@ The copied entries reference the same underlying open file descriptions:
 This may require a fd-layer refactor before `fork()` lands. The process kernel
 must be able to distinguish an fd table entry from the underlying open object.
 
-Close-on-exec flags can be tracked now if convenient, but `execve()` is out of
-scope for this slice.
+The fork-only slice copies fd flags by value. The required `execve()` companion
+must enforce close-on-exec when replacing the child image.
 
 ## VFS Semantics
 
@@ -444,6 +496,31 @@ The child inherits the parent's sandbox policy:
 The process kernel must enforce a maximum process count. If the limit would be
 exceeded, `fork()` returns `-1` with `errno = EAGAIN`.
 
+Add a concrete security limit:
+
+```ts
+interface SecurityLimits {
+  processes?: number;
+}
+```
+
+The default must be finite. The first implementation should use:
+
+```ts
+const DEFAULT_MAX_PROCESSES = 64;
+```
+
+`processes` counts process records that can still consume sandbox resources:
+running processes, suspended processes, and waitable exited children that have
+not been released. The root process counts toward the limit. Values below `1`
+are invalid configuration.
+
+PID allocation and fork registration must enforce the limit synchronously in
+the process kernel. `fork()` must not allocate a PID, clone memory, or register
+fd state if the limit is already reached. All process creation paths, including
+`posix_spawn` / `host_spawn`, should route through the same allocator so process
+limits are consistent and a fork bomb cannot bypass them.
+
 Fork must never clone state across sandbox boundaries.
 
 ## Interaction With Existing APIs
@@ -462,11 +539,37 @@ natural follow-ups because shells often want wait-any behavior.
 
 ### `execve`
 
-`execve()` is not part of this spec.
+Real `execve()` is a required companion before Codepod can claim shell or
+BusyBox process compatibility with this fork primitive.
 
-That means the first fork milestone validates fork-only behavior, child exit,
-memory divergence, fd inheritance, and wait. Full shell fork/exec command
-execution needs a later `execve` or fork-aware spawn design.
+The current `exec*` implementation is spawn-and-wait emulation. That is
+acceptable for some non-forked command patterns, but it is not correct after a
+real `fork()` because the child process must keep the same PID across exec and
+the parent must wait on that PID.
+
+The required companion `execve()` design must provide:
+
+- `execve(path, argv, envp)` replaces the current process image.
+- On success, `execve()` does not return.
+- On failure, it returns `-1` and sets `errno`.
+- PID, PPID, wait record, sandbox policy, cwd, VFS namespace, and process
+  limits are preserved.
+- The fd table is preserved except for entries marked close-on-exec.
+- Non-stdio fds, directory fds, pipes, sockets, and preopens survive when not
+  marked close-on-exec.
+- The new image receives the supplied argv/envp.
+- The old Wasm instance is released after the new image is committed.
+- Parent `waitpid(child_pid, ...)` observes the exec'd image's final status.
+
+The implementation may use a new `codepod.host_execve` import or a kernel
+internal image-replacement path. It must not implement successful `execve()` by
+spawning a second child and waiting from the forked child, because that changes
+PID identity and wait semantics.
+
+The first fork milestone remains fork-only: it validates return splitting,
+memory divergence, fd inheritance, VFS sharing, and specific-child wait.
+Shell/BusyBox acceptance is gated on a separate required fork+exec milestone
+with tests that exercise child-side `execve()`.
 
 ### `setjmp` / `longjmp`
 
@@ -532,6 +635,10 @@ return `-1` and set `errno`.
   load.
 - A continuation module runs under `AsyncifyAsyncBridge` even when JSPI exists.
 - A non-continuation module still uses JSPI when available.
+- `loadProcess()`, `ProcessManager.spawn()`, and `ProcessManager.spawnSync()`
+  report the same validation errors for malformed continuation modules.
+- A legacy manager path that does not support continuation modules rejects
+  `host_fork` imports clearly rather than installing partial imports.
 - Legacy `codepod.features` containing `setjmp` still enables existing setjmp
   canaries during the migration.
 
@@ -559,16 +666,35 @@ Add C canaries under guest compatibility conformance:
 6. Pipe refcounts:
    - parent creates pipe and forks
    - EOF is not observed until all write-end references close
-7. VFS namespace sharing:
+7. Directory fd inheritance:
+   - parent opens a directory fd
+   - child uses that fd as the base for a relative `path_open`
+8. VFS namespace sharing:
    - child writes a file
    - parent sees it after wait
-8. Resource limit:
+9. Resource limit:
    - process limit forces `fork()` to fail with `EAGAIN`
+   - the same limit applies to `host_spawn`
+
+### Fork+Exec Acceptance Gate
+
+These tests are required before using this work to claim shell/BusyBox process
+compatibility:
+
+- child calls `execve("/bin/true", ...)`; parent `waitpid(child_pid, ...)`
+  observes success for the same child PID returned by `fork()`
+- child calls `execve()` on a program that prints `getpid()`; the printed PID
+  matches the fork child PID
+- non-stdio pipe fd survives fork+exec when not marked close-on-exec
+- a close-on-exec fd is closed in the exec'd image
+- a directory fd or preopen survives fork+exec when not marked close-on-exec
 
 ### Integration Tests
 
 - A small shell-oriented canary forks a child, redirects stdout, waits, and
   observes the child output.
+- Shell and BusyBox acceptance tests stay out of scope until the fork+exec gate
+  above passes.
 - Existing `setjmp` / `longjmp` tests continue to pass in continuation mode.
 - Existing `posix_spawn` tests continue to pass without continuation mode.
 - `git diff --check` and the relevant Deno/Rust checks pass for the touched
@@ -586,15 +712,26 @@ Add C canaries under guest compatibility conformance:
    archive.
 4. Add `host_fork` declarations and the continuation `fork()` shim.
 5. Extend loader validation from `setjmp` to `continuations`.
-6. Extend `AsyncifyAsyncBridge` with explicit fork state.
-7. Add synchronous process-kernel snapshot and child process registration.
-8. Add memory clone / async child instance rewind from the copied snapshot.
-9. Refactor fd tables to support shared open file descriptions if needed.
-10. Add conformance canaries and acceptance tests.
+6. Move module feature parsing and bridge selection into a shared helper used
+   by all process entrypoints.
+7. Add `SecurityLimits.processes` and synchronous process-count enforcement.
+8. Extend `AsyncifyAsyncBridge` with explicit fork state.
+9. Add synchronous process-kernel snapshot and child process registration.
+10. Add `WasiHost` snapshot/restore for file, directory, preopen, flag, and
+    next-fd state.
+11. Add memory clone / async child instance rewind from the copied snapshot.
+12. Refactor fd tables to support shared open file descriptions if needed.
+13. Add fork-only conformance canaries and acceptance tests.
+14. Add a required companion fork+exec spec/plan before shell/BusyBox
+    acceptance.
+
+## Required Companion
+
+Implementation of the `execve()` companion slice is required before this fork
+work can be used to claim shell or BusyBox process compatibility.
 
 ## Open Follow-Ups
 
-- `execve()` or a fork-aware spawn path for full fork/exec shell behavior.
 - `wait()` / `waitpid(-1)` wait-any support.
 - `vfork()` semantics or a deliberate `vfork -> fork` compatibility mode.
 - Copy-on-write linear memory optimization.
