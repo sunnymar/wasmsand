@@ -261,6 +261,58 @@ describe('cowClone option propagation', () => {
 });
 
 describe('mode-bit enforcement', () => {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  it('non-root cannot write root-owned files without mode permission', () => {
+    const vfs = new VFS({ credential: { uid: 1000, gid: 1000 } });
+    vfs.withWriteAccess(() => {
+      vfs.writeFile('/tmp/system.txt', enc.encode('root'));
+      vfs.chown('/tmp/system.txt', 0, 0);
+      vfs.chmod('/tmp/system.txt', 0o644);
+    });
+
+    expect(() => vfs.writeFile('/tmp/system.txt', enc.encode('user'))).toThrow(/EACCES/);
+  });
+
+  it('non-root can write files it owns when mode permits it', () => {
+    const vfs = new VFS({ credential: { uid: 1000, gid: 1000 } });
+    vfs.withWriteAccess(() => {
+      vfs.writeFile('/tmp/user.txt', enc.encode('old'));
+      vfs.chown('/tmp/user.txt', 1000, 1000);
+      vfs.chmod('/tmp/user.txt', 0o644);
+    });
+
+    vfs.writeFile('/tmp/user.txt', enc.encode('new'));
+
+    expect(dec.decode(vfs.readFile('/tmp/user.txt'))).toBe('new');
+  });
+
+  it('non-root cannot chmod files it does not own', () => {
+    const vfs = new VFS({ credential: { uid: 1000, gid: 1000 } });
+    vfs.withWriteAccess(() => {
+      vfs.writeFile('/tmp/system.txt', enc.encode('root'));
+      vfs.chown('/tmp/system.txt', 0, 0);
+    });
+
+    expect(() => vfs.chmod('/tmp/system.txt', 0o777)).toThrow(/EACCES/);
+  });
+
+  it('root credential can mutate root-owned files', () => {
+    const vfs = new VFS({ credential: { uid: 0, gid: 0 } });
+    vfs.withWriteAccess(() => {
+      vfs.writeFile('/tmp/system.txt', enc.encode('root'));
+      vfs.chown('/tmp/system.txt', 0, 0);
+      vfs.chmod('/tmp/system.txt', 0o644);
+    });
+
+    vfs.writeFile('/tmp/system.txt', enc.encode('root-update'));
+    vfs.chmod('/tmp/system.txt', 0o600);
+
+    expect(dec.decode(vfs.readFile('/tmp/system.txt'))).toBe('root-update');
+    expect(vfs.stat('/tmp/system.txt').permissions).toBe(0o600);
+  });
+
   it('write to 0o755 dir succeeds', () => {
     const vfs = new VFS();
     vfs.writeFile('/home/user/test.txt', new Uint8Array(1));

@@ -17,7 +17,7 @@
  */
 
 import type { VfsLike } from '../vfs/vfs-like.js';
-import type { SerializedState } from './types.js';
+import type { ExportStateOptions, ImportStateOptions, SerializedState } from './types.js';
 
 /** S_TOOL bit — must not be importable from external state blobs. */
 const S_TOOL = 0o100000;
@@ -96,14 +96,28 @@ function crc32(data: Uint8Array): number {
  * Export the full VFS state (files + directories) and optional env vars
  * into a self-describing binary blob.
  */
-export function exportState(vfs: VfsLike, env?: Map<string, string>, excludePaths?: string[]): Uint8Array {
+export function exportState(
+  vfs: VfsLike,
+  env?: Map<string, string>,
+  excludePathsOrOptions?: string[] | ExportStateOptions,
+): Uint8Array {
+  const includeBase = !Array.isArray(excludePathsOrOptions) && excludePathsOrOptions?.includeBase === true;
+  const excludePaths = Array.isArray(excludePathsOrOptions) ? excludePathsOrOptions : undefined;
   const files: SerializedState['files'] = [];
-  walkTree(vfs, '/', files, excludePaths ?? EXCLUDED_PREFIXES);
+  const exportedVfs = includeBase ? vfs : (vfs.exportUpperVfs?.() ?? vfs);
+  walkTree(exportedVfs, '/', files, excludePaths ?? EXCLUDED_PREFIXES);
 
   const state: SerializedState = {
     version: FORMAT_VERSION,
     files,
   };
+  if (includeBase) {
+    state.includeBase = true;
+  }
+  const overlay = includeBase ? undefined : vfs.exportOverlayState?.();
+  if (overlay) {
+    state.overlay = overlay;
+  }
 
   if (env && env.size > 0) {
     state.env = Array.from(env);
@@ -142,7 +156,11 @@ export function exportState(vfs: VfsLike, env?: Map<string, string>, excludePath
  *
  * Returns the restored environment map if one was stored in the blob.
  */
-export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string, string> } {
+export function importState(
+  vfs: VfsLike,
+  blob: Uint8Array,
+  options: ImportStateOptions = {},
+): { env?: Map<string, string> } {
   if (blob.byteLength < HEADER_SIZE_V1) {
     throw new Error('Invalid state blob: too short');
   }
@@ -182,26 +200,53 @@ export function importState(vfs: VfsLike, blob: Uint8Array): { env?: Map<string,
   const json = new TextDecoder().decode(jsonBytes);
   const state: SerializedState = JSON.parse(json);
 
-  // Filter out entries targeting system paths
-  const safeFiles = state.files.filter(entry => isSafeImportPath(entry.path));
+  if (state.overlay && !vfs.importOverlayState) {
+    throw new Error('State blob contains overlay state, but target VFS does not support overlays');
+  }
+
+  const allowSystemPaths = options.allowSystemPaths === true;
+
+  if (state.overlay) {
+    const whiteouts = allowSystemPaths
+      ? state.overlay.whiteouts
+      : [
+        ...(vfs.exportOverlayState?.().whiteouts.filter(path => !isSafeImportPath(path)) ?? []),
+        ...state.overlay.whiteouts.filter(isSafeImportPath),
+      ];
+    vfs.importOverlayState!({ ...state.overlay, whiteouts });
+  }
+
+  const targetVfs = state.overlay ? (vfs.exportUpperVfs?.() ?? vfs) : vfs;
+
+  // Filter out entries targeting system paths unless the caller explicitly
+  // trusts this blob. Blob fields are data, not authority.
+  const safeFiles = allowSystemPaths
+    ? state.files
+    : state.files.filter(entry => isSafeImportPath(entry.path));
 
   // Restore filesystem: directories first, then files, then permissions
-  vfs.withWriteAccess(() => {
+  targetVfs.withWriteAccess(() => {
     for (const entry of safeFiles) {
       if (entry.type === 'dir') {
-        vfs.mkdirp(entry.path);
+        targetVfs.mkdirp(entry.path);
       }
     }
     for (const entry of safeFiles) {
       if (entry.type === 'file') {
         const content = fromBase64(entry.data);
-        vfs.writeFile(entry.path, content);
+        targetVfs.writeFile(entry.path, content);
+      } else if (entry.type === 'symlink') {
+        targetVfs.symlink(entry.data, entry.path);
       }
     }
     // Apply permissions after all entries are created (strip S_TOOL bit)
     for (const entry of safeFiles) {
+      if (entry.type === 'symlink') continue;
+      if ((entry.uid !== undefined || entry.gid !== undefined) && targetVfs.chown) {
+        targetVfs.chown(entry.path, entry.uid ?? 0, entry.gid ?? 0);
+      }
       if (entry.permissions !== undefined) {
-        vfs.chmod(entry.path, entry.permissions & ~S_TOOL);
+        targetVfs.chmod(entry.path, entry.permissions & ~S_TOOL);
       }
     }
   });
@@ -236,14 +281,23 @@ function walkTree(
 
     if (entry.type === 'dir') {
       const st = vfs.stat(childPath);
-      out.push({ path: childPath, data: '', type: 'dir', permissions: st.permissions });
+      out.push({ path: childPath, data: '', type: 'dir', permissions: st.permissions, uid: st.uid, gid: st.gid });
       walkTree(vfs, childPath, out, excludePrefixes);
     } else if (entry.type === 'file') {
       const content = vfs.readFile(childPath);
       const st = vfs.stat(childPath);
       const b64 = toBase64(content);
-      out.push({ path: childPath, data: b64, type: 'file', permissions: st.permissions });
+      out.push({ path: childPath, data: b64, type: 'file', permissions: st.permissions, uid: st.uid, gid: st.gid });
+    } else if (entry.type === 'symlink') {
+      const st = vfs.lstat(childPath);
+      out.push({
+        path: childPath,
+        data: vfs.readlink(childPath),
+        type: 'symlink',
+        permissions: st.permissions,
+        uid: st.uid,
+        gid: st.gid,
+      });
     }
-    // Skip symlinks — not part of the persistence spec
   }
 }

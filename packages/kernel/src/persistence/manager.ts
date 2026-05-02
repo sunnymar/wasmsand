@@ -90,7 +90,7 @@ export class PersistenceManager {
     try {
       const data = await this.backend.load(this.namespace);
       if (!data) return false;
-      const { env } = importState(this.vfs, data);
+      const { env } = importState(this.vfs, data, { allowSystemPaths: true });
       if (env) {
         this.setEnv(env);
       }

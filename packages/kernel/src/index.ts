@@ -1,6 +1,9 @@
 // @codepod/kernel - WASM AI Sandbox
 export { VFS } from './vfs/vfs.js';
 export type { VfsOptions } from './vfs/vfs.js';
+export { OverlayVFS } from './vfs/overlay-vfs.js';
+export type { OverlayState, OverlayVFSOptions } from './vfs/overlay-vfs.js';
+export type { RootProvider, RootProviderStat } from './vfs/root-provider.js';
 export { ProcessManager } from './process/manager.js';
 export { PythonRunner } from './python/python-runner.js';
 export { Sandbox } from './sandbox.js';

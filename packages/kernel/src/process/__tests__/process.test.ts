@@ -6,7 +6,7 @@ import { ProcessManager } from '../manager.js';
 import { VFS } from '../../vfs/vfs.js';
 import { NodeAdapter } from '../../platform/node-adapter.js';
 
-const FIXTURES = resolve(import.meta.dirname, '../../platform/__tests__/fixtures');
+const FIXTURES = resolve(import.meta.dirname!, '../../platform/__tests__/fixtures');
 
 describe('ProcessManager', () => {
   let vfs: VFS;
@@ -159,31 +159,20 @@ describe('ProcessManager', () => {
       expect(result.stdout).toBe('foo\n');
     });
 
-    it('user-created files without S_TOOL are not treated as tools', async () => {
+    it('registered host stubs do not depend on S_TOOL mode bits', async () => {
       await mgr.preloadModules();
-      // Even if a file has the right content, without S_TOOL it's ignored
+      const st = vfs.stat('/usr/bin/hello');
+      expect(st.permissions & 0o100000).toBe(0);
+      expect(mgr.resolveTool('hello')).toBe(resolve(FIXTURES, 'hello.wasm'));
+    });
+
+    it('VFS executable resolution uses normal executable files', () => {
       const helloWasmPath = resolve(FIXTURES, 'hello.wasm');
       vfs.withWriteAccess(() => {
         vfs.writeFile('/usr/bin/fake', new TextEncoder().encode(helloWasmPath));
-        vfs.chmod('/usr/bin/fake', 0o555); // executable but no S_TOOL
+        vfs.chmod('/usr/bin/fake', 0o555);
       });
-      expect(() => mgr.resolveTool('fake')).toThrow(/not found/i);
-    });
-
-    it('chmod cannot set S_TOOL flag', () => {
-      // S_TOOL is 0o100000 — try to set it via chmod (outside withWriteAccess)
-      // This should silently strip the flag
-      const st = vfs.stat('/usr/bin/hello');
-      expect(st.permissions & 0o100000).toBeTruthy(); // has S_TOOL
-      // chmod from user land (if it could run — /usr/bin is read-only,
-      // so we test the chmod logic directly via withWriteAccess first,
-      // then without it)
-      vfs.withWriteAccess(() => {
-        vfs.chmod('/usr/bin/hello', 0o755); // try to drop S_TOOL
-      });
-      // S_TOOL should NOT be preserved when called in root mode with explicit bits
-      const st2 = vfs.stat('/usr/bin/hello');
-      expect(st2.permissions & 0o100000).toBe(0); // root mode can clear it
+      expect(mgr.resolveTool('fake')).toBe(helloWasmPath);
     });
 
     it('chained symlinks resolve correctly', async () => {

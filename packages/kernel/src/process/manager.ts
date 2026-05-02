@@ -16,10 +16,14 @@ import { AsyncifyAsyncBridge } from '../async-bridge.js';
 import type { SpawnOptions, SpawnResult } from './process.js';
 import { NativeModuleRegistry } from './native-modules.js';
 
+export type ToolSource =
+  | { kind: 'host'; path: string }
+  | { kind: 'vfs'; path: string };
+
 export class ProcessManager {
   private vfs: VfsLike;
   private adapter: PlatformAdapter;
-  private registry: Map<string, string> = new Map();
+  private registry: Map<string, ToolSource> = new Map();
   private moduleCache: Map<string, WebAssembly.Module> = new Map();
   private networkBridge: NetworkBridgeLike | null;
   private currentHost: WasiHost | null = null;
@@ -43,8 +47,23 @@ export class ProcessManager {
     await this.nativeModules.loadModule(name, wasmBytes);
   }
 
-  registerTool(name: string, wasmPath: string): void {
-    this.registry.set(name, wasmPath);
+  registerTool(name: string, source: string | ToolSource): void {
+    const toolSource = typeof source === 'string' ? { kind: 'host' as const, path: source } : source;
+    this.registry.set(name, toolSource);
+    if (toolSource.kind === 'host') {
+      this.vfs.withWriteAccess(() => {
+        const linkPath = `/usr/bin/${name}`;
+        const dir = linkPath.slice(0, linkPath.lastIndexOf('/')) || '/';
+        this.vfs.mkdirp(dir);
+        try {
+          this.vfs.unlink(linkPath);
+        } catch {
+          // No pre-existing stub.
+        }
+        this.vfs.writeFile(linkPath, new TextEncoder().encode(toolSource.path));
+        this.vfs.chmod(linkPath, 0o555);
+      });
+    }
   }
 
   /**
@@ -56,10 +75,11 @@ export class ProcessManager {
    */
   registerMulticallTool(name: string, wasmPath: string, applets: string[]): void {
     this.registerTool(name, wasmPath);
+    const source: ToolSource = { kind: 'host', path: wasmPath };
 
     this.vfs.withWriteAccess(() => {
       for (const applet of applets) {
-        this.registry.set(applet, wasmPath);
+        this.registry.set(applet, source);
         const linkPath = `/usr/bin/${applet}`;
         try {
           this.vfs.unlink(linkPath);
@@ -73,11 +93,12 @@ export class ProcessManager {
 
   /** Register and preload a tool from VFS — for runtime-installed packages. */
   async registerAndLoadTool(name: string, wasmPath: string): Promise<void> {
-    this.registerTool(name, wasmPath);
+    const source: ToolSource = { kind: 'vfs', path: wasmPath };
+    this.registerTool(name, source);
     // Load WASM bytes from VFS and compile directly (not from host filesystem)
     const wasmBytes = this.vfs.readFile(wasmPath);
     const module = await WebAssembly.compile(wasmBytes as BufferSource);
-    this.moduleCache.set(wasmPath, module);
+    this.moduleCache.set(this.cacheKey(source), module);
   }
 
   /** Return the names of all registered tools. */
@@ -110,6 +131,10 @@ export class ProcessManager {
    *  Falls back to VFS PATH lookup so that symlinks work as aliases
    *  (e.g. /usr/bin/python → python3 resolves to the python3 wasm path). */
   resolveTool(name: string): string {
+    return this.resolveToolSource(name).path;
+  }
+
+  private resolveToolSource(name: string): ToolSource {
     const direct = this.registry.get(name);
     if (direct !== undefined) return direct;
 
@@ -123,13 +148,11 @@ export class ProcessManager {
       try {
         const st = this.vfs.stat(filePath); // follows symlinks
         if (st.type !== 'file' || !(st.permissions & 0o111)) continue;
-        // Read the resolved file's content — it contains the wasm path
         const content = new TextDecoder().decode(this.vfs.readFile(filePath));
-        if (content && this.moduleCache.has(content)) return content;
-        // Also try registry lookup by content (wasm path may match)
-        for (const [, wasmPath] of this.registry) {
-          if (wasmPath === content) return wasmPath;
+        for (const source of this.registry.values()) {
+          if (source.kind === 'host' && source.path === content) return source;
         }
+        return { kind: 'vfs', path: filePath };
       } catch {
         // Not found in this dir, continue
       }
@@ -153,13 +176,13 @@ export class ProcessManager {
    * registered or not yet loaded.
    */
   getModule(prog: string): WebAssembly.Module | null {
-    let wasmPath: string;
+    let source: ToolSource;
     try {
-      wasmPath = this.resolveTool(prog);
+      source = this.resolveToolSource(prog);
     } catch {
       return null;
     }
-    return this.moduleCache.get(wasmPath) ?? null;
+    return this.moduleCache.get(this.cacheKey(source)) ?? null;
   }
 
   /**
@@ -176,8 +199,8 @@ export class ProcessManager {
         executionTimeMs: 0,
       };
     }
-    const wasmPath = this.resolveTool(command);
-    const module = await this.loadModule(wasmPath);
+    const source = this.resolveToolSource(command);
+    const module = await this.loadModule(source);
 
     // Collect stdin data: prefer explicit stdinData, otherwise drain the stdin pipe
     let stdinData: Uint8Array | undefined = opts.stdinData;
@@ -308,15 +331,22 @@ export class ProcessManager {
    * The first load for a given path compiles via the platform adapter;
    * subsequent loads reuse the compiled Module.
    */
-  private async loadModule(wasmPath: string): Promise<WebAssembly.Module> {
-    const cached = this.moduleCache.get(wasmPath);
+  private async loadModule(source: ToolSource): Promise<WebAssembly.Module> {
+    const key = this.cacheKey(source);
+    const cached = this.moduleCache.get(key);
     if (cached !== undefined) {
       return cached;
     }
 
-    const module = await this.adapter.loadModule(wasmPath);
-    this.moduleCache.set(wasmPath, module);
+    const module = source.kind === 'vfs'
+      ? await WebAssembly.compile(this.vfs.readFile(source.path) as BufferSource)
+      : await this.adapter.loadModule(source.path);
+    this.moduleCache.set(key, module);
     return module;
+  }
+
+  private cacheKey(source: ToolSource): string {
+    return source.kind === 'host' ? source.path : `vfs:${source.path}`;
   }
 
   /**
@@ -324,8 +354,9 @@ export class ProcessManager {
    * used synchronously by spawnSync().
    */
   async preloadModules(): Promise<void> {
-    const paths = new Set(this.registry.values());
-    await Promise.all(Array.from(paths).map(p => this.loadModule(p)));
+    const sources = new Map<string, ToolSource>();
+    for (const source of this.registry.values()) sources.set(this.cacheKey(source), source);
+    await Promise.all(Array.from(sources.values()).map(source => this.loadModule(source)));
   }
 
   /**
@@ -349,14 +380,14 @@ export class ProcessManager {
       };
     }
 
-    let wasmPath: string;
+    let source: ToolSource;
     try {
-      wasmPath = this.resolveTool(command);
+      source = this.resolveToolSource(command);
     } catch {
       return { exit_code: 127, stdout: '', stderr: `${command}: not found\n` };
     }
 
-    const module = this.moduleCache.get(wasmPath);
+    const module = this.moduleCache.get(this.cacheKey(source));
     if (!module) {
       return { exit_code: 127, stdout: '', stderr: `${command}: module not loaded\n` };
     }
