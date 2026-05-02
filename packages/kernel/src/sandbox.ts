@@ -856,6 +856,7 @@ export class Sandbox {
               memoryBytes,
               stdoutLimit,
               stderrLimit,
+              rollbackOnFailure: false,
             }).then(async (proc) => {
               processes.set(childPid, proc);
               await proc.terminate();

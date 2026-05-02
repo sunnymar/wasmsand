@@ -279,6 +279,7 @@ class WorkerResidentRunner {
               cwd: req.cwd || '/',
               stdoutLimit: this.stdoutLimit,
               stderrLimit: this.stderrLimit,
+              rollbackOnFailure: false,
             }).then(async (proc) => {
               processes.set(childPid, proc);
               await proc.terminate();

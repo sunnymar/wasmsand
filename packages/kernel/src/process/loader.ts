@@ -8,7 +8,11 @@ import type { PlatformAdapter } from "../platform/adapter.js";
 import type { VfsLike } from "../vfs/vfs-like.js";
 import type { ProcessKernel } from "./kernel.js";
 import { WasiHost } from "../wasi/wasi-host.js";
-import { createBufferTarget, createNullTarget, createStaticTarget } from "../wasi/fd-target.js";
+import {
+  createBufferTarget,
+  createNullTarget,
+  createStaticTarget,
+} from "../wasi/fd-target.js";
 import {
   AsyncifyAsyncBridge,
   type AsyncifyForkSnapshot,
@@ -56,6 +60,12 @@ export interface LoadProcessOptions {
     memory: WebAssembly.Memory,
     wasiHost: WasiHost,
   ) => Record<string, WebAssembly.ImportValue>;
+  /**
+   * True when loadProcess owns the PID reservation. Async host_spawn callers
+   * return the child PID before this promise settles, so they keep ownership
+   * and release/register the child in their catch path.
+   */
+  rollbackOnFailure?: boolean;
 }
 
 export async function loadProcess(
@@ -78,17 +88,29 @@ export async function loadProcess(
   const profile = validateCodepodModuleProfile(analyzeCodepodModule(module));
   const env = opts.env ?? {};
   const cwd = opts.cwd ?? "/";
+  const rollbackOnFailure = opts.rollbackOnFailure ?? true;
   const pid = ctx.allocatePid(argv);
+  const rollback = () => {
+    if (rollbackOnFailure) ctx.kernel.discardProcess(pid);
+  };
 
   ctx.kernel.initProcess(pid);
   if (!ctx.kernel.getFdTarget(pid, 0)) {
     ctx.kernel.setFdTarget(pid, 0, createNullTarget());
   }
   if (!ctx.kernel.getFdTarget(pid, 1)) {
-    ctx.kernel.setFdTarget(pid, 1, createBufferTarget(opts.stdoutLimit ?? Infinity));
+    ctx.kernel.setFdTarget(
+      pid,
+      1,
+      createBufferTarget(opts.stdoutLimit ?? Infinity),
+    );
   }
   if (!ctx.kernel.getFdTarget(pid, 2)) {
-    ctx.kernel.setFdTarget(pid, 2, createBufferTarget(opts.stderrLimit ?? Infinity));
+    ctx.kernel.setFdTarget(
+      pid,
+      2,
+      createBufferTarget(opts.stderrLimit ?? Infinity),
+    );
   }
 
   const proc = Process.__forLoader({ pid, mode });
@@ -151,24 +173,28 @@ export async function loadProcess(
       codepod: codepodImports,
     });
   } catch (e) {
-    ctx.kernel.discardProcess(pid);
+    rollback();
     throw e;
   }
   const table = instance.exports.__indirect_function_table;
   if (table instanceof WebAssembly.Table) {
-    const promising =
-      typeof WebAssembly.promising === "function"
-        ? ((fn: unknown) => WebAssembly.promising(fn as Function))
-        : ((fn: unknown) => fn);
+    const promising = typeof WebAssembly.promising === "function"
+      ? ((fn: unknown) => WebAssembly.promising(fn as Function))
+      : ((fn: unknown) => fn);
     threadsBackend.setIndirectCallTable(
       makeIndirectCallTable(table, promising),
     );
   }
 
   memoryRef = instance.exports.memory as WebAssembly.Memory;
-  if (opts.memoryBytes !== undefined && memoryRef.buffer.byteLength > opts.memoryBytes) {
-    ctx.kernel.discardProcess(pid);
-    throw new Error(`memory limit exceeded: ${memoryRef.buffer.byteLength} > ${opts.memoryBytes}`);
+  if (
+    opts.memoryBytes !== undefined &&
+    memoryRef.buffer.byteLength > opts.memoryBytes
+  ) {
+    rollback();
+    throw new Error(
+      `memory limit exceeded: ${memoryRef.buffer.byteLength} > ${opts.memoryBytes}`,
+    );
   }
   proc.__setMemory(memoryRef);
   proc.__setFdReadAndClear(ctx.makeFdReadAndClear(pid));
@@ -176,13 +202,21 @@ export async function loadProcess(
     ctx.kernel.setFdTarget(
       pid,
       0,
-      data && data.byteLength > 0 ? createStaticTarget(data) : createNullTarget(),
+      data && data.byteLength > 0
+        ? createStaticTarget(data)
+        : createNullTarget(),
     );
   });
 
-  const asyncifyInitialized = asyncifyBridge
-    ? initAsyncifyBridge(asyncifyBridge, instance)
-    : false;
+  let asyncifyInitialized: boolean;
+  try {
+    asyncifyInitialized = asyncifyBridge
+      ? initAsyncifyBridge(asyncifyBridge, instance)
+      : false;
+  } catch (e) {
+    rollback();
+    throw e;
+  }
   // Async pipe reads are a suspension capability, not a setjmp feature:
   // JSPI supports them for every module; non-JSPI runtimes need the current
   // module to be Asyncify-instrumented.
@@ -216,12 +250,19 @@ export async function loadProcess(
         get(_target, prop) {
           if (!childMemoryRef) throw new Error("child memory not initialized");
           const val =
-            (childMemoryRef as unknown as Record<string | symbol, unknown>)[prop];
+            (childMemoryRef as unknown as Record<string | symbol, unknown>)[
+              prop
+            ];
           return typeof val === "function" ? val.bind(childMemoryRef) : val;
         },
       });
       const childCodepodImports: Record<string, WebAssembly.ImportValue> = {
-        ...ctx.buildKernelImports(childPid, childMemoryProxy, childWasi, childThreadsBackend),
+        ...ctx.buildKernelImports(
+          childPid,
+          childMemoryProxy,
+          childWasi,
+          childThreadsBackend,
+        ),
         ...(opts.extraCodepodImports?.(childMemoryProxy, childWasi) ?? {}),
       };
       childCodepodImports.host_setjmp = childBridge
@@ -257,18 +298,26 @@ export async function loadProcess(
         codepod: childCodepodImports,
       });
       childMemoryRef = childInstance.exports.memory as WebAssembly.Memory;
-      while (childMemoryRef.buffer.byteLength < snapshot.memoryBytes.byteLength) {
+      while (
+        childMemoryRef.buffer.byteLength < snapshot.memoryBytes.byteLength
+      ) {
         childMemoryRef.grow(1);
       }
       new Uint8Array(childMemoryRef.buffer, 0, snapshot.memoryBytes.byteLength)
         .set(snapshot.memoryBytes);
-      childBridge.initFromInstance(childInstance, snapshot.dataAddr, snapshot.dataSize);
+      childBridge.initFromInstance(
+        childInstance,
+        snapshot.dataAddr,
+        snapshot.dataSize,
+      );
       childBridge.restoreForkSnapshot(snapshot, 0);
       childBridge.setForkController({
         forkFromContinuation: (childSnapshot) =>
           forkChildFromSnapshot(childPid, childWasi, childSnapshot),
       });
-      const childRawStart = childInstance.exports._start as (() => number) | undefined;
+      const childRawStart = childInstance.exports._start as
+        | (() => number)
+        | undefined;
       const childStartFn = childRawStart
         ? childBridge.wrapExport(childRawStart)
         : undefined;
@@ -302,7 +351,7 @@ export async function loadProcess(
     exitCode = await wasi.startAsync(instance, startFn);
   } catch (e) {
     const stderr = proc.fdReadAndClear(2).data.trimEnd();
-    ctx.kernel.discardProcess(pid);
+    rollback();
     if (stderr) {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(`${message}\n${stderr}`, { cause: e });
@@ -375,8 +424,12 @@ function initAsyncifyBridge(
     typeof exports.asyncify_get_state === "function";
   if (!hasAsyncifyState) return false;
 
-  const addrExport = exports.codepod_asyncify_buf_addr as (() => number) | undefined;
-  const sizeExport = exports.codepod_asyncify_buf_size as (() => number) | undefined;
+  const addrExport = exports.codepod_asyncify_buf_addr as
+    | (() => number)
+    | undefined;
+  const sizeExport = exports.codepod_asyncify_buf_size as
+    | (() => number)
+    | undefined;
   const alloc = exports.__alloc as ((size: number) => number) | undefined;
 
   let dataAddr: number;
@@ -388,7 +441,9 @@ function initAsyncifyBridge(
     asyncifyBufSize = 65536;
     dataAddr = alloc(asyncifyBufSize);
   } else {
-    throw new Error("asyncify requires codepod_asyncify_buf_addr/size or __alloc exports");
+    throw new Error(
+      "asyncify requires codepod_asyncify_buf_addr/size or __alloc exports",
+    );
   }
 
   const memory = exports.memory as WebAssembly.Memory;
