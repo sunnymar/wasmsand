@@ -1,0 +1,58 @@
+name: Publish Document Tools
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/pdf-tools/**'
+      - 'packages/xlsx-tools/**'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Build document tool WASMs
+        run: bash scripts/build-document-tools.sh
+
+      - name: Checkout codepod-packages
+        uses: actions/checkout@v4
+        with:
+          repository: codepod-sandbox/packages
+          token: ${{ secrets.PACKAGES_REPO_TOKEN }}
+          path: codepod-packages
+
+      - name: Copy built WASMs to packages repo
+        run: |
+          cp target/wasm32-wasip1/release/pdfinfo.wasm     codepod-packages/packages/pdf-tools/
+          cp target/wasm32-wasip1/release/pdfseparate.wasm codepod-packages/packages/pdf-tools/
+          cp target/wasm32-wasip1/release/pdfunite.wasm    codepod-packages/packages/pdf-tools/
+          cp target/wasm32-wasip1/release/pdftotext.wasm   codepod-packages/packages/pdf-tools/
+          cp target/wasm32-wasip1/release/xlsx2csv.wasm    codepod-packages/packages/xlsx-tools/
+          cp target/wasm32-wasip1/release/csv2xlsx.wasm    codepod-packages/packages/xlsx-tools/
+
+      - name: Update pkg-index.json sizes
+        run: |
+          cd codepod-packages
+          python3 scripts/update-pkg-index-sizes.py
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PACKAGES_REPO_TOKEN }}
+          path: codepod-packages
+          commit-message: "chore: update document tool WASMs"
+          branch: auto/document-tools
+          title: "chore: update document tool WASMs"
+          body: "Automated update of PDF/XLSX tool WASM binaries from codepod main."
+          delete-branch: true

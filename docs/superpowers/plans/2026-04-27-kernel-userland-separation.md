@@ -1,13 +1,10 @@
 # Kernel / Userland Separation Implementation Plan
 
-Note: pre-PR5 references to `packages/orchestrator/` below describe the
-pre-rename tree; after PR5 that package is `packages/kernel/`.
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rename `packages/orchestrator/` → `packages/kernel/` and split userland-shaped code (`Sandbox.run`/history, host-server bash dispatch, old shell tree) out into host-side modules, exposing the kernel as a generic process+resource runtime. The final resident-bash compatibility imports remain documented debt until the Rust shell channel port.
+**Goal:** Rename `packages/orchestrator/` → `packages/kernel/` and split userland-shaped code (shell-instance, shell-imports, `Sandbox.run`/history) out into host-side modules, exposing the kernel as a generic process+resource runtime.
 
-**Architecture:** Six sequential PRs. **PR1** installs the shell wasm into the sandbox VFS as `/bin/bash` (prerequisite for everything else). **PR2** carves a generic `Process` API + resident-mode loader out of `shell-instance.ts` (additive — existing callers keep working). **PR3** audits `host-imports/shell-imports.ts` and folds generic helpers into `kernel-imports.ts`, marking shell-legacy imports for relocation. **PR4** rewires host consumers to the new generic API, moves bash-specific dispatch + host-server boot imports out to `mcp-server`/`sdk-server`, and deletes the old `shell/` tree while retaining resident-bash compatibility imports. **PR5** is a pure rename (`orchestrator/` → `kernel/`). **PR6** adds the kernel README and boundary marker.
+**Architecture:** Six sequential PRs. **PR1** installs the shell wasm into the sandbox VFS as `/bin/bash` (prerequisite for everything else). **PR2** carves a generic `Process` API + resident-mode loader out of `shell-instance.ts` (additive — existing callers keep working). **PR3** audits `host-imports/shell-imports.ts` and folds generic helpers into `kernel-imports.ts`, marking shell-legacy imports for relocation. **PR4** rewires every `ShellInstance` consumer to the new generic API, moves bash-specific dispatch + shell-legacy imports out to `mcp-server`/`sdk-server`, and deletes `shell/`. **PR5** is a pure rename (`orchestrator/` → `kernel/`). **PR6** adds the kernel README and boundary marker.
 
 **Tech Stack:** TypeScript (Deno + Node), wasm32-wasip1, JSPI / Asyncify, the existing codepod runtime (VFS, ProcessManager, host imports).
 
@@ -49,7 +46,7 @@ This plan touches the following files. Each PR section below specifies which sub
 
 - `dispatcher.ts` — `sandbox.run`, `shell.history.list`, `shell.history.clear` consumers. Rewired in PR4.
 - `bash-dispatch.ts` — **Created** in PR4. The bash-specific `__run_command` wrapper for the user-facing path.
-- `bash-host-imports.ts` — **Created** in PR4. Builds the shell-legacy import bag (host_stat, host_register_tool, etc.) for bash to receive at boot.
+- `bash-host-imports.ts` — **Created** in PR4 as the userland import hook. It now returns `{}` because bash moved to POSIX/libcodepod paths and no longer imports shell-legacy `host_stat` / `host_register_tool` style helpers.
 
 ### `packages/mcp-server/src/`
 
@@ -1572,11 +1569,9 @@ EOF
 
 ---
 
-## PR4 — Rewire Consumers, Move bash-dispatch Out, Delete old `shell/`
+## PR4 — Rewire Consumers, Move bash-dispatch Out, Delete `shell/`
 
-**Goal:** This is the substantive PR. Move host-server bash dispatch knowledge out of the kernel package into `sdk-server` and `mcp-server`. Delete the old `shell/` directory. Implement the host-registered `runCommandHandler` callback (fresh resident bash per call). Rewire the in-tree consumers and worker bridge to the generic Process API where the current Rust shell ABI permits it.
-
-**Implementation note (2026-04-28):** deleting the final resident-bash compatibility import layer is deferred. The current Rust shell still depends on shell-shaped `codepod` imports and does not consistently surface all output through generic fd buffers when driven through host-side dispatch (for example command-substitution stdout). PR4b therefore keeps `resident-bash-runner.ts` and `host-imports/shell-imports.ts` for direct `Sandbox.create()` users, worker execution, and the bash conformance suite. The host servers still own their bash dispatch wrappers and boot imports; the remaining in-kernel compatibility layer clears with the future Rust shell channel port.
+**Goal:** This is the substantive PR. Move bash-specific knowledge out of the kernel package into `sdk-server` and `mcp-server`. Delete `shell/` directory. Implement the host-registered `runCommandHandler` callback (fresh resident bash per call). Rewire the 5 in-tree `ShellInstance` consumers and the worker bridge to the generic Process API.
 
 **This PR can plausibly split into PR4a (consumer rewires + Sandbox.run/history removal) and PR4b (callback + import moves + shell-instance.ts deletion).** Concrete split criterion: split if the combined PR4 diff exceeds **~1500 LOC** or touches **more than 8 distinct file groups** (where a "file group" is one of: kernel/host-imports, kernel/process, kernel/sandbox, kernel/execution, kernel/cli+index, sdk-server, mcp-server, shell-conformance-tests). Below those thresholds, ship as one PR4 — split costs more in review-context-switch than it saves.
 
@@ -1607,7 +1602,6 @@ If anything else surfaces, decide before PR4: deprecate-and-warn for one release
 - Modify: `packages/sdk-server/src/dispatcher.ts`
 - Modify: `packages/mcp-server/src/index.ts`
 - Delete: `packages/orchestrator/src/shell/` (entire directory) — last step of PR4
-- Keep: `packages/orchestrator/src/resident-bash-runner.ts` and `packages/orchestrator/src/host-imports/shell-imports.ts` until the Rust shell channel port
 
 ### Task 4.0: Define `KernelApi` and `bootImports`
 
@@ -2348,10 +2342,11 @@ export function bashBootImports(api: KernelApi): Record<string, WebAssembly.Impo
   // Constants to copy: ERR_NOT_FOUND = -1, ERR_PERMISSION_DENIED = -2,
   // ERR_IO = -3 (currently at the top of shell-imports.ts).
   //
-  // Copy from the audited resident-bash compatibility implementation, then
-  // mechanically apply the substitution above. No structural changes — every
-  // error code, every return shape, every helper invocation stays identical to
-  // today's observed behavior.
+  // The implementer should checkout the commit immediately before PR3
+  // deletes shell-imports.ts, copy the file, then mechanically apply the
+  // substitution above. No structural changes — every error code, every
+  // return shape, every helper invocation stays identical to today's
+  // observed behavior.
 
   return { /* the 13 ported handlers */ };
 }
@@ -2612,12 +2607,10 @@ git add packages/orchestrator/src/sandbox.ts packages/orchestrator/src/cli.ts pa
 git commit -m "refactor(kernel): rewire all ShellInstance consumers to generic Process API"
 ```
 
-### Task 4.6: Delete old `shell/` directory; keep resident-bash compatibility
+### Task 4.6: Delete `shell/` directory
 
 **Files:**
 - Delete: `packages/orchestrator/src/shell/` (entire directory)
-- Keep: `packages/orchestrator/src/resident-bash-runner.ts`
-- Keep: `packages/orchestrator/src/host-imports/shell-imports.ts`
 
 - [ ] **Step 1: Verify no remaining imports of shell-instance or shell-imports**
 
@@ -2637,13 +2630,17 @@ git rm -r packages/orchestrator/src/shell
 
 `packages/orchestrator/src/__tests__/sandbox-bootArgv.test.ts` contains a third test (`Sandbox creates exactly one bash instance for PID 1`) that calls `sb.__getShellInstanceProcess()`. That accessor — and the `ShellInstance` class it returned — no longer exist post-PR4. Delete that test case (the first two tests in the file remain valid). Also delete the `__getShellInstanceProcess` accessor from `Sandbox` itself.
 
-- [ ] **Step 3: Move shell-conformance tests that target `/bin/bash` out of the old shell tree**
+- [ ] **Step 3: Move shell-conformance tests that target `/bin/bash`**
 
-Move them to `packages/orchestrator/src/__tests__/bash-conformance/` for now and keep them on `ResidentBashRunner.create(...)`. A broad host-side dispatch migration was attempted and exposed a real shell-channel gap: simple commands and env continuity pass, but command-substitution stdout is lost through the generic fd-buffer path. Add a small host-dispatch harness/canary instead; migrate the full suite only after the Rust shell writes these paths through proper WASI/fd/process channels.
+If any tests in `shell/__tests__/` exercised `/bin/bash` end-to-end (vs. testing `ShellInstance` directly), move them to **`packages/sdk-server/__tests__/bash-conformance/`** — a host-side location. Putting them under sdk-server (rather than `orchestrator/src/__tests__/bash-conformance/`) keeps the path stable across PR5's rename and reflects what the tests actually exercise: the bash userland binary via the host-side `bashDispatch.runCommand` wrapper, not kernel internals. Update each test to import `runCommand` from `sdk-server/src/bash-dispatch.ts` and call it directly instead of `shell.run`.
 
-- [ ] **Step 4: Defer deleting `shell-imports.ts`**
+- [ ] **Step 4: Delete `shell-imports.ts` (now empty post-PR3 carve-out)**
 
-Do not delete `packages/orchestrator/src/host-imports/shell-imports.ts` in PR4b. SDK/MCP have host-local copies for their explicit bash boot path, but direct `Sandbox.create()` compatibility, worker execution, and the resident conformance suite still need the in-kernel compatibility import builder until the Rust shell channel port is complete.
+```bash
+git rm packages/orchestrator/src/host-imports/shell-imports.ts
+```
+
+If any kernel code still imports `createShellImports`, audit and remove. The shell-legacy imports now live in `packages/sdk-server/src/bash-host-imports.ts` and `packages/mcp-server/src/bash-host-imports.ts`.
 
 - [ ] **Step 5: Run all tests**
 
@@ -2651,13 +2648,13 @@ Do not delete `packages/orchestrator/src/host-imports/shell-imports.ts` in PR4b.
 deno test -A --no-check packages/orchestrator/src/**/*.test.ts packages/orchestrator/src/pool/__tests__/*.test.ts packages/sdk-server/src/*.test.ts packages/mcp-server/src/*.test.ts
 ```
 
-Expected: PASS — including bash conformance tests under their resident-runner path and the host-dispatch canary.
+Expected: PASS — including bash conformance tests now running through `runCommand`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add -A
-git commit -m "refactor(kernel): delete old shell test tree"
+git commit -m "refactor(kernel): delete shell/ directory and shell-imports.ts"
 ```
 
 ### Task 4.7: PR4 verification + PR
@@ -2798,19 +2795,18 @@ Expected: PASS — `Sandbox()`, `sb.commands.run("ls /")` round-trip works.
 
 ```bash
 git push
-gh pr create --draft --title "PR4: Rewire host consumers; move bash-dispatch out; delete old shell tree" --body "$(cat <<'EOF'
+gh pr create --draft --title "PR4: Rewire ShellInstance consumers; move bash-dispatch out; delete shell/" --body "$(cat <<'EOF'
 ## Summary
-Substantive PR. Moves host-server bash dispatch + host-server boot imports into sdk-server and mcp-server. Adds runCommandHandler callback (fresh resident bash per call, side-stepping PID 1's queue). Rewires sandbox.ts, cli.ts, index.ts, and the execution worker bridge to the generic Process API where the current Rust shell ABI permits it. Deletes the old shell/ directory while keeping the resident-bash compatibility layer until the Rust shell channel port.
+Substantive PR. Moves bash-specific dispatch + shell-legacy imports out of the kernel package into sdk-server and mcp-server. Adds runCommandHandler callback (fresh resident bash per call, side-stepping PID 1's queue). Rewires sandbox.ts, cli.ts, index.ts, and the execution worker bridge to the generic Process API. Deletes shell/ directory.
 
 ## Test plan
 - [ ] run-command-handler tests (callback delegation, fresh-spawn assertion, deadlock canary).
 - [ ] bash-dispatch tests (sdk-server + mcp-server).
-- [ ] Existing bash conformance tests pass on the resident runner.
-- [ ] Host-dispatch conformance canary passes; command-substitution stdout canary remains ignored pending Rust shell channel port.
+- [ ] All existing shell conformance tests rewired and passing.
 - [ ] guest-compat pthread canary still green.
 - [ ] mcp-server + sdk-server smoke tests.
 - [ ] python-sdk end-to-end (Sandbox, sb.commands.run).
-- [ ] No remaining old `shell/` imports (grep clean).
+- [ ] No remaining `ShellInstance` or `shell/shell-imports` imports (grep clean).
 
 Spec: docs/superpowers/specs/2026-04-27-kernel-userland-separation-design.md
 EOF
@@ -3022,8 +3018,9 @@ Plus the standard WASI Preview 1 surface (`fd_read`, `fd_write`, `path_open`, �
 
 - Bash binary (lives at `/bin/bash` in the sandbox VFS, installed at boot).
 - The `__run_command` JSON protocol (lives in host-side bash-dispatch).
-- Shell-legacy imports (`host_stat`, `host_register_tool`, `host_glob`, …) — live in `bash-host-imports` modules, supplied via `bootImports`.
-- Shell history.
+- Shell-legacy imports (`host_stat`, `host_register_tool`, `host_glob`, …) — removed from the bash path. `bash-host-imports` remains only as an empty userland import extension point.
+- Shell history. Bash owns it internally (`history list` / `history clear`);
+  the Sandbox facade does not keep a parallel command-history API.
 
 Everything above moved out in the kernel/userland separation refactor (PR1–PR6, 2026-04). See `docs/superpowers/specs/2026-04-27-kernel-userland-separation-design.md`.
 ```
@@ -3094,7 +3091,7 @@ EOF
 After PR1–PR6 are merged to `main`:
 
 - [ ] `grep -rn 'import.*ShellInstance\|from.*orchestrator\|from .@codepod/sandbox.' packages/` — zero matches outside docstrings/comments. (Refined to target import statements specifically; broader greps would match comments and any future `packages/orchestrator-foo/` directory.)
-- [ ] `grep -rn 'shell-imports' packages/` — only the documented resident-bash compatibility layer and its tests remain. This becomes zero after the Rust shell channel port.
+- [ ] `grep -rn 'shell-imports' packages/` — zero matches.
 - [ ] `grep -rn '@codepod/sandbox' packages/` — zero matches; `@codepod/kernel` everywhere instead.
 - [ ] All unit tests pass.
 - [ ] guest-compat pthread canary asserts counter == 40000.
