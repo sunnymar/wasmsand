@@ -56,13 +56,34 @@ describe('FdTable', () => {
     expect(new TextDecoder().decode(buf)).toBe('hello');
   });
 
-  it('clones fd table for fork', () => {
+  it('clones fd table for fork with shared offsets', () => {
     const vfs = new VFS();
-    vfs.writeFile('/home/user/test.txt', new TextEncoder().encode('hello'));
+    vfs.writeFile('/home/user/test.txt', new TextEncoder().encode('hello world'));
     const fdt = new FdTable(vfs);
     const fd = fdt.open('/home/user/test.txt', 'r');
+    const first = new Uint8Array(6);
+    fdt.read(fd, first);
+
     const clone = fdt.clone();
     expect(clone.isOpen(fd)).toBe(true);
+    const second = new Uint8Array(5);
+    clone.read(fd, second);
+    expect(new TextDecoder().decode(second)).toBe('world');
+  });
+
+  it('flushes fork-shared writes only after the last close', () => {
+    const vfs = new VFS();
+    const fdt = new FdTable(vfs);
+    const fd = fdt.open('/home/user/out.txt', 'w');
+    const clone = fdt.clone();
+
+    clone.write(fd, new TextEncoder().encode('child'));
+    clone.close(fd);
+    expect(() => vfs.readFile('/home/user/out.txt')).toThrow();
+
+    fdt.write(fd, new TextEncoder().encode('-parent'));
+    fdt.close(fd);
+    expect(new TextDecoder().decode(vfs.readFile('/home/user/out.txt'))).toBe('child-parent');
   });
 
   it('advances offset after read', () => {

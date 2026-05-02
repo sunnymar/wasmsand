@@ -123,6 +123,13 @@ export class ProcessKernel {
     fdTable.set(fd, target);
   }
 
+  replaceFdTarget(pid: number, fd: number, target: FdTarget): void {
+    const fdTable = this.getFdTable(pid);
+    const existing = fdTable.get(fd);
+    if (existing) this.closeTarget(existing);
+    fdTable.set(fd, target);
+  }
+
   allocFd(pid: number, target: FdTarget): number {
     let fdTable = this.fdTables.get(pid);
     if (!fdTable) {
@@ -247,8 +254,18 @@ export class ProcessKernel {
   }
 
   releaseProcess(pid: number, exitCode: number): void {
-    this.registerExited(pid, exitCode);
     this.cleanupFds(pid);
+    this.registerExited(pid, exitCode);
+  }
+
+  discardProcess(pid: number): void {
+    this.cleanupFds(pid);
+    this.reapProcess(pid);
+  }
+
+  releaseFdTable(fdTable: Map<number, FdTarget>): void {
+    for (const target of fdTable.values()) this.closeTarget(target);
+    fdTable.clear();
   }
 
   /** Register a process as already exited (used for synchronous spawn). */
@@ -273,14 +290,27 @@ export class ProcessKernel {
   async waitpid(pid: number): Promise<number> {
     const entry = this.processTable.get(pid);
     if (!entry) return -1;
-    if (entry.state === 'exited') return entry.exitCode;
-    return new Promise<number>((resolve) => { entry.waiters.push(resolve); });
+    if (entry.state === 'exited') {
+      const exitCode = entry.exitCode;
+      this.reapProcess(pid);
+      return exitCode;
+    }
+    return new Promise<number>((resolve) => {
+      entry.waiters.push((exitCode) => {
+        this.reapProcess(pid);
+        resolve(exitCode);
+      });
+    });
   }
 
   waitpidNohang(pid: number): number {
     const entry = this.processTable.get(pid);
     if (!entry) return -1;
-    if (entry.state === 'exited') return entry.exitCode;
+    if (entry.state === 'exited') {
+      const exitCode = entry.exitCode;
+      this.reapProcess(pid);
+      return exitCode;
+    }
     return -1;
   }
 
@@ -419,6 +449,15 @@ export class ProcessKernel {
         }
       }
     }
+  }
+
+  private reapProcess(pid: number): void {
+    this.cleanupFds(pid);
+    this.processTable.delete(pid);
+    this.allocatedPids.delete(pid);
+    this.parentPids.delete(pid);
+    this.fdTables.delete(pid);
+    this.nextFds.delete(pid);
   }
 
   initProcess(pid: number): void {

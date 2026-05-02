@@ -147,10 +147,16 @@ export async function loadProcess(
     asyncifyBridge,
   );
 
-  const instance = await ctx.adapter.instantiate(module, {
-    wasi_snapshot_preview1: wasiImports,
-    codepod: codepodImports,
-  });
+  let instance: WebAssembly.Instance;
+  try {
+    instance = await ctx.adapter.instantiate(module, {
+      wasi_snapshot_preview1: wasiImports,
+      codepod: codepodImports,
+    });
+  } catch (e) {
+    ctx.kernel.discardProcess(pid);
+    throw e;
+  }
   const table = instance.exports.__indirect_function_table;
   if (table instanceof WebAssembly.Table) {
     const promising =
@@ -164,6 +170,7 @@ export async function loadProcess(
 
   memoryRef = instance.exports.memory as WebAssembly.Memory;
   if (opts.memoryBytes !== undefined && memoryRef.buffer.byteLength > opts.memoryBytes) {
+    ctx.kernel.discardProcess(pid);
     throw new Error(`memory limit exceeded: ${memoryRef.buffer.byteLength} > ${opts.memoryBytes}`);
   }
   proc.__setMemory(memoryRef);
@@ -203,6 +210,7 @@ export async function loadProcess(
     const childPromise = (async () => {
       const childWasi = ctx.buildWasiHost(childPid, argv, env, cwd);
       childWasi.restoreForkSnapshot(wasiSnapshot);
+      childWasi.bindKernelFileTargets();
       childWasi.setCanSuspendPipeReads(true);
       const childBridge = new AsyncifyAsyncBridge();
       const childThreadsBackend = new CooperativeSerialBackend();
@@ -297,6 +305,7 @@ export async function loadProcess(
     exitCode = await wasi.startAsync(instance, startFn);
   } catch (e) {
     const stderr = proc.fdReadAndClear(2).data.trimEnd();
+    ctx.kernel.discardProcess(pid);
     if (stderr) {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(`${message}\n${stderr}`, { cause: e });

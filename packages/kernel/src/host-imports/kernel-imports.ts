@@ -269,9 +269,16 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         const fdTable = opts.kernel.buildFdTableForSpawn(callerPid, req);
         // If stdin_data is provided, override fd 0 with a static target
         if (req.stdin_data) {
+          const previousStdin = fdTable.get(0);
+          if (previousStdin) opts.kernel.releaseFdTable(new Map([[0, previousStdin]]));
           fdTable.set(0, createStaticTarget(new TextEncoder().encode(req.stdin_data)));
         }
-        return opts.spawnProcess(req, fdTable, callerPid);
+        try {
+          return opts.spawnProcess(req, fdTable, callerPid);
+        } catch {
+          opts.kernel.releaseFdTable(fdTable);
+          return -1;
+        }
       }
       return -1;
     },

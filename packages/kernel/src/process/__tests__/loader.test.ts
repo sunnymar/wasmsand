@@ -134,6 +134,33 @@ Deno.test("loadProcess runs a continuation fork canary", async () => {
   await proc.terminate();
 });
 
+Deno.test("loadProcess rolls back pid and fd state when instantiation fails", async () => {
+  const ctx = await makeLoaderContext();
+  const bytes = await ctx.adapter.readBytes(`${WASM_DIR}/fork-canary.wasm`);
+  ctx.vfs.withWriteAccess(() => {
+    ctx.vfs.writeFile("/bin/broken-fork-canary", bytes);
+    ctx.vfs.chmod("/bin/broken-fork-canary", 0o755);
+  });
+
+  let failed = false;
+  try {
+    await loadProcess({
+      ...ctx,
+      buildKernelImports: () => ({}),
+    }, {
+      argv: ["/bin/broken-fork-canary"],
+      mode: "cli",
+    });
+  } catch {
+    failed = true;
+  }
+
+  assert(failed);
+  assertEquals(ctx.kernel.getReservedProcessCount(), 0);
+  assertEquals(ctx.kernel.canReserveProcessSlot(), true);
+  assertEquals(ctx.kernel.getFdTarget(1, 0), null);
+});
+
 Deno.test("loader-backed resident shell supports Asyncify fallback without JSPI", async () => {
   const originalSuspending = WebAssembly.Suspending;
   const originalPromising = WebAssembly.promising;
