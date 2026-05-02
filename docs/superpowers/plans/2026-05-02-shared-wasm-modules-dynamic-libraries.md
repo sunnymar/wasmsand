@@ -1,32 +1,64 @@
-# Shared Wasm Modules And Dynamic Libraries Implementation Plan
+# Shared Wasm Module Cache Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Compile immutable WebAssembly modules once per artifact digest and reuse them across sandbox instances, while adding a narrow dynamic-library loader path for ports that need shared memory/table imports.
+**Goal:** Compile immutable WebAssembly executable modules once per artifact digest and reuse the resulting `WebAssembly.Module` objects across sandbox instances.
 
-**Architecture:** Module sharing is content-addressed and independent of path names. The kernel computes a SHA-256 digest for executable bytes, asks a process-wide `WasmModuleCache` for a compiled module, and instantiates that module with per-process imports. Dynamic-library support is limited to static dependency manifests and explicit shared `memory`/`table` imports; no ELF-style runtime linker is introduced.
+**Architecture:** Module sharing is content-addressed and independent of path names. The kernel reads executable bytes from the VFS, computes a SHA-256 digest, asks a `WasmModuleCache` for a compiled module, then instantiates that module with per-process imports. Sharing a compiled module does not share linear memory, stacks, globals, tables, guest heap, file descriptors, process state, or environment.
 
-**Tech Stack:** TypeScript, Deno tests, WebAssembly JS API, `packages/kernel/src/process/loader.ts`, `packages/kernel/src/platform`, `packages/kernel/src/vfs/content-store.ts`.
+**Tech Stack:** TypeScript, Deno tests, WebAssembly JS API, `packages/kernel/src/process/loader.ts`, `packages/kernel/src/process/manager.ts`, `packages/kernel/src/sandbox.ts`.
 
 ---
 
+## Status
+
+This plan covers compiled executable-module sharing only.
+
+Layered VFS storage is separate and already handles where bytes live. This plan handles the memory/CPU cost of compiling those bytes after they are read.
+
+This plan assumes the root-overlay/VFS base-root work has landed. If the checkout does not have `SandboxOptions.baseRoot` and `packages/kernel/src/__tests__/sandbox-base-root.test.ts`, first rebase onto the VFS base-root merge before implementing Task 4.
+
+## Explicitly Deferred: Dynamic Linking
+
+Do not implement dynamic libraries in this slice.
+
+In Codepod, "dynamic library" should mean a real runtime-linked library model: dependencies resolved at load time, symbols linked automatically, relocation/base addresses handled, ABI/version mismatches reported explicitly, and tooling able to produce compatible artifacts. That likely requires major clang/rustc/toolchain work plus package-format decisions.
+
+This plan intentionally does **not** add:
+
+- `.so`/wasm-dylink support
+- `dlopen`/`dlsym`
+- symbol interposition
+- relocation processing
+- automatic dependency resolution
+- shared memory/table dependency instantiation
+- a custom Codepod linker
+
+If a future port needs true dynamic linking, write a separate design spec for the actual wasm dynamic linking ABI or component-model path. Do not grow this cache plan into a linker.
+
 ## Current-State Notes
 
-- The current package is `packages/kernel`; do not use the pre-rename package path in this plan.
-- `NodeAdapter` already has a path-keyed static compile cache, but the process loader reads executable bytes from VFS and calls `WebAssembly.compile(bytes)` directly.
-- This plan depends on `sha256Hex()` from `packages/kernel/src/vfs/content-store.ts` in the layered VFS plan. If this plan is implemented first, create only the hash helper in this plan and let the layered VFS plan import it later.
-- Sharing compiled `WebAssembly.Module` objects does not share linear memory, stacks, globals, or guest heap. Each process still gets its own instance and mutable runtime state.
-- Dynamic-library support here means "instantiate a declared dependency module with the same shared imports as the main module." It does not mean dlopen, symbol interposition, relocation processing, or host-native dynamic libraries.
+- The current package is `packages/kernel`; implementation must not use old package locations.
+- `NodeAdapter` has a path-keyed static compile cache, but the generic process loader reads executable bytes from VFS and calls `WebAssembly.compile(bytes)` directly.
+- Other execution paths still compile independently:
+  - `ProcessManager.loadModule()` / registered tools
+  - `ProcessManager.loadModuleFromSource()` / native package sources
+  - `native-modules.ts`
+  This plan starts with the generic loader and then wires process-manager paths where they share the same executable artifact model.
+- `ProcessManager` already has a path/source-keyed `moduleCache: Map<string, WebAssembly.Module>` used by `spawnSync()`. Do not replace that field with the digest cache. The new digest cache field must use a distinct name, e.g. `wasmModuleCache`.
+- `WebAssembly.Module` objects are runtime/agent objects. This cache is process-local to the current JS runtime. Worker backends and non-JS engines need their own equivalent cache or an explicit bridge later.
+- Cache keys are content digests, not VFS paths. Two paths with identical bytes should compile once.
+- Failed compilation must not poison the cache permanently. A rejected compile promise must be removed so a later retry can work.
 
 ## File Map
 
-- Create `packages/kernel/src/process/module-cache.ts` — digest-keyed cache interfaces and default in-memory implementation.
-- Create `packages/kernel/src/process/__tests__/module-cache.test.ts` — cache hit/miss and defensive behavior tests.
-- Modify `packages/kernel/src/process/loader.ts` — compute executable digest and compile through cache.
-- Modify `packages/kernel/src/process/loader.ts` — optional dynamic dependency manifest support.
-- Modify `packages/kernel/src/process/__tests__/loader.test.ts` — compile deduplication tests and shared memory/table import tests.
-- Modify `packages/kernel/src/platform/adapter.ts` — no API change unless loader tests prove a platform hook is cleaner.
-- Modify `packages/kernel/src/sandbox.ts` — own one `WasmModuleCache` per sandbox runtime, with optional process-wide default for many sandboxes.
+- Create `packages/kernel/src/process/module-cache.ts` — SHA-256 helper, digest-keyed cache interfaces, and default in-memory implementation.
+- Create `packages/kernel/src/process/__tests__/module-cache.test.ts` — cache hit/miss, digest, and rejected-compile retry tests.
+- Modify `packages/kernel/src/process/loader.ts` — compile VFS executable bytes through the cache.
+- Modify `packages/kernel/src/process/__tests__/loader.test.ts` — loader compile deduplication tests.
+- Modify `packages/kernel/src/process/manager.ts` — compile registered/preloaded tool modules through the same cache where bytes are available.
+- Modify `packages/kernel/src/process/__tests__/process.test.ts` — process-manager compile deduplication tests.
+- Modify `packages/kernel/src/sandbox.ts` — accept optional `moduleCache`, defaulting to process-wide cache.
 - Modify `packages/kernel/src/index.ts` — export cache interfaces.
 
 ## Task 1: Digest-Keyed Module Cache
@@ -41,37 +73,60 @@
 Create `packages/kernel/src/process/__tests__/module-cache.test.ts`:
 
 ```ts
-import { assertEquals, assertStrictEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
-import { MemoryWasmModuleCache } from "../module-cache.ts";
+import { assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@^1.0.19";
+import { MemoryWasmModuleCache, sha256Hex } from "../module-cache.ts";
 
 const emptyModule = new Uint8Array([
   0x00, 0x61, 0x73, 0x6d,
   0x01, 0x00, 0x00, 0x00,
 ]);
 
-describe("MemoryWasmModuleCache", () => {
-  it("compiles once per digest", async () => {
-    let calls = 0;
-    const cache = new MemoryWasmModuleCache(async () => {
-      calls++;
-      return await WebAssembly.compile(emptyModule);
-    });
-
-    const first = await cache.getOrCompile("abc", emptyModule);
-    const second = await cache.getOrCompile("abc", emptyModule);
-
-    assertStrictEquals(first, second);
-    assertEquals(calls, 1);
-    assertEquals(cache.stats(), { modules: 1 });
+Deno.test("MemoryWasmModuleCache compiles once per digest", async () => {
+  let calls = 0;
+  const cache = new MemoryWasmModuleCache(async () => {
+    calls++;
+    return await WebAssembly.compile(emptyModule);
   });
 
-  it("uses digest rather than object identity", async () => {
-    const cache = new MemoryWasmModuleCache();
-    const first = await cache.getOrCompile("digest", emptyModule);
-    const second = await cache.getOrCompile("digest", new Uint8Array(emptyModule));
-    assertStrictEquals(first, second);
+  const first = await cache.getOrCompile("abc", emptyModule);
+  const second = await cache.getOrCompile("abc", emptyModule);
+
+  assertStrictEquals(first, second);
+  assertEquals(calls, 1);
+  assertEquals(cache.stats(), { modules: 1 });
+});
+
+Deno.test("MemoryWasmModuleCache uses digest rather than object identity", async () => {
+  const cache = new MemoryWasmModuleCache();
+  const first = await cache.getOrCompile("digest", emptyModule);
+  const second = await cache.getOrCompile("digest", new Uint8Array(emptyModule));
+  assertStrictEquals(first, second);
+});
+
+Deno.test("MemoryWasmModuleCache retries after a rejected compile", async () => {
+  let calls = 0;
+  const cache = new MemoryWasmModuleCache(async () => {
+    calls++;
+    if (calls === 1) throw new Error("compile failed");
+    return await WebAssembly.compile(emptyModule);
   });
+
+  await assertRejects(
+    () => cache.getOrCompile("retry", emptyModule),
+    Error,
+    "compile failed",
+  );
+  await cache.getOrCompile("retry", emptyModule);
+
+  assertEquals(calls, 2);
+  assertEquals(cache.stats(), { modules: 1 });
+});
+
+Deno.test("sha256Hex computes stable SHA-256 hex digests", async () => {
+  assertEquals(
+    await sha256Hex(new TextEncoder().encode("abc")),
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  );
 });
 ```
 
@@ -100,6 +155,17 @@ export interface WasmModuleCache {
   stats(): WasmModuleCacheStats;
 }
 
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  if (globalThis.crypto?.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), (b) =>
+      b.toString(16).padStart(2, "0")
+    ).join("");
+  }
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 export class MemoryWasmModuleCache implements WasmModuleCache {
   private readonly modules = new Map<string, Promise<WebAssembly.Module>>();
 
@@ -111,8 +177,14 @@ export class MemoryWasmModuleCache implements WasmModuleCache {
   getOrCompile(digest: string, bytes: Uint8Array): Promise<WebAssembly.Module> {
     const existing = this.modules.get(digest);
     if (existing) return existing;
+
     const compiled = this.compile(new Uint8Array(bytes));
     this.modules.set(digest, compiled);
+    compiled.catch(() => {
+      if (this.modules.get(digest) === compiled) {
+        this.modules.delete(digest);
+      }
+    });
     return compiled;
   }
 
@@ -130,7 +202,7 @@ Add to `packages/kernel/src/index.ts`:
 
 ```ts
 export type { WasmModuleCache, WasmModuleCacheStats } from "./process/module-cache.js";
-export { MemoryWasmModuleCache, defaultWasmModuleCache } from "./process/module-cache.js";
+export { MemoryWasmModuleCache, defaultWasmModuleCache, sha256Hex } from "./process/module-cache.js";
 ```
 
 - [ ] **Step 5: Verify and commit**
@@ -155,21 +227,25 @@ Expected: tests pass and commit succeeds.
 
 - [ ] **Step 1: Add loader cache test**
 
-Add this test to `packages/kernel/src/process/__tests__/loader.test.ts` using the existing loader context helper in that file:
+Modify the existing `makeLoaderContext()` helper in `packages/kernel/src/process/__tests__/loader.test.ts` to accept `Partial<LoaderContext>` overrides and merge them into the returned context.
+
+Add:
 
 ```ts
-it("compiles identical executable bytes once through the module cache", async () => {
+Deno.test("loadProcess compiles identical executable bytes once through the module cache", async () => {
   let compiles = 0;
   const moduleCache = new MemoryWasmModuleCache(async (bytes) => {
     compiles++;
     return await WebAssembly.compile(bytes as BufferSource);
   });
 
-  const ctx = makeLoaderContext({ moduleCache });
+  const ctx = await makeLoaderContext({ moduleCache });
 
-  await loadProcess(ctx, { argv: ["/bin/true.wasm"], mode: "cli" });
-  await loadProcess(ctx, { argv: ["/bin/true.wasm"], mode: "cli" });
+  const first = await loadProcess(ctx, { argv: ["/bin/true"], mode: "cli" });
+  const second = await loadProcess(ctx, { argv: ["/bin/true"], mode: "cli" });
 
+  assertEquals(first.exitCode, 0);
+  assertEquals(second.exitCode, 0);
   assertEquals(compiles, 1);
 });
 ```
@@ -190,8 +266,7 @@ Expected: FAIL because `LoaderContext` does not accept `moduleCache`.
 In `packages/kernel/src/process/loader.ts`, import:
 
 ```ts
-import { sha256Hex } from "../vfs/content-store.js";
-import { defaultWasmModuleCache, type WasmModuleCache } from "./module-cache.js";
+import { defaultWasmModuleCache, sha256Hex, type WasmModuleCache } from "./module-cache.js";
 ```
 
 Extend `LoaderContext`:
@@ -213,9 +288,9 @@ const digest = await sha256Hex(bytes);
 const module = await (ctx.moduleCache ?? defaultWasmModuleCache).getOrCompile(digest, bytes);
 ```
 
-- [ ] **Step 4: Give each sandbox a cache**
+- [ ] **Step 4: Give each sandbox an explicit cache option**
 
-In `packages/kernel/src/sandbox.ts`, add a `moduleCache` field that defaults to `defaultWasmModuleCache` unless tests need isolation:
+In `packages/kernel/src/sandbox.ts`, import:
 
 ```ts
 import { defaultWasmModuleCache, type WasmModuleCache } from "./process/module-cache.js";
@@ -228,10 +303,46 @@ Extend `SandboxOptions`:
 moduleCache?: WasmModuleCache;
 ```
 
-When building the loader context, pass:
+Store the selected cache on the `Sandbox` instance, not only inside `create()`.
+
+Add to `SandboxParts` and the `Sandbox` class:
 
 ```ts
-moduleCache: options.moduleCache ?? defaultWasmModuleCache,
+moduleCache: WasmModuleCache;
+```
+
+In the constructor:
+
+```ts
+this.moduleCache = parts.moduleCache;
+```
+
+When constructing the root sandbox:
+
+```ts
+const moduleCache = options.moduleCache ?? defaultWasmModuleCache;
+```
+
+Pass `moduleCache` into:
+
+- the root `ProcessManager`
+- root `SandboxParts`
+- every root loader context
+- `spawn()` loader contexts created from the instance
+- `fork()` child `ProcessManager`
+- fork child loader contexts
+- fork child `SandboxParts`
+
+When building the root loader context inside `Sandbox.create()`, pass the local `moduleCache` variable:
+
+```ts
+moduleCache,
+```
+
+When building loader contexts from instance methods such as `spawn()` and `fork()`, pass:
+
+```ts
+moduleCache: this.moduleCache,
 ```
 
 - [ ] **Step 5: Verify and commit**
@@ -247,144 +358,24 @@ git commit -m "feat(process): compile vfs executables through module cache"
 
 Expected: tests pass and commit succeeds.
 
-## Task 3: Dynamic Dependency Manifest
+## Task 3: ProcessManager Uses Digest Cache Behind Its Path Cache
 
 **Files:**
-- Modify: `packages/kernel/src/process/loader.ts`
-- Test: `packages/kernel/src/process/__tests__/loader.test.ts`
+- Modify: `packages/kernel/src/process/manager.ts`
+- Modify: `packages/kernel/src/sandbox.ts`
+- Test: `packages/kernel/src/process/__tests__/process.test.ts`
 
-- [ ] **Step 1: Add manifest shape**
+- [ ] **Step 1: Add process-manager cache tests**
 
-In `packages/kernel/src/process/loader.ts`, add:
+Add a focused test to `packages/kernel/src/process/__tests__/process.test.ts` for the path that currently calls `WebAssembly.compile(wasmBytes)` from registered tool bytes.
 
-```ts
-export interface WasmDependencyManifest {
-  imports: Record<string, string>;
-}
-```
+Test intent:
 
-The manifest path is `${argv[0]}.deps.json`. Example for `/bin/tool.wasm`:
+- register or load the same wasm bytes twice under two paths
+- use a `MemoryWasmModuleCache` whose compile function increments `compiles`
+- assert the two loads produce one compile for identical bytes
 
-```json
-{
-  "imports": {
-    "libz": "/usr/lib/wasm/libz.wasm"
-  }
-}
-```
-
-- [ ] **Step 2: Add missing-dependency test**
-
-Add to `loader.test.ts`:
-
-```ts
-it("fails clearly when a declared dynamic dependency is missing", async () => {
-  const ctx = makeLoaderContext();
-  ctx.vfs.withWriteAccess(() => {
-    ctx.vfs.writeFile(
-      "/bin/true.wasm.deps.json",
-      new TextEncoder().encode(JSON.stringify({ imports: { libmissing: "/usr/lib/wasm/missing.wasm" } })),
-    );
-  });
-
-  await assertRejects(
-    () => loadProcess(ctx, { argv: ["/bin/true.wasm"], mode: "cli" }),
-    Error,
-    "dynamic dependency libmissing not found",
-  );
-});
-```
-
-- [ ] **Step 3: Implement manifest loading**
-
-Add helper functions in `loader.ts`:
-
-```ts
-function readDependencyManifest(ctx: LoaderContext, path: string): WasmDependencyManifest | null {
-  try {
-    return JSON.parse(new TextDecoder().decode(ctx.vfs.readFile(`${path}.deps.json`)));
-  } catch {
-    return null;
-  }
-}
-
-async function compileDependency(
-  ctx: LoaderContext,
-  name: string,
-  path: string,
-): Promise<WebAssembly.Module> {
-  let bytes: Uint8Array;
-  try {
-    bytes = ctx.vfs.readFile(path);
-  } catch (e) {
-    throw new Error(`dynamic dependency ${name} not found at ${path}`, { cause: e });
-  }
-  const digest = await sha256Hex(bytes);
-  return await (ctx.moduleCache ?? defaultWasmModuleCache).getOrCompile(digest, bytes);
-}
-```
-
-Call `readDependencyManifest(ctx, path)` after compiling the main module and compile each dependency before main instantiation. Do not instantiate dependencies yet in this task.
-
-- [ ] **Step 4: Verify and commit**
-
-Run:
-
-```bash
-source scripts/dev-init.sh
-deno test -A --no-check packages/kernel/src/process/__tests__/loader.test.ts
-git add packages/kernel/src/process/loader.ts packages/kernel/src/process/__tests__/loader.test.ts
-git commit -m "feat(process): read wasm dependency manifests"
-```
-
-Expected: tests pass and commit succeeds.
-
-## Task 4: Shared Memory/Table Imports For Dependencies
-
-**Files:**
-- Modify: `packages/kernel/src/process/loader.ts`
-- Test: `packages/kernel/src/process/__tests__/loader.test.ts`
-
-- [ ] **Step 1: Add shared import test**
-
-Add a test fixture module pair to `loader.test.ts` using WebAssembly text converted by the existing test helper if available. If no helper exists, add checked-in binary fixtures under `packages/kernel/src/process/__tests__/fixtures/`.
-
-Important fixture contract: the main module imports `env.memory` and `env.__indirect_function_table` when it has dynamic dependencies. The loader cannot first instantiate the main module and then lend its exported memory to libraries, because the main module's library imports must already exist at instantiation time.
-
-```ts
-it("instantiates dynamic dependencies with the main module memory and table", async () => {
-  const ctx = makeLoaderContext();
-  ctx.vfs.withWriteAccess(() => {
-    ctx.vfs.mkdirp("/usr/lib/wasm");
-    ctx.vfs.writeFile("/bin/uses-lib.wasm", USES_LIB_WASM);
-    ctx.vfs.writeFile("/usr/lib/wasm/libcounter.wasm", LIBCOUNTER_WASM);
-    ctx.vfs.writeFile(
-      "/bin/uses-lib.wasm.deps.json",
-      new TextEncoder().encode(JSON.stringify({ imports: { libcounter: "/usr/lib/wasm/libcounter.wasm" } })),
-    );
-  });
-
-  const proc = await loadProcess(ctx, {
-    argv: ["/bin/uses-lib.wasm"],
-    mode: "resident",
-    dynamicLinking: {
-      memory: { initial: 2, maximum: 16 },
-      table: { initial: 8, element: "anyfunc" },
-    },
-  });
-  const mainMemory = proc.memory;
-  const libMemory = await proc.callExport("__codepod_test_dep_memory_identity");
-
-  assertEquals(Number(libMemory), 1);
-  assertEquals(mainMemory instanceof WebAssembly.Memory, true);
-});
-```
-
-The fixture contract is:
-
-- Main module imports `env.memory`, `env.__indirect_function_table`, and `libcounter.bump`.
-- Dependency module imports the same `env.memory` and `env.__indirect_function_table`.
-- Dependency exports a test function that returns `1` only if it sees the shared memory/table supplied by the loader.
+Use the existing fixtures and helper style in `process.test.ts`.
 
 - [ ] **Step 2: Run the failing test**
 
@@ -392,105 +383,108 @@ Run:
 
 ```bash
 source scripts/dev-init.sh
-deno test -A --no-check packages/kernel/src/process/__tests__/loader.test.ts
+deno test -A --no-check packages/kernel/src/process/__tests__/process.test.ts
 ```
 
-Expected: FAIL because dependencies are compiled but not instantiated into imports.
+Expected: FAIL because `ProcessManager` does not accept or use a module cache.
 
-- [ ] **Step 3: Instantiate dependencies with shared imports**
+- [ ] **Step 3: Wire cache into `ProcessManager`**
 
-In `packages/kernel/src/process/loader.ts`, extend `LoadProcessOptions`:
+Add a `wasmModuleCache?: WasmModuleCache` constructor option or field in `ProcessManager`.
+
+Keep the existing path/source-keyed field, but rename it for clarity if needed:
 
 ```ts
-dynamicLinking?: {
-  memory?: WebAssembly.MemoryDescriptor;
-  table?: WebAssembly.TableDescriptor;
-};
+private moduleCache: Map<string, WebAssembly.Module> = new Map();
 ```
 
-When a dependency manifest is present, require `opts.dynamicLinking`. Create the shared imports before any dependency or main module is instantiated:
+may become:
 
 ```ts
-const sharedMemory = opts.dynamicLinking?.memory
-  ? new WebAssembly.Memory(opts.dynamicLinking.memory)
-  : undefined;
-const sharedTable = opts.dynamicLinking?.table
-  ? new WebAssembly.Table(opts.dynamicLinking.table)
-  : undefined;
-const sharedEnv: Record<string, WebAssembly.ImportValue> = {};
-if (sharedMemory) sharedEnv.memory = sharedMemory;
-if (sharedTable) sharedEnv.__indirect_function_table = sharedTable;
+private pathModuleCache: Map<string, WebAssembly.Module> = new Map();
+private wasmModuleCache: WasmModuleCache;
 ```
 
-Use the same `sharedEnv` for every dependency:
+For every path where `ProcessManager` has raw executable bytes and currently calls `WebAssembly.compile(...)`, replace it with:
 
 ```ts
-const depInstance = await ctx.adapter.instantiate(depModule, {
-  env: sharedEnv,
-  wasi_snapshot_preview1: wasiImports,
-  codepod: codepodImports,
-});
-dependencyImports[name] = depInstance.exports as Record<string, WebAssembly.ImportValue>;
+const digest = await sha256Hex(bytes);
+const module = await this.wasmModuleCache.getOrCompile(digest, bytes);
 ```
 
-For each manifest import entry:
+For `ToolSource.kind === "host"`, use `adapter.readBytes(source.path)` and the digest cache, then store the returned module in the path/source cache for `spawnSync()`. This replaces the current `adapter.loadModule(source.path)` path in `ProcessManager.loadModule()` for registered tools.
 
-```ts
-dependencyImports[name] = depInstance.exports as Record<string, WebAssembly.ImportValue>;
-```
+Keep the path/source cache because `spawnSync()` needs synchronous lookup by resolved tool source. The digest cache is only the compile backend.
 
-Before the final main instantiation, include `env` and `dependencyImports` in the import object:
+Preserve the existing path-cache semantics exactly:
 
-```ts
-const imports: WebAssembly.Imports = {
-  env: sharedEnv,
-  wasi_snapshot_preview1: wasiImports,
-  codepod: codepodImports,
-  ...dependencyImports,
-};
-```
+- `loadModule(source)` must still populate the path/source cache with `this.pathModuleCache.set(this.cacheKey(source), module)` after digest compilation.
+- `registerAndLoadTool()` must compile VFS bytes through the digest cache and then populate the same path/source cache with `this.cacheKey(source)`.
+- `getModule()` and `spawnSync()` must continue reading from the path/source cache only; they must not become async or compute digests.
+- If `adapter.readBytes(source.path)` fails for a host tool path, fail the load. Do not silently fall back to `adapter.loadModule(source.path)`, because fallback would bypass digest sharing and make cache behavior platform-dependent. `PlatformAdapter` already requires `readBytes()`.
 
-After instantiation, set `memoryRef` from `sharedMemory ?? instance.exports.memory`. This task must never instantiate dependencies with private memory/table objects.
+- [ ] **Step 4: Pass the sandbox cache to `ProcessManager`**
 
-- [ ] **Step 4: Verify and commit**
+In `Sandbox.create()`, pass the sandbox instance cache to `ProcessManager`. In `fork()`, pass `this.moduleCache` to the child `ProcessManager` so forked sandboxes share compiled modules with the parent.
+
+- [ ] **Step 5: Verify and commit**
 
 Run:
 
 ```bash
 source scripts/dev-init.sh
-deno test -A --no-check packages/kernel/src/process/__tests__/loader.test.ts
-git add packages/kernel/src/process/loader.ts packages/kernel/src/process/__tests__/loader.test.ts packages/kernel/src/process/__tests__/fixtures
-git commit -m "feat(process): instantiate wasm dependencies with shared imports"
+deno test -A --no-check packages/kernel/src/process/__tests__/module-cache.test.ts packages/kernel/src/process/__tests__/loader.test.ts packages/kernel/src/process/__tests__/process.test.ts
+git add packages/kernel/src/process/manager.ts packages/kernel/src/sandbox.ts packages/kernel/src/process/__tests__/process.test.ts
+git commit -m "feat(process): cache compiled registered tool modules"
 ```
 
 Expected: tests pass and commit succeeds.
 
-## Task 5: Sandbox-Level Module Sharing Test
+## Task 4: Cross-Sandbox Module Sharing Test
 
 **Files:**
-- Modify: `packages/kernel/src/__tests__/sandbox.test.ts`
+- Modify: `packages/kernel/src/__tests__/sandbox-base-root.test.ts`
 
 - [ ] **Step 1: Add cross-sandbox cache test**
 
-Add:
+Add to `packages/kernel/src/__tests__/sandbox-base-root.test.ts`, using the existing base-root fixture setup in that file. If this file is missing, the VFS base-root work is not present in the checkout; rebase/merge that work before continuing rather than moving this test to an older sandbox fixture.
 
 ```ts
-it("shares compiled modules across sandbox instances when using the same cache", async () => {
+it("shares compiled boot modules across instances when using the same cache", async () => {
+  const baseRoot = await createBaseRoot();
   let compiles = 0;
   const moduleCache = new MemoryWasmModuleCache(async (bytes) => {
     compiles++;
     return await WebAssembly.compile(bytes as BufferSource);
   });
 
-  const a = await Sandbox.create({ moduleCache });
-  const b = await Sandbox.create({ moduleCache });
+  const a = await Sandbox.create({
+    wasmDir: WASM_DIR,
+    adapter: new NodeAdapter(),
+    baseRoot,
+    bootArgv: ["/bin/true"],
+    bootWasmPath: join(WASM_DIR, "true-cmd.wasm"),
+    moduleCache,
+  });
+  const b = await Sandbox.create({
+    wasmDir: WASM_DIR,
+    adapter: new NodeAdapter(),
+    baseRoot,
+    bootArgv: ["/bin/true"],
+    bootWasmPath: join(WASM_DIR, "true-cmd.wasm"),
+    moduleCache,
+  });
 
-  await a.spawn(["/bin/true"], { mode: "cli" });
-  await b.spawn(["/bin/true"], { mode: "cli" });
-
-  assertEquals(compiles, 1);
+  try {
+    expect(compiles).toBe(1);
+  } finally {
+    a.destroy();
+    b.destroy();
+  }
 });
 ```
+
+Add imports for `MemoryWasmModuleCache` if needed. The existing file already has `join`, `WASM_DIR`, `NodeAdapter`, `Sandbox`, `expect`, and `createBaseRoot()`.
 
 - [ ] **Step 2: Verify and commit**
 
@@ -498,8 +492,8 @@ Run:
 
 ```bash
 source scripts/dev-init.sh
-deno test -A --no-check packages/kernel/src/__tests__/sandbox.test.ts
-git add packages/kernel/src/__tests__/sandbox.test.ts
+deno test -A --no-check packages/kernel/src/__tests__/sandbox-base-root.test.ts
+git add packages/kernel/src/__tests__/sandbox-base-root.test.ts
 git commit -m "test(kernel): cover cross sandbox wasm module sharing"
 ```
 
@@ -511,12 +505,10 @@ Run:
 
 ```bash
 source scripts/dev-init.sh
-deno check packages/kernel/src/process/loader.ts packages/kernel/src/process/module-cache.ts packages/kernel/src/sandbox.ts
-deno test -A --no-check packages/kernel/src/process/__tests__/module-cache.test.ts packages/kernel/src/process/__tests__/loader.test.ts packages/kernel/src/__tests__/sandbox.test.ts
-rg "pre-rename package path|old package path" docs/superpowers/plans/2026-05-02-shared-wasm-modules-dynamic-libraries.md
+deno check packages/kernel/src/process/loader.ts packages/kernel/src/process/manager.ts packages/kernel/src/process/module-cache.ts packages/kernel/src/sandbox.ts
+deno test -A --no-check packages/kernel/src/process/__tests__/module-cache.test.ts packages/kernel/src/process/__tests__/loader.test.ts packages/kernel/src/process/__tests__/process.test.ts packages/kernel/src/__tests__/sandbox-base-root.test.ts
 ```
 
 Expected:
 - `deno check` passes.
 - All listed tests pass.
-- The `rg` command returns no matches.
