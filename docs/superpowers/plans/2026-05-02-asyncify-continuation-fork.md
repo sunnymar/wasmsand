@@ -192,23 +192,23 @@ Build `libcodepod_continuations.a` from `codepod_setjmp.o` and `codepod_fork.o`.
 - Modify: `packages/kernel/src/vfs/fd-table.ts`
 - Modify: `packages/kernel/src/host-imports/kernel-imports.ts`
 
-- [ ] **Step 1: Write failing runtime tests**
+- [x] **Step 1: Write failing runtime tests**
 
 Tests use the fork canary and assert parent/child return split, child `getppid()`, memory divergence, and `waitpid(child)` success.
 
-- [ ] **Step 2: Add fork state to `AsyncifyAsyncBridge`**
+- [x] **Step 2: Add fork state to `AsyncifyAsyncBridge`**
 
 Add `hostFork`, pending fork return, fork snapshot hooks, and child rewind support.
 
-- [ ] **Step 3: Snapshot and restore process state**
+- [x] **Step 3: Snapshot and restore process state**
 
 Snapshot memory, bridge continuation state, kernel fd table, WASI fd state, cwd/env/argv, and process metadata after Asyncify unwind and before parent rewind.
 
-- [ ] **Step 4: Register and start the child**
+- [x] **Step 4: Register and start the child**
 
 Reserve a child process slot synchronously, clone fd/process state, return child PID to the parent, and enqueue child instantiation/resume from the copied snapshot.
 
-- [ ] **Step 5: Verify runtime tests**
+- [x] **Step 5: Verify runtime tests**
 
 Run: `source scripts/dev-init.sh && deno test -A --no-check packages/kernel/src/__tests__/guest-compat.test.ts --filter fork`.
 

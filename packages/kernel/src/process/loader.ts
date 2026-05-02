@@ -9,7 +9,10 @@ import type { VfsLike } from "../vfs/vfs-like.js";
 import type { ProcessKernel } from "./kernel.js";
 import { WasiHost } from "../wasi/wasi-host.js";
 import { createBufferTarget, createNullTarget, createStaticTarget } from "../wasi/fd-target.js";
-import { AsyncifyAsyncBridge } from "../async-bridge.js";
+import {
+  AsyncifyAsyncBridge,
+  type AsyncifyForkSnapshot,
+} from "../async-bridge.js";
 import { CooperativeSerialBackend } from "./threads/cooperative-serial.js";
 import { makeIndirectCallTable } from "./threads/indirect-call-table.js";
 import type { ThreadsBackend } from "./threads/backend.js";
@@ -120,6 +123,8 @@ export async function loadProcess(
       .hostSetjmp as unknown as WebAssembly.ImportValue;
     codepodImports.host_longjmp = asyncifyBridge
       .hostLongjmp as unknown as WebAssembly.ImportValue;
+    codepodImports.host_fork = asyncifyBridge
+      .hostFork as unknown as WebAssembly.ImportValue;
   }
   wrapAsyncImports(codepodImports, [
     "host_waitpid",
@@ -180,6 +185,104 @@ export async function loadProcess(
   wasi.setCanSuspendPipeReads(
     typeof WebAssembly.Suspending === "function" || asyncifyInitialized,
   );
+
+  const forkChildFromSnapshot = (
+    parentPid: number,
+    parentWasi: WasiHost,
+    snapshot: AsyncifyForkSnapshot,
+  ): number => {
+    if (!asyncifyBridge || !asyncifyInitialized) return -38; // ENOSYS
+    if (memoryRef?.buffer instanceof SharedArrayBuffer) return -11; // EAGAIN
+    if (!ctx.kernel.canReserveProcessSlot()) return -11; // EAGAIN
+
+    const childPid = ctx.kernel.allocPid(parentPid, path);
+    const childFdTable = ctx.kernel.buildFdTableForFork(parentPid);
+    ctx.kernel.adoptFdTable(childPid, childFdTable);
+    const wasiSnapshot = parentWasi.snapshotForFork();
+
+    const childPromise = (async () => {
+      const childWasi = ctx.buildWasiHost(childPid, argv, env, cwd);
+      childWasi.restoreForkSnapshot(wasiSnapshot);
+      childWasi.setCanSuspendPipeReads(true);
+      const childBridge = new AsyncifyAsyncBridge();
+      const childThreadsBackend = new CooperativeSerialBackend();
+      let childMemoryRef: WebAssembly.Memory | null = null;
+      const childMemoryProxy = new Proxy({} as WebAssembly.Memory, {
+        get(_target, prop) {
+          if (!childMemoryRef) throw new Error("child memory not initialized");
+          const val =
+            (childMemoryRef as unknown as Record<string | symbol, unknown>)[prop];
+          return typeof val === "function" ? val.bind(childMemoryRef) : val;
+        },
+      });
+      const childCodepodImports: Record<string, WebAssembly.ImportValue> = {
+        ...ctx.buildKernelImports(childPid, childMemoryProxy, childWasi, childThreadsBackend),
+        ...(opts.extraCodepodImports?.(childMemoryProxy, childWasi) ?? {}),
+      };
+      childCodepodImports.host_setjmp = childBridge
+        .hostSetjmp as unknown as WebAssembly.ImportValue;
+      childCodepodImports.host_longjmp = childBridge
+        .hostLongjmp as unknown as WebAssembly.ImportValue;
+      childCodepodImports.host_fork = childBridge
+        .hostFork as unknown as WebAssembly.ImportValue;
+      wrapAsyncImports(childCodepodImports, [
+        "host_waitpid",
+        "host_yield",
+        "host_network_fetch",
+        "host_register_tool",
+        "host_socket_accept",
+        "host_extension_invoke",
+        "host_run_command",
+        "host_thread_spawn",
+        "host_thread_join",
+        "host_thread_detach",
+        "host_thread_yield",
+        "host_mutex_lock",
+        "host_cond_wait",
+      ], childBridge);
+      const childWasiImports = childWasi.getImports().wasi_snapshot_preview1;
+      wrapAsyncImports(
+        childWasiImports as Record<string, WebAssembly.ImportValue>,
+        ["fd_read", "fd_write", "poll_oneoff"],
+        childBridge,
+      );
+
+      const childInstance = await ctx.adapter.instantiate(module, {
+        wasi_snapshot_preview1: childWasiImports,
+        codepod: childCodepodImports,
+      });
+      childMemoryRef = childInstance.exports.memory as WebAssembly.Memory;
+      while (childMemoryRef.buffer.byteLength < snapshot.memoryBytes.byteLength) {
+        childMemoryRef.grow(1);
+      }
+      new Uint8Array(childMemoryRef.buffer, 0, snapshot.memoryBytes.byteLength)
+        .set(snapshot.memoryBytes);
+      childBridge.initFromInstance(childInstance, snapshot.dataAddr, snapshot.dataSize);
+      childBridge.restoreForkSnapshot(snapshot, 0);
+      childBridge.setForkController({
+        forkFromContinuation: (childSnapshot) =>
+          forkChildFromSnapshot(childPid, childWasi, childSnapshot),
+      });
+      const childRawStart = childInstance.exports._start as (() => number) | undefined;
+      const childStartFn = childRawStart
+        ? childBridge.wrapExport(childRawStart)
+        : undefined;
+      childBridge.startForkRewind();
+      const exitCode = await childWasi.startAsync(childInstance, childStartFn);
+      ctx.releasePid(childPid, exitCode);
+    })().catch((_e) => {
+      ctx.releasePid(childPid, 127);
+    });
+    void childPromise;
+    return childPid;
+  };
+
+  if (asyncifyBridge && asyncifyInitialized) {
+    asyncifyBridge.setForkController({
+      forkFromContinuation: (snapshot) =>
+        forkChildFromSnapshot(pid, wasi, snapshot),
+    });
+  }
 
   const rawStart = instance.exports._start as (() => unknown) | undefined;
   const startFn = rawStart
