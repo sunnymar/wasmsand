@@ -187,3 +187,34 @@ Deno.test("kernel host_waitpid_nohang distinguishes running from ECHILD", () => 
   assertEquals((parentImports.host_waitpid_nohang as (pid: number) => number)(999), -2);
   kernel.dispose();
 });
+
+Deno.test("kernel host_waitpid_nohang reaps any exited child for pid -1", () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const kernel = new ProcessKernel();
+  const parentPid = kernel.allocPid();
+  const runningPid = kernel.allocPid(parentPid, "running");
+  const exitedPid = kernel.allocPid(parentPid, "exited");
+  kernel.releaseProcess(exitedPid, 8);
+
+  const imports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: parentPid,
+  });
+
+  const written = (imports.host_waitpid_nohang as (pid: number, outPtr: number, outCap: number) => number)(
+    -1,
+    4096,
+    1024,
+  );
+
+  assertEquals(readJson(memory, 4096, written), { pid: exitedPid, exit_code: 8 });
+  assertEquals(kernel.hasProcess(exitedPid), false);
+  assertEquals(kernel.hasProcess(runningPid), true);
+  assertEquals((imports.host_waitpid_nohang as (pid: number, outPtr: number, outCap: number) => number)(
+    -1,
+    4096,
+    1024,
+  ), -1);
+  kernel.dispose();
+});

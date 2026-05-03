@@ -59,7 +59,7 @@ export class ProcessKernel {
   private fdTables = new Map<number, Map<number, FdTarget>>();
   private nextFds = new Map<number, number>();
   private fileLocks = new Map<string, FileLockState>();
-  private readonly maxProcesses: number;
+  readonly maxProcesses: number;
 
   constructor(options: ProcessKernelOptions = {}) {
     const maxProcesses = options.maxProcesses ?? DEFAULT_MAX_PROCESSES;
@@ -70,10 +70,6 @@ export class ProcessKernel {
     // Process 0 (shell) gets a default fd table
     this.fdTables.set(0, new Map());
     this.nextFds.set(0, KERNEL_FD_BASE);
-  }
-
-  getMaxProcesses(): number {
-    return this.maxProcesses;
   }
 
   getReservedProcessCount(): number {
@@ -347,6 +343,13 @@ export class ProcessKernel {
         });
       }
     });
+  }
+
+  waitAnyChildNohang(parentPid: number): { pid: number; exitCode: number } | null {
+    const exited = this.findExitedChild(parentPid);
+    if (!exited) return null;
+    this.reapProcess(exited.pid);
+    return { pid: exited.pid, exitCode: exited.exitCode };
   }
 
   waitpidNohang(pid: number, parentPid?: number): number {

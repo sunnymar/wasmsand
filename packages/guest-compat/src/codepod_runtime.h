@@ -73,13 +73,11 @@ int codepod_host_fork(void);
 __attribute__((import_module("codepod"), import_name("host_waitpid")))
 int codepod_host_waitpid(int pid, int out_ptr, int out_cap);
 
-/* host_waitpid_nohang is the synchronous non-blocking variant —
- * returns the child's exit code if the process has already exited,
- * or -1 if it's still running.  Used internally by guest-side
- * helpers; not a real waitpid(WNOHANG) replacement because it
- * doesn't unblock signal-style notifications. */
+/* host_waitpid_nohang is the synchronous non-blocking variant.
+ * It writes {"pid":N,"exit_code":M} and returns the byte count when
+ * a child was reaped, -1 when no child has exited, and -2 for ECHILD. */
 __attribute__((import_module("codepod"), import_name("host_waitpid_nohang")))
-int codepod_host_waitpid_nohang(int pid);
+int codepod_host_waitpid_nohang(int pid, int out_ptr, int out_cap);
 
 __attribute__((import_module("codepod"), import_name("host_thread_spawn")))
 int codepod_host_thread_spawn(int fn_ptr, int arg);

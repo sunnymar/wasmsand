@@ -15,7 +15,7 @@ function withTimeout<T>(promise: Promise<T>, ms = 250): Promise<T | 'timeout'> {
 describe('ProcessKernel', () => {
   it('uses a finite default process limit', () => {
     const kernel = new ProcessKernel();
-    expect(kernel.getMaxProcesses()).toBe(DEFAULT_MAX_PROCESSES);
+    expect(kernel.maxProcesses).toBe(DEFAULT_MAX_PROCESSES);
     expect(kernel.canReserveProcessSlot()).toBe(true);
     kernel.dispose();
   });
@@ -95,6 +95,20 @@ describe('ProcessKernel', () => {
     const results = await withTimeout(Promise.all([firstWait, secondWait]));
     expect(results).not.toBe('timeout');
     expect(results).toEqual([{ pid: child, exitCode: 3 }, { pid: child, exitCode: 3 }]);
+    kernel.dispose();
+  });
+
+  it('waitAnyChildNohang reaps an exited child without blocking', () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    const running = kernel.allocPid(parent, 'running');
+    const exited = kernel.allocPid(parent, 'exited');
+    kernel.releaseProcess(exited, 6);
+
+    expect(kernel.waitAnyChildNohang(parent)).toEqual({ pid: exited, exitCode: 6 });
+    expect(kernel.hasProcess(exited)).toBe(false);
+    expect(kernel.waitAnyChildNohang(parent)).toBeNull();
+    expect(kernel.hasProcess(running)).toBe(true);
     kernel.dispose();
   });
 

@@ -906,37 +906,43 @@ export class Sandbox {
           spawnProcess: (req, fdTable) => {
             const childPid = kernel.allocPid(pid, req.prog);
             kernel.adoptFdTable(childPid, fdTable);
-            const commandName = req.prog.includes('/')
-              ? req.prog.split('/').pop() ?? req.prog
-              : req.prog;
-            if (allowedTools && !allowedTools.has(commandName)) {
-              Sandbox.writeToFdTarget(
-                fdTable.get(2),
-                `${commandName}: tool not allowed by security policy\n`,
-              );
-              kernel.releaseProcess(childPid, 126);
+            try {
+              const commandName = req.prog.includes('/')
+                ? req.prog.split('/').pop() ?? req.prog
+                : req.prog;
+              if (allowedTools && !allowedTools.has(commandName)) {
+                Sandbox.writeToFdTarget(
+                  fdTable.get(2),
+                  `${commandName}: tool not allowed by security policy\n`,
+                );
+                kernel.releaseProcess(childPid, 126);
+                return childPid;
+              }
+              const argv = Sandbox.argvForSpawn(vfs, req);
+              const childCtx = makeContextWithAllocator(() => childPid);
+              const promise = loadProcess(childCtx, {
+                argv,
+                mode: 'cli',
+                env: Object.fromEntries(req.env),
+                cwd: req.cwd || '/',
+                memoryBytes,
+                stdoutLimit,
+                stderrLimit,
+                rollbackOnFailure: false,
+              }).then(async (proc) => {
+                processes.set(childPid, proc);
+                await proc.terminate();
+              }).catch((e) => {
+                const msg = e instanceof Error ? e.message : String(e);
+                Sandbox.writeToFdTarget(kernel.getFdTarget(childPid, 2), `${req.prog}: ${msg}\n`);
+                kernel.releaseProcess(childPid, 127);
+              });
+              void promise;
               return childPid;
+            } catch (e) {
+              kernel.discardProcess(childPid);
+              throw e;
             }
-            const argv = Sandbox.argvForSpawn(vfs, req);
-            const childCtx = makeContextWithAllocator(() => childPid);
-            const promise = loadProcess(childCtx, {
-              argv,
-              mode: 'cli',
-              env: Object.fromEntries(req.env),
-              cwd: req.cwd || '/',
-              memoryBytes,
-              stdoutLimit,
-              stderrLimit,
-              rollbackOnFailure: false,
-            }).then(async (proc) => {
-              processes.set(childPid, proc);
-              await proc.terminate();
-            }).catch((e) => {
-              const msg = e instanceof Error ? e.message : String(e);
-              Sandbox.writeToFdTarget(kernel.getFdTarget(childPid, 2), `${req.prog}: ${msg}\n`);
-              kernel.releaseProcess(childPid, 127);
-            });
-            return childPid;
           },
         }),
       makeFdReadAndClear,

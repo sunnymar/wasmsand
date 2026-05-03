@@ -475,11 +475,26 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       await Promise.resolve();
     },
 
-    // host_waitpid_nohang(pid) -> i32
-    // Non-blocking: returns exit code if process exited, -1 if still running,
-    // -2 if pid is not a child of the caller.
-    host_waitpid_nohang(pid: number): number {
+    // host_waitpid_nohang(pid[, out_ptr, out_cap]) -> i32
+    // Legacy one-arg ABI: returns exit code if process exited, -1 if still
+    // running, -2 if pid is not a child of the caller.
+    // Result ABI: writes { pid, exit_code } and returns byte count when an
+    // exited child is reaped; returns -1 for no exited child, -2 for ECHILD.
+    host_waitpid_nohang(pid: number, outPtr?: number, outCap?: number): number {
       if (!opts.kernel) return -1;
+      if (typeof outPtr === 'number' && typeof outCap === 'number') {
+        if (pid <= 0) {
+          const result = opts.kernel.waitAnyChildNohang(callerPid);
+          if (!result) return -1;
+          return writeJson(memory, outPtr, outCap, {
+            pid: result.pid,
+            exit_code: result.exitCode,
+          });
+        }
+        const exitCode = opts.kernel.waitpidNohang(pid, callerPid);
+        if (exitCode < 0) return exitCode;
+        return writeJson(memory, outPtr, outCap, { pid, exit_code: exitCode });
+      }
       return opts.kernel.waitpidNohang(pid, callerPid);
     },
 
