@@ -425,14 +425,17 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // host_dup2(src_fd, dst_fd) -> i32
     // Makes dst_fd point to the same target as src_fd.
     host_dup2(srcFd: number, dstFd: number): number {
-      let wasiResult = 0;
-      if (opts.wasiHost) {
-        wasiResult = opts.wasiHost.renumberFd(srcFd, dstFd) === 0 ? 0 : -1;
-      }
-      if (!opts.kernel) return wasiResult;
       try {
-        opts.kernel.dup2(callerPid, srcFd, dstFd);
-        return wasiResult === -1 ? -1 : 0;
+        if (opts.kernel) {
+          opts.kernel.dup2(callerPid, srcFd, dstFd);
+        }
+        if (opts.wasiHost) {
+          const ioFds = opts.wasiHost.getIoFds();
+          const target = ioFds.get(srcFd);
+          if (target) ioFds.set(dstFd, target);
+          else if (!opts.kernel) return -1;
+        }
+        return 0;
       } catch { return -1; }
     },
 

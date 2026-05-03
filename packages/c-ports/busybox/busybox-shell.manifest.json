@@ -7,6 +7,7 @@
       "chmod",
       "cp",
       "cut",
+      "date",
       "diff",
       "dirname",
       "echo",

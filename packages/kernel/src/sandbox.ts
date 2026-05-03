@@ -56,6 +56,8 @@ import { bufferToString, createBufferTarget, type FdTarget } from './wasi/fd-tar
 import type { RunCommandHandler } from './run-command.js';
 import { defaultWasmModuleCache, type WasmModuleCache } from './process/module-cache.js';
 
+type PublicSpawnMode = Extract<ProcessMode, 'resident'>;
+
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
   /** Absolute mount path (e.g. '/mnt/tools'). */
@@ -1311,7 +1313,7 @@ export class Sandbox {
   }
 
   async spawn(argv: string[], opts: {
-    mode?: ProcessMode;
+    mode?: PublicSpawnMode;
     env?: Record<string, string>;
     cwd?: string;
     bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
@@ -1349,6 +1351,7 @@ export class Sandbox {
         opts.bootImports ?? this.bootImports,
       ),
     });
+    const hostOwnedTopLevel = this.kernel.getPpid(proc.pid) === NO_PARENT_PID;
     if (proc.mode === 'resident') {
       Sandbox.applyOutputLimits(
         this.kernel,
@@ -1356,8 +1359,22 @@ export class Sandbox {
         this.security?.limits?.stdoutBytes,
         this.security?.limits?.stderrBytes,
       );
+    } else if (hostOwnedTopLevel) {
+      const captured = {
+        1: proc.fdReadAndClear(1),
+        2: proc.fdReadAndClear(2),
+      };
+      proc.__setFdReadAndClear((fd) => {
+        const result = captured[fd];
+        captured[fd] = { data: '', truncated: false };
+        return result;
+      });
+      await proc.terminate();
+      await this.kernel.waitpid(proc.pid);
     }
-    this.processes.set(proc.pid, proc);
+    if (proc.mode === 'resident') {
+      this.processes.set(proc.pid, proc);
+    }
     return proc;
   }
 

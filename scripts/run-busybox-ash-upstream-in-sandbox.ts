@@ -127,7 +127,7 @@ async function runCase(sandbox: Sandbox, testCase: UpstreamCase): Promise<Upstre
   const proc = await sandbox.spawn([
     '/bin/sh',
     '-c',
-    `cd /tmp/ash_test/${testCase.category} && PATH=/tmp/bin:/bin:/usr/bin THIS_SH=/bin/sh /bin/sh ./${testCase.test} 2>&1`,
+    `cd /tmp/ash_test/${testCase.category} && PATH=/tmp/bin:/bin:/usr/bin THIS_SH=/bin/ash /bin/ash ./${testCase.test} 2>&1`,
   ]);
   const stdout = proc.fdReadAndClear(1).data;
   const exitCode = proc.exitCode ?? 0;

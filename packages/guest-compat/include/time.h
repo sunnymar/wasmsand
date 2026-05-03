@@ -30,6 +30,12 @@ extern char *tzname[2];
 extern long timezone;
 extern int daylight;
 
+/* WASI exposes clock_gettime but not clock_settime.  Provide the
+ * declaration so POSIX callers can compile; the compat implementation
+ * returns -1 with errno=ENOSYS because sandbox guests cannot set the
+ * host clock. */
+int clock_settime(clockid_t clockid, const struct timespec *tp);
+
 #ifdef __cplusplus
 }
 #endif

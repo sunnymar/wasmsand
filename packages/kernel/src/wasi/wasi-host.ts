@@ -1580,13 +1580,16 @@ export class WasiHost {
   private fdRenumber(fromFd: number, toFd: number): number {
     const ioTarget = this.ioFds.get(fromFd);
     if (ioTarget) {
+      if (fromFd === toFd) return WASI_ESUCCESS;
       if (this.kernel && this.pid !== undefined) {
         try {
           this.kernel.dup2(this.pid, fromFd, toFd);
+          this.kernel.closeFd(this.pid, fromFd);
         } catch {
           // The local ioFds map is authoritative for this WasiHost.
         }
       }
+      this.ioFds.delete(fromFd);
       this.ioFds.set(toFd, ioTarget);
       return WASI_ESUCCESS;
     }

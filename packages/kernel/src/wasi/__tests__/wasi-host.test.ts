@@ -2,6 +2,8 @@ import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { WasiHost } from '../wasi-host.js';
 import { VFS } from '../../vfs/vfs.js';
+import { ProcessKernel } from '../../process/kernel.js';
+import { createAsyncPipe } from '../../vfs/pipe.js';
 import {
   WASI_EBADF,
   WASI_ENOENT,
@@ -233,6 +235,42 @@ describe('WasiHost', () => {
       const { wasi } = getImportsAndView(host, memory);
       const errno = wasi.fd_close(99);
       expect(errno).toBe(WASI_EBADF);
+    });
+
+    it('fd_renumber moves kernel pipe fds instead of leaving the source open', async () => {
+      const kernel = new ProcessKernel();
+      const pid = kernel.allocPid();
+      const ioFds = kernel.getFdTable(pid);
+      const [readEnd, writeEnd] = createAsyncPipe();
+      ioFds.set(7, { type: 'pipe_write', pipe: writeEnd });
+
+      const pipeHost = new WasiHost({
+        vfs,
+        args: ['program'],
+        env: {},
+        preopens: { '/': '/' },
+        ioFds,
+        kernel,
+        pid,
+      });
+      pipeHost.setMemory(memory);
+
+      expect(pipeHost.renumberFd(7, 1)).toBe(WASI_ESUCCESS);
+      expect(kernel.getFdTarget(pid, 7)).toBeNull();
+
+      const { wasi } = getImportsAndView(pipeHost, memory);
+      expect(wasi.fd_close(1)).toBe(WASI_ESUCCESS);
+
+      const read = readEnd.read(new Uint8Array(1));
+      let timeout: number | undefined;
+      const result = await Promise.race([
+        read,
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), 20);
+        }),
+      ]);
+      if (timeout !== undefined) clearTimeout(timeout);
+      expect(result).toBe(0);
     });
   });
 
