@@ -104,14 +104,13 @@ function makeModule(opts: {
   ]));
 }
 
-Deno.test("host_setjmp imports require continuation metadata", () => {
+Deno.test("host_setjmp imports alone do not opt into continuation mode", () => {
   const module = makeModule({ imports: ["host_setjmp", "host_longjmp"], asyncify: true });
 
-  assertThrows(
-    () => validateCodepodModuleProfile(analyzeCodepodModule(module)),
-    Error,
-    "module imports host_setjmp/host_longjmp but lacks codepod.features continuations marker",
-  );
+  const profile = validateCodepodModuleProfile(analyzeCodepodModule(module));
+  assertEquals(profile.importsSetjmp, true);
+  assertEquals(profile.requiresContinuations, false);
+  assertEquals(profile.bridge, "jspi");
 });
 
 Deno.test("host_fork imports require continuation metadata", () => {

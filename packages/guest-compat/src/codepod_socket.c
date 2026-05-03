@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stddef.h>
@@ -594,7 +595,9 @@ static ssize_t codepod_recv_impl(int sockfd, void *buf, size_t len, int flags) {
     "{\"fd\":%d,\"max_bytes\":%zu%s}",
     sockfd,
     len,
-    (flags == MSG_PEEK || flags == CODEPOD_MSG_PEEK) ? ",\"peek\":true" : ""
+    (flags == MSG_PEEK || flags == CODEPOD_MSG_PEEK)
+      ? ((codepod_fd_get_status_flags(sockfd) & O_NONBLOCK) ? ",\"peek\":true,\"nonblocking\":true" : ",\"peek\":true")
+      : ((codepod_fd_get_status_flags(sockfd) & O_NONBLOCK) ? ",\"nonblocking\":true" : "")
   );
   if (req_len < 0 || (size_t)req_len >= sizeof(req)) {
     errno = EOVERFLOW;

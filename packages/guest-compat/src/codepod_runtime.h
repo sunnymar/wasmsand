@@ -144,6 +144,8 @@ int codepod_host_socket_close(int req_ptr, int req_len);
 
 const char *codepod_netdb_host_for_addr(uint32_t addr_be);
 uint32_t codepod_netdb_addr_for_host(const char *host);
+int codepod_fd_get_status_flags(int fd);
+void codepod_fd_set_status_flags(int fd, int flags);
 
 int codepod_json_call(const char *json, char **out, size_t *out_len);
 

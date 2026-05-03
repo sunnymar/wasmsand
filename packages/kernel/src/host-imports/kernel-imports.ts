@@ -845,7 +845,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           return writeJson(memory, outPtr, outCap, { ok: true, data_b64: bytesToBase64(chunk) });
         }
         const result = socketBackend.recv(target.socket, maxBytes, {
-          nonblocking: ((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0,
+          nonblocking: req.nonblocking === true || ((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0,
         });
         if (peek && result.ok) {
           const data = base64ToBytes(result.data_b64 ?? '');

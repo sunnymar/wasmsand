@@ -11,6 +11,7 @@
 #include "codepod_runtime.h"
 #include "codepod_markers.h"
 
+#define CODEPOD_FCNTL_NO_REMAP
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -25,6 +26,22 @@ CODEPOD_DECLARE_MARKER(dup3);
 
 CODEPOD_DEFINE_MARKER(dup,  0x64757020u) /* "dup " */
 CODEPOD_DEFINE_MARKER(dup3, 0x64757033u) /* "dup3" */
+
+static int codepod_fd_status_flags[65536];
+
+int codepod_fd_get_status_flags(int fd) {
+  if (fd < 0 || fd >= (int)(sizeof(codepod_fd_status_flags) / sizeof(codepod_fd_status_flags[0]))) {
+    return 0;
+  }
+  return codepod_fd_status_flags[fd];
+}
+
+void codepod_fd_set_status_flags(int fd, int flags) {
+  if (fd < 0 || fd >= (int)(sizeof(codepod_fd_status_flags) / sizeof(codepod_fd_status_flags[0]))) {
+    return;
+  }
+  codepod_fd_status_flags[fd] = flags;
+}
 
 int dup(int oldfd) {
   CODEPOD_MARKER_CALL(dup);
@@ -85,17 +102,14 @@ int dup3(int oldfd, int newfd, int flags) {
   return dup2(oldfd, newfd);
 }
 
-int fcntl(int fd, int cmd, ...) {
+static int codepod_fcntl_impl(int fd, int cmd, va_list ap) {
   if (
     cmd == F_DUPFD
 #ifdef F_DUPFD_CLOEXEC
     || cmd == F_DUPFD_CLOEXEC
 #endif
   ) {
-      va_list ap;
-      va_start(ap, cmd);
       int arg = va_arg(ap, int);
-      va_end(ap);
       if (fd < 0 || arg < 0) {
         errno = EINVAL;
         return -1;
@@ -127,11 +141,38 @@ int fcntl(int fd, int cmd, ...) {
     case F_SETFD:
       return 0;
     case F_GETFL:
+      return codepod_fd_get_status_flags(fd);
+    case F_SETFL: {
+      int flags = va_arg(ap, int);
+      codepod_fd_set_status_flags(fd, flags);
       return 0;
-    case F_SETFL:
-      return 0;
+    }
     default:
       errno = EINVAL;
       return -1;
   }
+}
+
+int fcntl(int fd, int cmd, ...) {
+  va_list ap;
+  va_start(ap, cmd);
+  int result = codepod_fcntl_impl(fd, cmd, ap);
+  va_end(ap);
+  return result;
+}
+
+int codepod_fcntl(int fd, int cmd, ...) {
+  va_list ap;
+  va_start(ap, cmd);
+  int result = codepod_fcntl_impl(fd, cmd, ap);
+  va_end(ap);
+  return result;
+}
+
+int __wrap_fcntl(int fd, int cmd, ...) {
+  va_list ap;
+  va_start(ap, cmd);
+  int result = codepod_fcntl_impl(fd, cmd, ap);
+  va_end(ap);
+  return result;
 }

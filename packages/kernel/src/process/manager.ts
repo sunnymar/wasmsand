@@ -8,6 +8,7 @@
 
 import type { PlatformAdapter } from '../platform/adapter.js';
 import type { VfsLike } from '../vfs/vfs-like.js';
+import { S_TOOL } from '../vfs/inode.js';
 import { WasiHost } from '../wasi/wasi-host.js';
 import type { NetworkBridgeLike } from '../network/bridge.js';
 import { createKernelImports } from '../host-imports/kernel-imports.js';
@@ -73,7 +74,7 @@ export class ProcessManager {
           // No pre-existing stub.
         }
         this.vfs.writeFile(linkPath, new TextEncoder().encode(toolSource.path));
-        this.vfs.chmod(linkPath, 0o555);
+        this.vfs.chmod(linkPath, S_TOOL | 0o555);
       });
     }
   }

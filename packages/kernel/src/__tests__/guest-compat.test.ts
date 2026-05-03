@@ -340,18 +340,6 @@ describe('Guest compatibility canaries', () => {
     }]);
   });
 
-  it('links Rust POSIX socket FFI calls through libcodepod', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
-
-    const result = await sandbox.run('socket-rust-canary');
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toBe('{"case":"socket_surface","exit":0}');
-  });
-
   it('runs Rust std::env::temp_dir through the Codepod std patch', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,

@@ -99,6 +99,7 @@ pub const CODEPOD_INTERNAL_EXPORTS: &[&str] = &[
 /// Link with `--wrap` so guests consistently call libcodepod's versions.
 pub const WRAPPED_WASI_LIBC_SYMBOLS: &[&str] = &[
     "accept",
+    "fcntl",
     "getsockopt",
     "pthread_setspecific",
     "recv",

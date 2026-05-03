@@ -37,7 +37,7 @@ export function analyzeCodepodModule(
   const hasAsyncify = moduleHasAsyncify(module);
   const hasContinuationsFeature = moduleHasCodepodFeature(module, "continuations");
   const hasLegacySetjmpFeature = moduleHasCodepodFeature(module, "setjmp");
-  const requiresContinuations = importsSetjmp ||
+  const requiresContinuations =
     importsFork ||
     hasContinuationsFeature ||
     hasLegacySetjmpFeature;
@@ -61,11 +61,6 @@ export function validateCodepodModuleProfile(
   if (profile.importsFork && !hasAnyContinuationFeature(profile)) {
     throw new Error(
       "module imports host_fork but lacks codepod.features continuations marker; rebuild with CPCC_USE_CONTINUATIONS=1",
-    );
-  }
-  if (profile.importsSetjmp && !hasAnyContinuationFeature(profile)) {
-    throw new Error(
-      "module imports host_setjmp/host_longjmp but lacks codepod.features continuations marker; rebuild with CPCC_USE_CONTINUATIONS=1",
     );
   }
   if (profile.requiresContinuations && !profile.hasAsyncify) {

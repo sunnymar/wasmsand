@@ -6,6 +6,7 @@
 import { Process, type ProcessMode } from "./handle.js";
 import type { PlatformAdapter } from "../platform/adapter.js";
 import type { VfsLike } from "../vfs/vfs-like.js";
+import { S_TOOL } from "../vfs/inode.js";
 import type { ProcessKernel } from "./kernel.js";
 import { WasiHost } from "../wasi/wasi-host.js";
 import {
@@ -60,6 +61,7 @@ export interface LoaderContext {
 
 export interface LoadProcessOptions {
   argv: string[];
+  wasiArgv?: string[];
   mode: ProcessMode;
   env?: Record<string, string>;
   cwd?: string;
@@ -86,12 +88,22 @@ export async function loadProcess(
   const path = argv[0];
   if (!path) throw new Error("loadProcess: argv[0] is required");
 
-  const bytes = ctx.vfs.readFile(path);
+  let bytes = ctx.vfs.readFile(path);
   if (
     bytes.length < 4 || bytes[0] !== 0x00 || bytes[1] !== 0x61 ||
     bytes[2] !== 0x73 || bytes[3] !== 0x6d
   ) {
-    throw new Error(`loadProcess: ${path} is not a wasm binary`);
+    const st = ctx.vfs.stat(path);
+    if ((st.permissions & S_TOOL) !== 0) {
+      const hostPath = new TextDecoder().decode(bytes);
+      bytes = await ctx.adapter.readBytes(hostPath);
+    }
+    if (
+      bytes.length < 4 || bytes[0] !== 0x00 || bytes[1] !== 0x61 ||
+      bytes[2] !== 0x73 || bytes[3] !== 0x6d
+    ) {
+      throw new Error(`loadProcess: ${path} is not a wasm binary`);
+    }
   }
 
   const digest = await sha256Hex(bytes);
@@ -125,7 +137,7 @@ export async function loadProcess(
   }
 
   const proc = Process.__forLoader({ pid, mode });
-  const wasi = ctx.buildWasiHost(pid, argv, env, cwd);
+  const wasi = ctx.buildWasiHost(pid, opts.wasiArgv ?? argv, env, cwd);
   const wasiImports = wasi.getImports().wasi_snapshot_preview1;
 
   let memoryRef: WebAssembly.Memory | null = null;

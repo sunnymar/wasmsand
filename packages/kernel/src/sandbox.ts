@@ -7,10 +7,12 @@
 
 import { VFS } from './vfs/vfs.js';
 import { readFile } from 'node:fs/promises';
+import { S_TOOL } from './vfs/inode.js';
 import { OverlayVFS } from './vfs/overlay-vfs.js';
 import { NodeDirectoryRootProvider } from './vfs/node-directory-root-provider.js';
 import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
+import { createShellImports } from './host-imports/shell-imports.js';
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
 export interface StreamCallbacks {
   onStdout?: (chunk: string) => void;
@@ -84,7 +86,7 @@ export interface SandboxOptions {
   baseRoot?: string;
   /** Filesystem credential for guest/runtime operations. Defaults to uid/gid 1000. */
   credential?: FsCredential;
-  /** Path/URL to the default boot WASM. Defaults to `${wasmDir}/bash.wasm`. */
+  /** Path/URL to the default boot WASM. Defaults to the JSPI shell, or the Asyncify shell when JSPI is unavailable. */
   bootWasmPath?: string;
   /** Deprecated alias for bootWasmPath. */
   shellExecWasmPath?: string;
@@ -306,7 +308,7 @@ export class Sandbox {
     }
 
     const bootWasmPath = options.bootWasmPath ?? options.shellExecWasmPath ??
-      `${options.wasmDir}/bash.wasm`;
+      Sandbox.defaultBootWasmPath(options.wasmDir);
     const bootArgv = options.bootArgv ?? ['/bin/bash'];
 
     if (!options.baseRoot) {
@@ -597,6 +599,13 @@ export class Sandbox {
     return new IdbBackend();
   }
 
+  private static defaultBootWasmPath(wasmDir: string): string {
+    const bootName = typeof WebAssembly.Suspending === 'function'
+      ? 'codepod-shell-exec.wasm'
+      : 'codepod-shell-exec-asyncify.wasm';
+    return `${wasmDir}/${bootName}`;
+  }
+
   private static async createNetworkBridge(
     policy: NetworkPolicy | undefined,
   ): Promise<{ gateway?: NetworkGateway; bridge?: NetworkBridge }> {
@@ -652,7 +661,6 @@ export class Sandbox {
     const tools = await adapter.scanTools(wasmDir);
     for (const [name, path] of tools) {
       mgr.registerTool(name, path);
-      await Sandbox.installToolExecutable(vfs, adapter, `/usr/bin/${name}`, path);
     }
     for (const [name, path] of tools) {
       const manifest = await loadManifest(adapter, wasmDir, name);
@@ -663,12 +671,10 @@ export class Sandbox {
     if (!tools.has('python3')) {
       const path = `${wasmDir}/python3.wasm`;
       mgr.registerTool('python3', path);
-      await Sandbox.installToolExecutable(vfs, adapter, '/usr/bin/python3', path);
     }
     if (!tools.has('host-call')) {
       const path = `${wasmDir}/host-call.wasm`;
       mgr.registerTool('host-call', path);
-      await Sandbox.installToolExecutable(vfs, adapter, '/usr/bin/host-call', path);
     }
     // Standard aliases via symlinks — these resolve naturally through the VFS
     vfs.withWriteAccess(() => {
@@ -676,22 +682,6 @@ export class Sandbox {
       try { vfs.symlink('/usr/bin/host-call', '/bin/host-call'); } catch { /* already exists */ }
     });
     return tools;
-  }
-
-  private static async installToolExecutable(
-    vfs: VFS,
-    adapter: PlatformAdapter,
-    vfsPath: string,
-    wasmPath: string,
-  ): Promise<void> {
-    const bytes = await adapter.readBytes(wasmPath);
-    vfs.withWriteAccess(() => {
-      const dir = vfsPath.slice(0, vfsPath.lastIndexOf('/')) || '/';
-      vfs.mkdirp(dir);
-      try { vfs.unlink(vfsPath); } catch { /* not present */ }
-      vfs.writeFile(vfsPath, bytes);
-      vfs.chmod(vfsPath, 0o555);
-    });
   }
 
   private static async installCpythonStdlib(
@@ -767,25 +757,29 @@ export class Sandbox {
     vfs: VfsLike,
     mgr: ProcessManager,
     bootImports: ((api: KernelApi) => Record<string, WebAssembly.ImportValue>) | undefined,
-  ): ((memory: WebAssembly.Memory) => Record<string, WebAssembly.ImportValue>) | undefined {
-    if (!bootImports) return undefined;
+  ): (memory: WebAssembly.Memory) => Record<string, WebAssembly.ImportValue> {
     return (memory) => {
       const apiMemory = new MemoryProxy();
       apiMemory.current = memory;
-      return bootImports({
-        vfs,
-        processManager: {
-          registerTool: (name, impl) => mgr.registerTool(name, String(impl)),
-          registerAndLoadTool: (name, path) => mgr.registerAndLoadTool(name, path),
-          registerNativeModule: (name, wasmBytes) => mgr.registerNativeModule(name, wasmBytes),
-          hasTool: (name) => mgr.hasTool(name),
-        },
-        time: {
-          now: () => Date.now() / 1000,
-          monotonic: () => BigInt(Math.floor(performance.now() * 1_000_000)),
-        },
-        memory: apiMemory,
-      });
+      const shellImports = createShellImports({ vfs, mgr, memory });
+      if (!bootImports) return shellImports;
+      return {
+        ...shellImports,
+        ...bootImports({
+          vfs,
+          processManager: {
+            registerTool: (name, impl) => mgr.registerTool(name, String(impl)),
+            registerAndLoadTool: (name, path) => mgr.registerAndLoadTool(name, path),
+            registerNativeModule: (name, wasmBytes) => mgr.registerNativeModule(name, wasmBytes),
+            hasTool: (name) => mgr.hasTool(name),
+          },
+          time: {
+            now: () => Date.now() / 1000,
+            monotonic: () => BigInt(Math.floor(performance.now() * 1_000_000)),
+          },
+          memory: apiMemory,
+        }),
+      };
     };
   }
 
@@ -920,9 +914,11 @@ export class Sandbox {
                 return childPid;
               }
               const argv = Sandbox.argvForSpawn(vfs, req);
+              const wasiArgv = req.argv0 ? [req.argv0, ...argv.slice(1)] : argv;
               const childCtx = makeContextWithAllocator(() => childPid);
               const promise = loadProcess(childCtx, {
                 argv,
+                wasiArgv,
                 mode: 'cli',
                 env: Object.fromEntries(req.env),
                 cwd: req.cwd || '/',
@@ -982,6 +978,13 @@ export class Sandbox {
     let bytes: Uint8Array;
     try {
       bytes = vfs.readFile(prog);
+    } catch {
+      return argv;
+    }
+    try {
+      if ((vfs.stat(prog).permissions & S_TOOL) !== 0) {
+        return argv;
+      }
     } catch {
       return argv;
     }
