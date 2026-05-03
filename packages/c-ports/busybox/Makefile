@@ -157,6 +157,8 @@ configure-shell: ensure-shell-source busybox-shell.config compat/include/paths.h
 $(BUILD_DIR)/busybox.wasm: configure ensure-compat
 	cd $(SRC_DIR) && \
 		CPCC_ARCHIVE="$(GUEST_COMPAT_LIB)" \
+		CPCC_CONTINUATIONS_ARCHIVE="$(GUEST_CONTINUATIONS_LIB)" \
+		CPCC_USE_CONTINUATIONS=1 \
 		CPCC_INCLUDE="$(GUEST_COMPAT_INCLUDE)" \
 		$(MAKE) CC="$(CPCC)" AR="$(CPAR)" RANLIB="$(CPRANLIB)" \
 			EXTRA_CFLAGS="$(WASI_EMULATED_CFLAGS)" \
