@@ -87,7 +87,7 @@ async function makeLoaderContext(
       target.truncated = false;
       return { data, truncated };
     },
-    ...overrides,
+    ...options,
   };
 }
 

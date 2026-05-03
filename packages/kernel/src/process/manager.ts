@@ -86,8 +86,8 @@ export class ProcessManager {
    * on the multicall wasm even if a standalone applet wasm was scanned earlier.
    */
   registerMulticallTool(name: string, wasmPath: string, applets: string[]): void {
-    this.registerTool(name, wasmPath);
     const source: ToolSource = { kind: 'host', path: wasmPath };
+    this.registry.set(name, source);
 
     this.vfs.withWriteAccess(() => {
       for (const applet of applets) {

@@ -975,7 +975,7 @@ export class Sandbox {
     return `/${segments.join('/')}`;
   }
 
-  private static expandScriptArgvForSpawn(vfs: VFS, argv: string[]): string[] {
+  private static expandScriptArgvForSpawn(vfs: VfsLike, argv: string[]): string[] {
     const prog = argv[0];
     if (!prog) return argv;
     let bytes: Uint8Array;
@@ -1003,7 +1003,6 @@ export class Sandbox {
     return ['/bin/sh', prog, ...argv.slice(1)];
   }
 
-  private static resolveExecutablePathForVfs(vfs: VfsLike, prog: string): string {
   private static assertExecutableForSpawn(vfs: VfsLike, path: string): void {
     const st = vfs.stat(path);
     if (st.type !== 'file') {
