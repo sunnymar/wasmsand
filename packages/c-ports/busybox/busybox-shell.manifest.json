@@ -1,0 +1,64 @@
+{
+  "name": "busybox-shell",
+  "multicall": {
+    "applets": [
+      "ash",
+      "cat",
+      "chmod",
+      "cp",
+      "cut",
+      "date",
+      "diff",
+      "dirname",
+      "echo",
+      "env",
+      "expr",
+      "false",
+      "find",
+      "grep",
+      "head",
+      "kill",
+      "ln",
+      "ls",
+      "md5sum",
+      "mkdir",
+      "mktemp",
+      "mv",
+      "printf",
+      "pwd",
+      "rm",
+      "rmdir",
+      "sed",
+      "sh",
+      "sleep",
+      "sort",
+      "tail",
+      "test",
+      "touch",
+      "tr",
+      "true",
+      "uname",
+      "wc",
+      "xargs",
+      "yes"
+    ]
+  },
+  "symlinks": [
+    {
+      "target": "/usr/bin/ash",
+      "link": "/bin/ash"
+    },
+    {
+      "target": "/usr/bin/cat",
+      "link": "/bin/cat"
+    },
+    {
+      "target": "/usr/bin/echo",
+      "link": "/bin/echo"
+    },
+    {
+      "target": "/usr/bin/sh",
+      "link": "/bin/sh"
+    }
+  ]
+}

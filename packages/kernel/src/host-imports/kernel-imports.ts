@@ -18,6 +18,7 @@
  */
 
 import type { FetchRedirectMode, NetworkBridgeLike } from '../network/bridge.js';
+import type { DnsResolverLike } from '../network/dns-resolver.js';
 import type { SocketBackend, SocketListenPolicy, SocketPortMapping } from '../network/socket-backend.js';
 import { createLoopbackSocketBackend, createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
@@ -53,6 +54,13 @@ export interface KernelImportsOptions {
 
   /** Fake sandbox-local IPv4 address reported by getsockname()/socket_addr(). */
   socketLocalHost?: string;
+
+  /**
+   * DNS resolver for guest getaddrinfo/gethostbyname (host_resolve_hostname).
+   * When absent, host_resolve_hostname returns EAI_SYSTEM (browser / no-network case).
+   * Use createDnsResolver() from network/dns-resolver.ts to get a runtime-appropriate impl.
+   */
+  dnsResolver?: DnsResolverLike;
 
   /** Prepared policy surface for future bind/listen/accept support. */
   serverSockets?: SocketListenPolicy;
@@ -263,12 +271,22 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
       const req = JSON.parse(reqJson) as SpawnRequest;
       if (opts.spawnProcess && opts.kernel) {
+        if (!opts.kernel.canReserveProcessSlot()) {
+          return -1;
+        }
         const fdTable = opts.kernel.buildFdTableForSpawn(callerPid, req);
         // If stdin_data is provided, override fd 0 with a static target
         if (req.stdin_data) {
+          const previousStdin = fdTable.get(0);
+          if (previousStdin) opts.kernel.releaseFdTable(new Map([[0, previousStdin]]));
           fdTable.set(0, createStaticTarget(new TextEncoder().encode(req.stdin_data)));
         }
-        return opts.spawnProcess(req, fdTable, callerPid);
+        try {
+          return opts.spawnProcess(req, fdTable, callerPid);
+        } catch {
+          opts.kernel.releaseFdTable(fdTable);
+          return -1;
+        }
       }
       return -1;
     },
@@ -285,6 +303,13 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // sees getppid() == 0, mirroring Linux init).
     host_getppid(): number {
       return opts.kernel ? opts.kernel.getPpid(callerPid) : 0;
+    },
+
+    // host_fork() -> i32
+    // Returns negative errno until the Asyncify continuation runtime wires the
+    // fork controller.  Guest continuation builds map -ENOSYS to fork() failure.
+    host_fork(): number {
+      return -38; // ENOSYS
     },
 
     // host_kill(pid, sig) -> i32
@@ -306,13 +331,21 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
 
     // host_waitpid(pid, out_ptr, out_cap) -> i32
     // Async — must be wrapped with WebAssembly.Suspending for JSPI.
-    // Waits for the child process to exit and writes { exit_code } to the output buffer.
+    // Waits for a child process to exit and writes { pid, exit_code } to the output buffer.
     async host_waitpid(pid: number, outPtr: number, outCap: number): Promise<number> {
       if (!opts.kernel) {
         return writeJson(memory, outPtr, outCap, { exit_code: -1 });
       }
-      const exitCode = await opts.kernel.waitpid(pid);
-      return writeJson(memory, outPtr, outCap, { exit_code: exitCode });
+      if (pid <= 0) {
+        const result = await opts.kernel.waitAnyChild(callerPid);
+        if (!result) return writeJson(memory, outPtr, outCap, { pid: -1, exit_code: -1 });
+        return writeJson(memory, outPtr, outCap, {
+          pid: result.pid,
+          exit_code: result.exitCode,
+        });
+      }
+      const exitCode = await opts.kernel.waitpid(pid, callerPid);
+      return writeJson(memory, outPtr, outCap, { pid, exit_code: exitCode });
     },
 
     // host_close_fd(fd) -> i32
@@ -346,7 +379,8 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     host_chmod(pathPtr: number, pathLen: number, mode: number): number {
       if (!opts.vfs) return -38; // ENOSYS
       try {
-        const path = readString(memory, pathPtr, pathLen);
+        const rawPath = readString(memory, pathPtr, pathLen);
+        const path = opts.wasiHost?.resolveGuestPath(rawPath) ?? rawPath;
         opts.vfs.chmod(path, mode);
         return 0;
       } catch (err) {
@@ -399,14 +433,17 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
     // host_dup2(src_fd, dst_fd) -> i32
     // Makes dst_fd point to the same target as src_fd.
     host_dup2(srcFd: number, dstFd: number): number {
-      let wasiResult = 0;
-      if (opts.wasiHost) {
-        wasiResult = opts.wasiHost.renumberFd(srcFd, dstFd) === 0 ? 0 : -1;
-      }
-      if (!opts.kernel) return wasiResult;
       try {
-        opts.kernel.dup2(callerPid, srcFd, dstFd);
-        return wasiResult === -1 ? -1 : 0;
+        if (opts.kernel) {
+          opts.kernel.dup2(callerPid, srcFd, dstFd);
+        }
+        if (opts.wasiHost) {
+          const ioFds = opts.wasiHost.getIoFds();
+          const target = ioFds.get(srcFd);
+          if (target) ioFds.set(dstFd, target);
+          else if (!opts.kernel) return -1;
+        }
+        return 0;
       } catch { return -1; }
     },
 
@@ -446,11 +483,28 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       await Promise.resolve();
     },
 
-    // host_waitpid_nohang(pid) -> i32
-    // Non-blocking: returns exit code if process exited, -1 if still running.
-    host_waitpid_nohang(pid: number): number {
+    // host_waitpid_nohang(pid[, out_ptr, out_cap]) -> i32
+    // Legacy one-arg ABI: returns exit code if process exited, -1 if still
+    // running, -2 if pid is not a child of the caller.
+    // Result ABI: writes { pid, exit_code } and returns byte count when an
+    // exited child is reaped; returns -1 for no exited child, -2 for ECHILD.
+    host_waitpid_nohang(pid: number, outPtr?: number, outCap?: number): number {
       if (!opts.kernel) return -1;
-      return opts.kernel.waitpidNohang(pid);
+      if (typeof outPtr === 'number' && typeof outCap === 'number') {
+        if (pid <= 0) {
+          const result = opts.kernel.waitAnyChildNohang(callerPid);
+          if (result.state === 'running') return -1;
+          if (result.state === 'none') return -2;
+          return writeJson(memory, outPtr, outCap, {
+            pid: result.pid,
+            exit_code: result.exitCode,
+          });
+        }
+        const exitCode = opts.kernel.waitpidNohang(pid, callerPid);
+        if (exitCode < 0) return exitCode;
+        return writeJson(memory, outPtr, outCap, { pid, exit_code: exitCode });
+      }
+      return opts.kernel.waitpidNohang(pid, callerPid);
     },
 
     // host_list_processes(out_ptr, out_cap) -> i32
@@ -541,6 +595,37 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         const msg = e instanceof Error ? e.message : String(e);
         return writeJson(memory, outPtr, outCap, { error: msg });
       }
+    },
+
+    // host_resolve_hostname(name_ptr, name_len, out_ptr, out_cap) -> i32
+    // Resolves a hostname to its first IPv4 address string.
+    // Returns bytes written (positive) on success, or a negative EAI_* code.
+    // Async — wrapped with WebAssembly.Suspending for JSPI.
+    async host_resolve_hostname(namePtr: number, nameLen: number, outPtr: number, outCap: number): Promise<number> {
+      const EAI_NONAME = -2;
+      const EAI_SYSTEM = -11;
+      if (!opts.dnsResolver) return EAI_SYSTEM;
+      const name = readString(memory, namePtr, nameLen);
+      try {
+        const addr = await opts.dnsResolver.resolve(name);
+        if (!addr) return EAI_NONAME;
+        const bytes = new TextEncoder().encode(addr);
+        if (bytes.length >= outCap) return EAI_SYSTEM;
+        new Uint8Array(memory.buffer).set(bytes, outPtr);
+        return bytes.length;
+      } catch {
+        return EAI_SYSTEM;
+      }
+    },
+
+    // host_get_local_addr(out_ptr, out_cap) -> i32
+    // Writes the kernel-configured sandbox local IPv4 address to out_ptr.
+    // Returns bytes written. Sync.
+    host_get_local_addr(outPtr: number, outCap: number): number {
+      const bytes = new TextEncoder().encode(socketLocalHost);
+      if (bytes.length >= outCap) return -1;
+      new Uint8Array(memory.buffer).set(bytes, outPtr);
+      return bytes.length;
     },
 
     // ── Sockets (full mode only) ──
@@ -799,7 +884,7 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
           return writeJson(memory, outPtr, outCap, { ok: true, data_b64: bytesToBase64(chunk) });
         }
         const result = socketBackend.recv(target.socket, maxBytes, {
-          nonblocking: ((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0,
+          nonblocking: req.nonblocking === true || ((target.fdFlags ?? 0) & WASI_FDFLAGS_NONBLOCK) !== 0,
         });
         if (peek && result.ok) {
           const data = base64ToBytes(result.data_b64 ?? '');
@@ -1017,6 +1102,16 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       tb.condSignal(condPtr)) as unknown as WebAssembly.ImportValue;
     imports.host_cond_broadcast = ((condPtr: number) =>
       tb.condBroadcast(condPtr)) as unknown as WebAssembly.ImportValue;
+  }
+
+  if (opts.wasiHost) {
+    for (const [name, value] of Object.entries(imports)) {
+      if (typeof value !== 'function') continue;
+      imports[name] = ((...args: unknown[]) => {
+        opts.wasiHost?.drainPendingSignals();
+        return (value as (...args: unknown[]) => unknown)(...args);
+      }) as WebAssembly.ImportValue;
+    }
   }
 
   return imports;

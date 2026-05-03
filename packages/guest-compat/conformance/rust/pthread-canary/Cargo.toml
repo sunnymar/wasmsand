@@ -1,0 +1,11 @@
+[package]
+name = "pthread-canary"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "pthread-canary"
+path = "src/main.rs"
+
+[dependencies]

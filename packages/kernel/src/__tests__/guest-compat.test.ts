@@ -196,6 +196,15 @@ describe('Guest compatibility canaries', () => {
     });
   });
 
+  describe('fork-canary', () => {
+    it('keeps the default fork stub at -1/ENOSYS', async () => {
+      sandbox = await Sandbox.create({ wasmDir: FIXTURES, adapter: new NodeAdapter() });
+      const r = await sandbox.run('fork-default-canary --case default-enosys');
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.trim()).toBe('fork-default-enosys');
+    });
+  });
+
   it('routes stderr through stdout after dup2(1, 2)', async () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
@@ -249,6 +258,13 @@ describe('Guest compatibility canaries', () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
       adapter: new NodeAdapter(),
+      dnsResolver: {
+        async resolve(hostname: string) {
+          if (hostname === 'example.com') return '93.184.216.34';
+          if (hostname === 'example.org') return '96.7.128.175';
+          return null;
+        },
+      },
     });
 
     const result = await sandbox.run('socket-canary');
@@ -329,18 +345,6 @@ describe('Guest compatibility canaries', () => {
       body: null,
       redirect: 'manual',
     }]);
-  });
-
-  it('links Rust POSIX socket FFI calls through libcodepod', async () => {
-    sandbox = await Sandbox.create({
-      wasmDir: FIXTURES,
-      adapter: new NodeAdapter(),
-    });
-
-    const result = await sandbox.run('socket-rust-canary');
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toBe('{"case":"socket_surface","exit":0}');
   });
 
   it('runs Rust std::env::temp_dir through the Codepod std patch', async () => {

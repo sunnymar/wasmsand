@@ -79,6 +79,11 @@ describe('VFS', () => {
     expect(() => vfs.mkdir('/home/user/dir')).toThrow(/EEXIST/);
   });
 
+  it('throws EEXIST for duplicate mkdir under a read-only parent', () => {
+    const vfs = new VFS();
+    expect(() => vfs.mkdir('/tmp')).toThrow(/EEXIST/);
+  });
+
   it('throws ENOTDIR when path component is a file', () => {
     const vfs = new VFS();
     vfs.writeFile('/home/user/file.txt', new Uint8Array());

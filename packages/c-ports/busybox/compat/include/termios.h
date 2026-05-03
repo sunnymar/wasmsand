@@ -1,6 +1,7 @@
 #ifndef CODEPOD_BUSYBOX_COMPAT_TERMIOS_H
 #define CODEPOD_BUSYBOX_COMPAT_TERMIOS_H
 
+#include <errno.h>
 #include <sys/types.h>
 
 typedef unsigned int tcflag_t;
@@ -114,17 +115,97 @@ struct termios {
 #define B3500000 0x100e
 #define B4000000 0x100f
 
-int tcgetattr(int fd, struct termios *termios_p);
-int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
-speed_t cfgetispeed(const struct termios *termios_p);
-speed_t cfgetospeed(const struct termios *termios_p);
-int cfsetispeed(struct termios *termios_p, speed_t speed);
-int cfsetospeed(struct termios *termios_p, speed_t speed);
-int cfsetspeed(struct termios *termios_p, speed_t speed);
-void cfmakeraw(struct termios *termios_p);
-int tcdrain(int fd);
-int tcflow(int fd, int action);
-int tcflush(int fd, int queue_selector);
-int tcsendbreak(int fd, int duration);
+static inline int tcgetattr(int fd, struct termios *termios_p)
+{
+	(void)fd;
+	(void)termios_p;
+	errno = ENOTTY;
+	return -1;
+}
+
+static inline int tcsetattr(int fd, int optional_actions, const struct termios *termios_p)
+{
+	(void)fd;
+	(void)optional_actions;
+	(void)termios_p;
+	errno = ENOTTY;
+	return -1;
+}
+
+static inline speed_t cfgetispeed(const struct termios *termios_p)
+{
+	return termios_p ? termios_p->c_ispeed : 0;
+}
+
+static inline speed_t cfgetospeed(const struct termios *termios_p)
+{
+	return termios_p ? termios_p->c_ospeed : 0;
+}
+
+static inline int cfsetispeed(struct termios *termios_p, speed_t speed)
+{
+	if (!termios_p) {
+		errno = EINVAL;
+		return -1;
+	}
+	termios_p->c_ispeed = speed;
+	return 0;
+}
+
+static inline int cfsetospeed(struct termios *termios_p, speed_t speed)
+{
+	if (!termios_p) {
+		errno = EINVAL;
+		return -1;
+	}
+	termios_p->c_ospeed = speed;
+	return 0;
+}
+
+static inline int cfsetspeed(struct termios *termios_p, speed_t speed)
+{
+	if (!termios_p) {
+		errno = EINVAL;
+		return -1;
+	}
+	termios_p->c_ispeed = speed;
+	termios_p->c_ospeed = speed;
+	return 0;
+}
+
+static inline void cfmakeraw(struct termios *termios_p)
+{
+	(void)termios_p;
+}
+
+static inline int tcdrain(int fd)
+{
+	(void)fd;
+	return 0;
+}
+
+static inline int tcflow(int fd, int action)
+{
+	(void)fd;
+	(void)action;
+	errno = ENOTTY;
+	return -1;
+}
+
+static inline int tcflush(int fd, int queue_selector)
+{
+	(void)fd;
+	(void)queue_selector;
+	errno = ENOTTY;
+	return -1;
+}
+
+static inline int tcsendbreak(int fd, int duration)
+{
+	(void)fd;
+	(void)duration;
+	errno = ENOTTY;
+	return -1;
+}
 
 #endif

@@ -14,6 +14,7 @@ import type { VfsLike } from "./vfs/vfs-like.js";
 import type { ProcessManager } from "./process/manager.js";
 import type { PlatformAdapter } from "./platform/adapter.js";
 import type { NetworkBridgeLike } from "./network/bridge.js";
+import type { DnsResolverLike } from "./network/dns-resolver.js";
 import type { ExtensionRegistry } from "./extension/registry.js";
 import type { RunResult } from "./run-result.js";
 import type {
@@ -70,6 +71,10 @@ export interface ResidentBashRunnerOptions {
   ) => { exit_code: number; stdout: string; stderr: string };
   /** Network bridge for synchronous HTTP fetch from WASM. */
   networkBridge?: NetworkBridgeLike;
+  /** DNS resolver for guest getaddrinfo/gethostbyname. */
+  dnsResolver?: DnsResolverLike;
+  /** Sandbox-local IPv4 address reported by getsockname(). Default: "10.0.2.15". */
+  socketLocalHost?: string;
   /** Extension registry for command extensions. */
   extensionRegistry?: ExtensionRegistry;
   /** Legacy extension handler (sync, used by Worker proxy). */
@@ -78,6 +83,8 @@ export interface ResidentBashRunnerOptions {
   toolAllowlist?: string[];
   /** Max WASM linear memory in bytes for spawned child processes. */
   memoryBytes?: number;
+  /** Max process records in this runner's process kernel. */
+  processes?: number;
   /** Additional codepod imports for loader-backed shell instances. */
   extraCodepodImports?: LoadProcessOptions["extraCodepodImports"];
   /** argv for the loader-backed shell process. */
@@ -87,6 +94,20 @@ export interface ResidentBashRunnerOptions {
   /** Sandbox instance supplied to RunCommandContext. */
   sandbox?: Sandbox;
 }
+
+type HostCommandEntry = {
+  description?: string;
+  handler: (request: {
+    args: string[];
+    stdin: string;
+    env: Record<string, string>;
+    cwd: string;
+  }) => Promise<{ stdout?: string; stderr?: string; exitCode: number }>;
+};
+
+type ProcessManagerWithHostCommands = ProcessManager & {
+  getHostCommand?: (name: string) => HostCommandEntry | null;
+};
 
 export class ResidentBashRunner implements CommandRunner {
   private instance: WebAssembly.Instance | undefined;
@@ -155,6 +176,8 @@ export class ResidentBashRunner implements CommandRunner {
           callerPid: pid,
           kernel: loaderCtx.kernel,
           networkBridge: options?.networkBridge,
+          dnsResolver: options?.dnsResolver,
+          socketLocalHost: options?.socketLocalHost,
           extensionRegistry: options?.extensionRegistry,
           nativeModules: mgr.nativeModules,
           runCommandHandler: options?.runCommandHandler,
@@ -188,6 +211,8 @@ export class ResidentBashRunner implements CommandRunner {
               options?.runCommandHandler,
               options?.sandbox,
               parentPid,
+              options?.dnsResolver,
+              options?.socketLocalHost,
             );
           },
           wasiHost,
@@ -264,7 +289,7 @@ export class ResidentBashRunner implements CommandRunner {
     });
 
     // ── Process kernel for pipe/spawn/waitpid/close_fd ──
-    const kernel = new ProcessKernel();
+    const kernel = new ProcessKernel({ maxProcesses: options?.processes });
 
     // Wire /proc/<pid>/* entries.  The ProcProvider (built when the
     // VFS was constructed) reads through this callback live, so
@@ -301,7 +326,10 @@ export class ResidentBashRunner implements CommandRunner {
     const runCommand = async (cmd: string, stdin: string) => {
       const sub = await ResidentBashRunner.create(vfs, mgr, adapter, wasmPath, {
         networkBridge: options?.networkBridge,
+        dnsResolver: options?.dnsResolver,
+        socketLocalHost: options?.socketLocalHost,
         extensionRegistry: options?.extensionRegistry,
+        processes: options?.processes,
       });
       try {
         sub.inheritDeadlineFrom(shellRef);
@@ -325,6 +353,8 @@ export class ResidentBashRunner implements CommandRunner {
       callerPid: shellPid,
       kernel,
       networkBridge: options?.networkBridge,
+      dnsResolver: options?.dnsResolver,
+      socketLocalHost: options?.socketLocalHost,
       nativeModules: mgr.nativeModules,
       runCommand: kernelRunCommand,
       runCommandHandler: options?.runCommandHandler,
@@ -358,6 +388,8 @@ export class ResidentBashRunner implements CommandRunner {
           options?.runCommandHandler,
           options?.sandbox,
           parentPid,
+          options?.dnsResolver,
+          options?.socketLocalHost,
         );
       },
     });
@@ -406,6 +438,12 @@ export class ResidentBashRunner implements CommandRunner {
           ...args: number[]
         ) => Promise<number>,
       ) as unknown as WebAssembly.ImportValue;
+      // DNS resolution for getaddrinfo/gethostbyname
+      codepodImports.host_resolve_hostname = new WebAssembly.Suspending(
+        kernelImports.host_resolve_hostname as (
+          ...args: number[]
+        ) => Promise<number>,
+      ) as unknown as WebAssembly.ImportValue;
     } else {
       // Asyncify fallback: wrap async imports with the unwind/rewind bridge.
       // The bridge is initialised after instantiation (needs the WASM exports).
@@ -420,6 +458,7 @@ export class ResidentBashRunner implements CommandRunner {
       codepodImports.host_network_fetch = aw(kernelImports.host_network_fetch);
       codepodImports.host_register_tool = aw(shellImports.host_register_tool);
       codepodImports.host_run_command = aw(kernelImports.host_run_command);
+      codepodImports.host_resolve_hostname = aw(kernelImports.host_resolve_hostname);
       // fd_read and poll_oneoff are wrapped below, after wasiImports is defined.
     }
 
@@ -1226,6 +1265,8 @@ function spawnAsyncProcess(
   runCommandHandler?: RunCommandHandler,
   sandbox?: Sandbox,
   parentPid: number = NO_PARENT_PID,
+  dnsResolver?: DnsResolverLike,
+  socketLocalHost?: string,
 ): number {
   // Tool allowlist check
   if (!mgr.isToolAllowed(req.prog)) {
@@ -1246,10 +1287,16 @@ function spawnAsyncProcess(
     return pid;
   }
 
+  // Check for host commands (TypeScript handlers) first
+  const hostCmdEntry = (mgr as ProcessManagerWithHostCommands).getHostCommand?.(req.prog) ?? null;
+  const module = hostCmdEntry ? null : mgr.getModule(req.prog);
+  if (!hostCmdEntry && !module) {
+    kernel.releaseFdTable(fdTable);
+    return -1;
+  }
+
   const pid = kernel.allocPid(parentPid, `${req.prog} ${req.args.join(" ")}`);
 
-  // Check for host commands (TypeScript handlers) first
-  const hostCmdEntry = mgr.getHostCommand(req.prog);
   if (hostCmdEntry) {
     for (const [fd, target] of fdTable) kernel.setFdTarget(pid, fd, target);
     // Execute host command asynchronously
@@ -1311,8 +1358,10 @@ function spawnAsyncProcess(
     return pid;
   }
 
-  const module = mgr.getModule(req.prog);
-  if (!module) return -1;
+  if (!module) {
+    kernel.discardProcess(pid);
+    return -1;
+  }
 
   // Store fd targets in the kernel so cleanupFds can close them on exit.
   // This ensures pipe write ends get closed when the child process exits,
@@ -1486,6 +1535,8 @@ function spawnAsyncProcess(
       kernel,
       wasiHost: host,
       networkBridge,
+      dnsResolver,
+      socketLocalHost,
       extensionRegistry,
       nativeModules: mgr.nativeModules,
       runCommand,
@@ -1509,6 +1560,8 @@ function spawnAsyncProcess(
           runCommandHandler,
           sandbox,
           grandparentPid,
+          dnsResolver,
+          socketLocalHost,
         ),
     });
     imports.codepod = childKernelImports as unknown as Record<
@@ -1556,6 +1609,12 @@ function spawnAsyncProcess(
     // Python uses host_run_command for _codepod.spawn() / subprocess support
     imports.codepod.host_run_command = wrapAsyncImport(
       childKernelImports.host_run_command as (
+        ...args: number[]
+      ) => Promise<number>,
+    );
+    // DNS resolution for getaddrinfo/gethostbyname
+    imports.codepod.host_resolve_hostname = wrapAsyncImport(
+      childKernelImports.host_resolve_hostname as (
         ...args: number[]
       ) => Promise<number>,
     );

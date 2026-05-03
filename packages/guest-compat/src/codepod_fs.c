@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,7 @@
 CODEPOD_DECLARE_MARKER(chown);
 CODEPOD_DECLARE_MARKER(lchown);
 CODEPOD_DECLARE_MARKER(fchown);
+CODEPOD_DECLARE_MARKER(chmod);
 CODEPOD_DECLARE_MARKER(fchdir);
 CODEPOD_DECLARE_MARKER(chroot);
 CODEPOD_DECLARE_MARKER(getpriority);
@@ -34,6 +36,7 @@ CODEPOD_DECLARE_MARKER(setpriority);
 CODEPOD_DEFINE_MARKER(chown,       0x63686f77u) /* "chow" */
 CODEPOD_DEFINE_MARKER(lchown,      0x6c63686fu) /* "lcho" */
 CODEPOD_DEFINE_MARKER(fchown,      0x6663686fu) /* "fcho" */
+CODEPOD_DEFINE_MARKER(chmod,       0x63686d64u) /* "chmd" */
 CODEPOD_DEFINE_MARKER(fchdir,      0x66636864u) /* "fchd" */
 CODEPOD_DEFINE_MARKER(chroot,      0x6368726fu) /* "chro" */
 CODEPOD_DEFINE_MARKER(getpriority, 0x67707269u) /* "gpri" */
@@ -58,6 +61,20 @@ int lchown(const char *path, uid_t owner, gid_t group) {
 int fchown(int fd, uid_t owner, gid_t group) {
   CODEPOD_MARKER_CALL(fchown);
   (void)fd; (void)owner; (void)group;
+  return 0;
+}
+
+int chmod(const char *path, mode_t mode) {
+  CODEPOD_MARKER_CALL(chmod);
+  if (path == NULL) {
+    errno = EFAULT;
+    return -1;
+  }
+  int rc = codepod_host_chmod((int)(intptr_t)path, (int)strlen(path), (int)mode);
+  if (rc < 0) {
+    errno = -rc;
+    return -1;
+  }
   return 0;
 }
 

@@ -2,6 +2,8 @@ use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Command;
 
+use crate::WRAPPED_WASI_LIBC_SYMBOLS;
+
 /// Stage 1: `llvm-nm` on the archive — every named Tier 1 symbol and its
 /// marker must be defined in the same object. `llvm-nm -A` prefixes each
 /// line with `archive.a(obj):` so we can correlate the object that owns
@@ -93,13 +95,16 @@ pub fn check_wasm_structural(pre_opt: &Path, symbols: &[&str]) -> Result<()> {
         }
     }
     for sym in symbols {
-        if !exported_funcs.contains(*sym) {
+        let wrapper = format!("__wrap_{sym}");
+        let exported = exported_funcs.contains(*sym) ||
+            (WRAPPED_WASI_LIBC_SYMBOLS.contains(sym) && exported_funcs.contains(&wrapper));
+        if !exported {
             return Err(anyhow!(
                 "structural check failed: pre-opt wasm missing export {sym} \
                  (Tier 1 symbol must be defined inside, not extern)"
             ));
         }
-        if imported_funcs.contains(*sym) {
+        if imported_funcs.contains(*sym) || imported_funcs.contains(&wrapper) {
             return Err(anyhow!(
                 "structural check failed: {sym} appears in wasm imports — \
                  a wasi stub of the same name won the link.  Check \

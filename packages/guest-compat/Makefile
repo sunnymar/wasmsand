@@ -20,7 +20,7 @@ CPCC := $(REPO_ROOT)/target/release/cpcc
 CPAR := $(REPO_ROOT)/target/release/cpar
 
 LIB := $(BUILD_DIR)/libcodepod_guest_compat.a
-SETJMP_LIB := $(BUILD_DIR)/libcodepod_setjmp.a
+CONTINUATIONS_LIB := $(BUILD_DIR)/libcodepod_continuations.a
 LIB_OBJS := \
   $(BUILD_DIR)/codepod_command.o \
   $(BUILD_DIR)/codepod_dup.o \
@@ -42,7 +42,7 @@ LIB_OBJS := \
   $(BUILD_DIR)/codepod_unistd.o \
   $(BUILD_DIR)/codepod_version.o
 
-CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp pipe spawn spawn-wait resource exec socket socket-address socket-listen socket-listen-denied fetch pthread
+CANARY_NAMES := stdio sleep system popen affinity dup2 getgroups signal setjmp fork-default fork pipe spawn spawn-wait resource exec socket socket-address socket-listen socket-listen-denied fetch pthread
 CANARIES := $(addprefix $(BUILD_DIR)/,$(addsuffix -canary.wasm,$(CANARY_NAMES)))
 
 .PHONY: all lib canaries copy-fixtures clean ensure-toolchain
@@ -67,21 +67,36 @@ $(BUILD_DIR)/%.o: src/%.c $(wildcard include/*.h) src/codepod_runtime.h src/code
 
 lib: $(LIB)
 
-SETJMP_OBJS := \
-  $(BUILD_DIR)/codepod_setjmp.o
+CONTINUATIONS_OBJS := \
+  $(BUILD_DIR)/codepod_setjmp.o \
+  $(BUILD_DIR)/codepod_fork.o
 
 $(LIB): $(LIB_OBJS) | $(BUILD_DIR) ensure-toolchain
 	$(CPAR) rcs $@ $(LIB_OBJS)
 
-$(SETJMP_LIB): $(SETJMP_OBJS) | $(BUILD_DIR) ensure-toolchain
-	$(CPAR) rcs $@ $(SETJMP_OBJS)
+$(CONTINUATIONS_LIB): $(CONTINUATIONS_OBJS) | $(BUILD_DIR) ensure-toolchain
+	$(CPAR) rcs $@ $(CONTINUATIONS_OBJS)
 
-$(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(wildcard include/*.h) $(LIB) $(SETJMP_LIB) | $(BUILD_DIR) ensure-toolchain
+$(BUILD_DIR)/setjmp-canary.wasm: $(CANARY_DIR)/setjmp-canary.c $(wildcard include/*.h) $(LIB) $(CONTINUATIONS_LIB) | $(BUILD_DIR) ensure-toolchain
 	CPCC_ARCHIVE=$(abspath $(LIB)) \
-	CPCC_SETJMP_ARCHIVE=$(abspath $(SETJMP_LIB)) \
-	CPCC_USE_SETJMP=1 \
+	CPCC_CONTINUATIONS_ARCHIVE=$(abspath $(CONTINUATIONS_LIB)) \
+	CPCC_USE_CONTINUATIONS=1 \
 	CPCC_INCLUDE=$(INCLUDE) \
 	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/setjmp-canary.pre-opt.wasm \
+	$(CPCC) $< -o $@
+
+$(BUILD_DIR)/fork-canary.wasm: $(CANARY_DIR)/fork-canary.c $(wildcard include/*.h) $(LIB) $(CONTINUATIONS_LIB) | $(BUILD_DIR) ensure-toolchain
+	CPCC_ARCHIVE=$(abspath $(LIB)) \
+	CPCC_CONTINUATIONS_ARCHIVE=$(abspath $(CONTINUATIONS_LIB)) \
+	CPCC_USE_CONTINUATIONS=1 \
+	CPCC_INCLUDE=$(INCLUDE) \
+	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/fork-canary.pre-opt.wasm \
+	$(CPCC) $< -o $@
+
+$(BUILD_DIR)/fork-default-canary.wasm: $(CANARY_DIR)/fork-canary.c $(wildcard include/*.h) $(LIB) | $(BUILD_DIR) ensure-toolchain
+	CPCC_ARCHIVE=$(abspath $(LIB)) \
+	CPCC_INCLUDE=$(INCLUDE) \
+	CPCC_PRESERVE_PRE_OPT=$(abspath $(BUILD_DIR))/fork-default-canary.pre-opt.wasm \
 	$(CPCC) $< -o $@
 
 $(BUILD_DIR)/%-canary.wasm: $(CANARY_DIR)/%-canary.c $(wildcard include/*.h) $(LIB) | $(BUILD_DIR) ensure-toolchain
@@ -98,7 +113,7 @@ copy-fixtures: canaries
 clean:
 	rm -rf $(BUILD_DIR)
 
-RUST_CANARY_NAMES := dup2 getgroups affinity signal
+RUST_CANARY_NAMES := dup2 getgroups affinity signal pthread
 RUST_CANARY_PRE_OPT := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.pre-opt.wasm,$(RUST_CANARY_NAMES)))
 RUST_CANARY_WASM := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.wasm,$(RUST_CANARY_NAMES)))
 RUST_STD_CANARY_NAMES := std-tempdir std-env-process std-paths std-fs std-file-lock std-thread std-process-status std-process-output std-process-env-cwd std-process-spawn-stdio std-process-child-stdout std-process-stdio-from std-net-connect std-net-stream std-net-peer-addr std-net-hostname std-net-shutdown std-net-try-clone std-net-socket-addr std-net-take-error std-net-nodelay std-net-peek std-net-nonblocking std-net-listener
@@ -112,7 +127,7 @@ rust-canaries: $(LIB) ensure-toolchain
 	CPCC_NO_WASM_OPT=1 \
 	CARGO_TARGET_DIR=$(REPO_ROOT)/target \
 	$(REPO_ROOT)/target/release/cargo-codepod codepod build --release \
-	  -p dup2-canary -p getgroups-canary -p affinity-canary -p signal-canary
+	  -p dup2-canary -p getgroups-canary -p affinity-canary -p signal-canary -p pthread-canary
 	@for n in $(RUST_CANARY_NAMES); do \
 	  cp $(REPO_ROOT)/target/wasm32-wasip1/release/$$n-canary.wasm $(BUILD_DIR)/rust/$$n-canary.wasm; \
 	done

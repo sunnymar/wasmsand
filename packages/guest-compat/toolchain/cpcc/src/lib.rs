@@ -91,10 +91,15 @@ pub const TIER1: &[&str] = &[
     "pthread_once",
 ];
 
+pub const CODEPOD_INTERNAL_EXPORTS: &[&str] = &[
+    "codepod_deliver_signal",
+];
+
 /// POSIX symbols that are also present as strong wasi-libc definitions.
 /// Link with `--wrap` so guests consistently call libcodepod's versions.
 pub const WRAPPED_WASI_LIBC_SYMBOLS: &[&str] = &[
     "accept",
+    "fcntl",
     "getsockopt",
     "pthread_setspecific",
     "recv",

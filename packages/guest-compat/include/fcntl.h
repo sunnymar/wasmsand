@@ -18,4 +18,19 @@
 
 #include_next <fcntl.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int codepod_fcntl(int fd, int cmd, ...);
+int fcntl(int fd, int cmd, ...);
+
+#ifndef CODEPOD_FCNTL_NO_REMAP
+#define fcntl codepod_fcntl
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

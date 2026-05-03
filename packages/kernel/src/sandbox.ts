@@ -6,10 +6,13 @@
  */
 
 import { VFS } from './vfs/vfs.js';
+import { readFile } from 'node:fs/promises';
+import { S_TOOL } from './vfs/inode.js';
 import { OverlayVFS } from './vfs/overlay-vfs.js';
 import { NodeDirectoryRootProvider } from './vfs/node-directory-root-provider.js';
 import { CODEPOD_VERSION } from './version.js';
 import { ProcessManager } from './process/manager.js';
+import { createShellImports } from './host-imports/shell-imports.js';
 /** Streaming callbacks for `Sandbox.run()`. Chunks are decoded UTF-8 strings. */
 export interface StreamCallbacks {
   onStdout?: (chunk: string) => void;
@@ -33,6 +36,7 @@ import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge, type NetworkBridgeLike } from './network/bridge.js';
 import type { SocketBackend, SocketListenPolicy } from './network/socket-backend.js';
+import { createDnsResolver, type DnsResolverLike } from './network/dns-resolver.js';
 import { getSocketShimSource, getSslShimSource, buildSiteCustomizeSource, getRequestsShimSource } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
@@ -55,6 +59,8 @@ import { WasiHost } from './wasi/wasi-host.js';
 import { bufferToString, createBufferTarget, type FdTarget } from './wasi/fd-target.js';
 import type { RunCommandHandler } from './run-command.js';
 import { defaultWasmModuleCache, type WasmModuleCache } from './process/module-cache.js';
+
+type PublicSpawnMode = Extract<ProcessMode, 'resident'>;
 
 /** Describes a set of host-provided files to mount into the VFS. */
 export interface MountConfig {
@@ -81,7 +87,7 @@ export interface SandboxOptions {
   baseRoot?: string;
   /** Filesystem credential for guest/runtime operations. Defaults to uid/gid 1000. */
   credential?: FsCredential;
-  /** Path/URL to the default boot WASM. Defaults to `${wasmDir}/bash.wasm`. */
+  /** Path/URL to the default boot WASM. Defaults to the JSPI shell, or the Asyncify shell when JSPI is unavailable. */
   bootWasmPath?: string;
   /** Deprecated alias for bootWasmPath. */
   shellExecWasmPath?: string;
@@ -99,6 +105,15 @@ export interface SandboxOptions {
   socketBackend?: SocketBackend;
   /** Prepared policy surface for future bind/listen/accept support. */
   serverSockets?: SocketListenPolicy;
+  /**
+   * DNS resolver for guest getaddrinfo/gethostbyname.
+   * When absent and network is configured, createDnsResolver() auto-detects
+   * Deno.resolveDns or Node dns/promises at sandbox creation time.
+   * Returns EAI_SYSTEM in browser where no resolver is available.
+   */
+  dnsResolver?: DnsResolverLike;
+  /** Sandbox-local IPv4 address reported by getsockname(). Default: "10.0.2.15". */
+  socketLocalHost?: string;
   /** Security policy and limits. */
   security?: SecurityOptions;
   /** Persistence configuration. Default mode is 'ephemeral' (no persistence). */
@@ -144,6 +159,8 @@ interface SandboxParts {
   bridge?: NetworkBridgeLike;
   socketBackend?: SocketBackend;
   serverSockets?: SocketListenPolicy;
+  dnsResolver?: DnsResolverLike;
+  socketLocalHost?: string;
   networkPolicy?: NetworkPolicy;
   security?: SecurityOptions;
   workerExecutor?: WorkerExecutor;
@@ -174,6 +191,8 @@ export class Sandbox {
   private bridge: NetworkBridgeLike | null = null;
   private socketBackend: SocketBackend | undefined;
   private serverSockets: SocketListenPolicy | undefined;
+  private dnsResolver: DnsResolverLike | undefined;
+  private socketLocalHost: string | undefined;
   private networkPolicy: NetworkPolicy | undefined;
   private security: SecurityOptions | undefined;
   readonly sessionId: string;
@@ -202,6 +221,8 @@ export class Sandbox {
     this.bridge = parts.bridge ?? null;
     this.socketBackend = parts.socketBackend;
     this.serverSockets = parts.serverSockets;
+    this.dnsResolver = parts.dnsResolver;
+    this.socketLocalHost = parts.socketLocalHost;
     this.networkPolicy = parts.networkPolicy;
     this.security = parts.security;
     this.sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -255,6 +276,8 @@ export class Sandbox {
     const { bridge } = options.networkBridge
       ? { bridge: options.networkBridge }
       : await Sandbox.createNetworkBridge(options.network);
+    const dnsResolver = options.dnsResolver ??
+      (options.network ? (await createDnsResolver() ?? undefined) : undefined);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist, moduleCache);
     const tools = options.baseRoot
       ? Sandbox.registerBaseRootTools(mgr, vfs)
@@ -303,7 +326,7 @@ export class Sandbox {
     }
 
     const bootWasmPath = options.bootWasmPath ?? options.shellExecWasmPath ??
-      `${options.wasmDir}/bash.wasm`;
+      Sandbox.defaultBootWasmPath(options.wasmDir);
     const bootArgv = options.bootArgv ?? ['/bin/bash'];
 
     if (!options.baseRoot) {
@@ -314,7 +337,7 @@ export class Sandbox {
     await mgr.preloadModules();
 
     const secLimits = options.security?.limits;
-    const kernel = new ProcessKernel();
+    const kernel = new ProcessKernel({ maxProcesses: secLimits?.processes });
     const processes = new Map<number, Process>();
     const env = new Map<string, string>();
     let sandboxRef: Sandbox | undefined;
@@ -328,6 +351,8 @@ export class Sandbox {
       bridge,
       socketBackend: options.socketBackend,
       serverSockets: options.serverSockets,
+      dnsResolver,
+      socketLocalHost: options.socketLocalHost,
       extensionRegistry,
       runCommandHandler: options.runCommandHandler,
       getSandbox: () => sandboxRef,
@@ -542,6 +567,8 @@ export class Sandbox {
       mgr, bridge, networkPolicy: options.network,
       socketBackend: options.socketBackend,
       serverSockets: options.serverSockets,
+      dnsResolver,
+      socketLocalHost: options.socketLocalHost,
       security: options.security, workerExecutor,
       extensionRegistry, storage: options.storage,
       bootArgv, bootImports: options.bootImports,
@@ -594,6 +621,13 @@ export class Sandbox {
     return new IdbBackend();
   }
 
+  private static defaultBootWasmPath(wasmDir: string): string {
+    const bootName = typeof WebAssembly.Suspending === 'function'
+      ? 'codepod-shell-exec.wasm'
+      : 'codepod-shell-exec-asyncify.wasm';
+    return `${wasmDir}/${bootName}`;
+  }
+
   private static async createNetworkBridge(
     policy: NetworkPolicy | undefined,
   ): Promise<{ gateway?: NetworkGateway; bridge?: NetworkBridge }> {
@@ -617,7 +651,7 @@ export class Sandbox {
     tools?: Array<{ name: string; path: string }>;
   } | undefined> {
     try {
-      const raw = await Deno.readTextFile(`${baseRoot}/etc/codepod/base-image.json`);
+      const raw = await readFile(`${baseRoot}/etc/codepod/base-image.json`, 'utf8');
       return JSON.parse(raw);
     } catch {
       return undefined;
@@ -649,7 +683,6 @@ export class Sandbox {
     const tools = await adapter.scanTools(wasmDir);
     for (const [name, path] of tools) {
       mgr.registerTool(name, path);
-      await Sandbox.installToolExecutable(vfs, adapter, `/usr/bin/${name}`, path);
     }
     for (const [name, path] of tools) {
       const manifest = await loadManifest(adapter, wasmDir, name);
@@ -660,12 +693,10 @@ export class Sandbox {
     if (!tools.has('python3')) {
       const path = `${wasmDir}/python3.wasm`;
       mgr.registerTool('python3', path);
-      await Sandbox.installToolExecutable(vfs, adapter, '/usr/bin/python3', path);
     }
     if (!tools.has('host-call')) {
       const path = `${wasmDir}/host-call.wasm`;
       mgr.registerTool('host-call', path);
-      await Sandbox.installToolExecutable(vfs, adapter, '/usr/bin/host-call', path);
     }
     // Standard aliases via symlinks — these resolve naturally through the VFS
     vfs.withWriteAccess(() => {
@@ -673,22 +704,6 @@ export class Sandbox {
       try { vfs.symlink('/usr/bin/host-call', '/bin/host-call'); } catch { /* already exists */ }
     });
     return tools;
-  }
-
-  private static async installToolExecutable(
-    vfs: VFS,
-    adapter: PlatformAdapter,
-    vfsPath: string,
-    wasmPath: string,
-  ): Promise<void> {
-    const bytes = await adapter.readBytes(wasmPath);
-    vfs.withWriteAccess(() => {
-      const dir = vfsPath.slice(0, vfsPath.lastIndexOf('/')) || '/';
-      vfs.mkdirp(dir);
-      try { vfs.unlink(vfsPath); } catch { /* not present */ }
-      vfs.writeFile(vfsPath, bytes);
-      vfs.chmod(vfsPath, 0o555);
-    });
   }
 
   private static async installCpythonStdlib(
@@ -764,25 +779,29 @@ export class Sandbox {
     vfs: VfsLike,
     mgr: ProcessManager,
     bootImports: ((api: KernelApi) => Record<string, WebAssembly.ImportValue>) | undefined,
-  ): ((memory: WebAssembly.Memory) => Record<string, WebAssembly.ImportValue>) | undefined {
-    if (!bootImports) return undefined;
+  ): (memory: WebAssembly.Memory) => Record<string, WebAssembly.ImportValue> {
     return (memory) => {
       const apiMemory = new MemoryProxy();
       apiMemory.current = memory;
-      return bootImports({
-        vfs,
-        processManager: {
-          registerTool: (name, impl) => mgr.registerTool(name, String(impl)),
-          registerAndLoadTool: (name, path) => mgr.registerAndLoadTool(name, path),
-          registerNativeModule: (name, wasmBytes) => mgr.registerNativeModule(name, wasmBytes),
-          hasTool: (name) => mgr.hasTool(name),
-        },
-        time: {
-          now: () => Date.now() / 1000,
-          monotonic: () => BigInt(Math.floor(performance.now() * 1_000_000)),
-        },
-        memory: apiMemory,
-      });
+      const shellImports = createShellImports({ vfs, mgr, memory });
+      if (!bootImports) return shellImports;
+      return {
+        ...shellImports,
+        ...bootImports({
+          vfs,
+          processManager: {
+            registerTool: (name, impl) => mgr.registerTool(name, String(impl)),
+            registerAndLoadTool: (name, path) => mgr.registerAndLoadTool(name, path),
+            registerNativeModule: (name, wasmBytes) => mgr.registerNativeModule(name, wasmBytes),
+            hasTool: (name) => mgr.hasTool(name),
+          },
+          time: {
+            now: () => Date.now() / 1000,
+            monotonic: () => BigInt(Math.floor(performance.now() * 1_000_000)),
+          },
+          memory: apiMemory,
+        }),
+      };
     };
   }
 
@@ -795,6 +814,8 @@ export class Sandbox {
     bridge?: NetworkBridgeLike;
     socketBackend?: SocketBackend;
     serverSockets?: SocketListenPolicy;
+    dnsResolver?: DnsResolverLike;
+    socketLocalHost?: string;
     extensionRegistry: ExtensionRegistry;
     runCommandHandler?: RunCommandHandler;
     getSandbox: () => Sandbox | undefined;
@@ -814,6 +835,8 @@ export class Sandbox {
       bridge,
       socketBackend,
       serverSockets,
+      dnsResolver,
+      socketLocalHost,
       extensionRegistry,
       runCommandHandler,
       getSandbox,
@@ -863,15 +886,18 @@ export class Sandbox {
           deadlineMs: getDeadlineMs?.(),
         });
       },
-      buildKernelImports: (pid, memory, _wasi, threadsBackend) =>
+      buildKernelImports: (pid, memory, wasiHost, threadsBackend) =>
         createKernelImports({
           memory,
           callerPid: pid,
           kernel,
           vfs,
+          wasiHost,
           networkBridge: bridge,
           socketBackend,
           serverSockets,
+          dnsResolver,
+          socketLocalHost,
           extensionRegistry,
           nativeModules: mgr.nativeModules,
           threadsBackend,
@@ -902,38 +928,46 @@ export class Sandbox {
           },
           spawnProcess: (req, fdTable) => {
             const childPid = kernel.allocPid(pid, req.prog);
-            kernel.registerPending(childPid, req.prog);
             kernel.adoptFdTable(childPid, fdTable);
-            const commandName = req.prog.includes('/')
-              ? req.prog.split('/').pop() ?? req.prog
-              : req.prog;
-            if (allowedTools && !allowedTools.has(commandName)) {
-              Sandbox.writeToFdTarget(
-                fdTable.get(2),
-                `${commandName}: tool not allowed by security policy\n`,
-              );
-              kernel.releaseProcess(childPid, 126);
+            try {
+              const commandName = req.prog.includes('/')
+                ? req.prog.split('/').pop() ?? req.prog
+                : req.prog;
+              if (allowedTools && !allowedTools.has(commandName)) {
+                Sandbox.writeToFdTarget(
+                  fdTable.get(2),
+                  `${commandName}: tool not allowed by security policy\n`,
+                );
+                kernel.releaseProcess(childPid, 126);
+                return childPid;
+              }
+              const argv = Sandbox.argvForSpawn(vfs, req);
+              const wasiArgv = req.argv0 ? [req.argv0, ...argv.slice(1)] : argv;
+              const childCtx = makeContextWithAllocator(() => childPid);
+              const promise = loadProcess(childCtx, {
+                argv,
+                wasiArgv,
+                mode: 'cli',
+                env: Object.fromEntries(req.env),
+                cwd: req.cwd || '/',
+                memoryBytes,
+                stdoutLimit,
+                stderrLimit,
+                rollbackOnFailure: false,
+              }).then(async (proc) => {
+                processes.set(childPid, proc);
+                await proc.terminate();
+              }).catch((e) => {
+                const msg = e instanceof Error ? e.message : String(e);
+                Sandbox.writeToFdTarget(kernel.getFdTarget(childPid, 2), `${req.prog}: ${msg}\n`);
+                kernel.releaseProcess(childPid, 127);
+              });
+              void promise;
               return childPid;
+            } catch (e) {
+              kernel.discardProcess(childPid);
+              throw e;
             }
-            const argv = Sandbox.argvForSpawn(vfs, req);
-            const childCtx = makeContextWithAllocator(() => childPid);
-            const promise = loadProcess(childCtx, {
-              argv,
-              mode: 'cli',
-              env: Object.fromEntries(req.env),
-              cwd: req.cwd || '/',
-              memoryBytes,
-              stdoutLimit,
-              stderrLimit,
-            }).then(async (proc) => {
-              processes.set(childPid, proc);
-              await proc.terminate();
-            }).catch((e) => {
-              const msg = e instanceof Error ? e.message : String(e);
-              Sandbox.writeToFdTarget(kernel.getFdTarget(childPid, 2), `${req.prog}: ${msg}\n`);
-              kernel.releaseProcess(childPid, 127);
-            });
-            return childPid;
           },
         }),
       makeFdReadAndClear,
@@ -945,9 +979,70 @@ export class Sandbox {
 
   private static argvForSpawn(vfs: VfsLike, req: SpawnRequest): string[] {
     const prog = req.prog.includes('/')
-      ? req.prog
+      ? Sandbox.resolveSpawnPath(req.prog, req.cwd || '/')
       : Sandbox.resolveExecutablePathForVfs(vfs, req.prog);
-    return [prog, ...req.args];
+    Sandbox.assertExecutableForSpawn(vfs, prog);
+    return Sandbox.expandScriptArgvForSpawn(vfs, [prog, ...req.args]);
+  }
+
+  private static resolveSpawnPath(path: string, cwd: string): string {
+    if (path.startsWith('/')) return Sandbox.normalizeVfsPath(path);
+    return Sandbox.normalizeVfsPath(`${cwd || '/'}${(cwd || '/') === '/' ? '' : '/'}${path}`);
+  }
+
+  private static normalizeVfsPath(path: string): string {
+    const segments: string[] = [];
+    for (const part of path.split('/')) {
+      if (part === '' || part === '.') continue;
+      if (part === '..') segments.pop();
+      else segments.push(part);
+    }
+    return `/${segments.join('/')}`;
+  }
+
+  private static expandScriptArgvForSpawn(vfs: VfsLike, argv: string[]): string[] {
+    const prog = argv[0];
+    if (!prog) return argv;
+    let bytes: Uint8Array;
+    try {
+      bytes = vfs.readFile(prog);
+    } catch {
+      return argv;
+    }
+    try {
+      if ((vfs.stat(prog).permissions & S_TOOL) !== 0) {
+        return argv;
+      }
+    } catch {
+      return argv;
+    }
+    if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x61 && bytes[2] === 0x73 && bytes[3] === 0x6d) {
+      return argv;
+    }
+
+    const firstLine = new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).split(/\r?\n/, 1)[0] ?? '';
+    if (firstLine.startsWith('#!')) {
+      const parts = firstLine.slice(2).trim().split(/\s+/).filter(Boolean);
+      if (parts.length > 0) {
+        const [interpreter, ...interpreterArgs] = parts;
+        const resolved = interpreter.includes('/')
+          ? interpreter
+          : Sandbox.resolveExecutablePathForVfs(vfs, interpreter);
+        return [resolved, ...interpreterArgs, prog, ...argv.slice(1)];
+      }
+    }
+
+    return ['/bin/sh', prog, ...argv.slice(1)];
+  }
+
+  private static assertExecutableForSpawn(vfs: VfsLike, path: string): void {
+    const st = vfs.stat(path);
+    if (st.type !== 'file') {
+      throw new Error(`EACCES: permission denied: ${path}`);
+    }
+    if ((st.permissions & 0o111) === 0) {
+      throw new Error(`EACCES: permission denied: ${path}`);
+    }
   }
 
   private static resolveExecutablePathForVfs(vfs: VfsLike, prog: string): string {
@@ -989,6 +1084,7 @@ export class Sandbox {
       stderrBytes: security.limits?.stderrBytes,
       toolAllowlist: security.toolAllowlist,
       memoryBytes: security.limits?.memoryBytes,
+      processes: security.limits?.processes,
       bridgeSab: Sandbox.getBridgeSab(bridge),
       networkPolicy: networkPolicy ? {
         allowedHosts: networkPolicy.allowedHosts,
@@ -1254,7 +1350,7 @@ export class Sandbox {
   }
 
   async spawn(argv: string[], opts: {
-    mode?: ProcessMode;
+    mode?: PublicSpawnMode;
     env?: Record<string, string>;
     cwd?: string;
     bootImports?: (api: KernelApi) => Record<string, WebAssembly.ImportValue>;
@@ -1269,6 +1365,8 @@ export class Sandbox {
       bridge: this.bridge ?? undefined,
       socketBackend: this.socketBackend,
       serverSockets: this.serverSockets,
+      dnsResolver: this.dnsResolver,
+      socketLocalHost: this.socketLocalHost,
       extensionRegistry: this.extensionRegistry ?? new ExtensionRegistry(),
       runCommandHandler: this.runCommandHandler,
       getSandbox: () => this,
@@ -1292,6 +1390,7 @@ export class Sandbox {
         opts.bootImports ?? this.bootImports,
       ),
     });
+    const hostOwnedTopLevel = this.kernel.getPpid(proc.pid) === NO_PARENT_PID;
     if (proc.mode === 'resident') {
       Sandbox.applyOutputLimits(
         this.kernel,
@@ -1299,8 +1398,22 @@ export class Sandbox {
         this.security?.limits?.stdoutBytes,
         this.security?.limits?.stderrBytes,
       );
+    } else if (hostOwnedTopLevel) {
+      const captured = {
+        1: proc.fdReadAndClear(1),
+        2: proc.fdReadAndClear(2),
+      };
+      proc.__setFdReadAndClear((fd) => {
+        const result = captured[fd];
+        captured[fd] = { data: '', truncated: false };
+        return result;
+      });
+      await proc.terminate();
+      await this.kernel.waitpid(proc.pid);
     }
-    this.processes.set(proc.pid, proc);
+    if (proc.mode === 'resident') {
+      this.processes.set(proc.pid, proc);
+    }
     return proc;
   }
 
@@ -1456,7 +1569,7 @@ export class Sandbox {
     // Pre-load all tool modules so spawnSync can use them synchronously
     await childMgr.preloadModules();
 
-    const childKernel = new ProcessKernel();
+    const childKernel = new ProcessKernel({ maxProcesses: this.security?.limits?.processes });
     const childProcesses = new Map<number, Process>();
     let childRef: Sandbox | undefined;
     const childCtx = Sandbox.createLoaderContext({
@@ -1468,6 +1581,8 @@ export class Sandbox {
       bridge,
       socketBackend: this.socketBackend,
       serverSockets: this.serverSockets,
+      dnsResolver: this.dnsResolver,
+      socketLocalHost: this.socketLocalHost,
       extensionRegistry: this.extensionRegistry ?? new ExtensionRegistry(),
       runCommandHandler: this.runCommandHandler,
       getSandbox: () => childRef,
@@ -1514,6 +1629,8 @@ export class Sandbox {
       mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
       socketBackend: this.socketBackend,
       serverSockets: this.serverSockets,
+      dnsResolver: this.dnsResolver,
+      socketLocalHost: this.socketLocalHost,
       security: this.security, workerExecutor: childWorkerExecutor,
       extensionRegistry: this.extensionRegistry ?? undefined,
       storage: this.storage ?? undefined,

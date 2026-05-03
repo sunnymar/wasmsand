@@ -2,6 +2,8 @@ import { describe, it, beforeEach } from '@std/testing/bdd';
 import { expect } from '@std/expect';
 import { WasiHost } from '../wasi-host.js';
 import { VFS } from '../../vfs/vfs.js';
+import { ProcessKernel } from '../../process/kernel.js';
+import { createAsyncPipe } from '../../vfs/pipe.js';
 import {
   WASI_EBADF,
   WASI_ENOENT,
@@ -9,6 +11,7 @@ import {
   WASI_ESUCCESS,
   WASI_FILETYPE_DIRECTORY,
   WASI_FILETYPE_REGULAR_FILE,
+  WASI_OFLAGS_DIRECTORY,
   WASI_PREOPENTYPE_DIR,
 } from '../types.js';
 
@@ -233,6 +236,42 @@ describe('WasiHost', () => {
       const errno = wasi.fd_close(99);
       expect(errno).toBe(WASI_EBADF);
     });
+
+    it('fd_renumber moves kernel pipe fds instead of leaving the source open', async () => {
+      const kernel = new ProcessKernel();
+      const pid = kernel.allocPid();
+      const ioFds = kernel.getFdTable(pid);
+      const [readEnd, writeEnd] = createAsyncPipe();
+      ioFds.set(7, { type: 'pipe_write', pipe: writeEnd });
+
+      const pipeHost = new WasiHost({
+        vfs,
+        args: ['program'],
+        env: {},
+        preopens: { '/': '/' },
+        ioFds,
+        kernel,
+        pid,
+      });
+      pipeHost.setMemory(memory);
+
+      expect(pipeHost.renumberFd(7, 1)).toBe(WASI_ESUCCESS);
+      expect(kernel.getFdTarget(pid, 7)).toBeNull();
+
+      const { wasi } = getImportsAndView(pipeHost, memory);
+      expect(wasi.fd_close(1)).toBe(WASI_ESUCCESS);
+
+      const read = readEnd.read(new Uint8Array(1));
+      let timeout: number | undefined;
+      const result = await Promise.race([
+        read,
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), 20);
+        }),
+      ]);
+      if (timeout !== undefined) clearTimeout(timeout);
+      expect(result).toBe(0);
+    });
   });
 
   describe('clock_time_get', () => {
@@ -241,7 +280,7 @@ describe('WasiHost', () => {
       const errno = wasi.clock_time_get(0, BigInt(0), 100);
       expect(errno).toBe(WASI_ESUCCESS);
       const timestamp = view.getBigUint64(100, true);
-      expect(timestamp).toBeGreaterThan(BigInt(0));
+      expect(timestamp > BigInt(0)).toBe(true);
     });
 
     it('returns a nanosecond timestamp for monotonic clock', () => {
@@ -249,7 +288,7 @@ describe('WasiHost', () => {
       const errno = wasi.clock_time_get(1, BigInt(0), 100);
       expect(errno).toBe(WASI_ESUCCESS);
       const timestamp = view.getBigUint64(100, true);
-      expect(timestamp).toBeGreaterThan(BigInt(0));
+      expect(timestamp > BigInt(0)).toBe(true);
     });
   });
 
@@ -330,6 +369,19 @@ describe('WasiHost', () => {
   });
 
   describe('path_open', () => {
+    it('reuses closed stdin for /dev/null background redirection', () => {
+      const { wasi, view, bytes } = getImportsAndView(host, memory);
+
+      expect(wasi.fd_close(0)).toBe(WASI_ESUCCESS);
+
+      const pathStr = '/dev/null';
+      bytes.set(new TextEncoder().encode(pathStr), 500);
+      const errno = wasi.path_open(3, 0, 500, pathStr.length, 0, BigInt(0), BigInt(0), 0, 400);
+
+      expect(errno).toBe(WASI_ESUCCESS);
+      expect(view.getUint32(400, true)).toBe(0);
+    });
+
     it('opens an existing file for reading', () => {
       vfs.writeFile('/tmp/data.txt', new TextEncoder().encode('content'));
       const { wasi, view, bytes } = getImportsAndView(host, memory);
@@ -400,6 +452,26 @@ describe('WasiHost', () => {
 
       const stat = vfs.stat('/tmp/newdir');
       expect(stat.type).toBe('dir');
+    });
+  });
+
+  describe('path_filestat_set_times', () => {
+    it('returns ENOENT for a missing path', () => {
+      const { wasi, bytes } = getImportsAndView(host, memory);
+
+      const pathStr = 'tmp/missing-touch-target';
+      bytes.set(new TextEncoder().encode(pathStr), 500);
+
+      const errno = wasi.path_filestat_set_times(
+        3,
+        0,
+        500,
+        pathStr.length,
+        BigInt(0),
+        BigInt(0),
+        0,
+      );
+      expect(errno).toBe(WASI_ENOENT);
     });
   });
 
@@ -497,6 +569,37 @@ describe('WasiHost', () => {
       expect(errno).toBe(WASI_ESUCCESS);
       const bufused = view.getUint32(900, true);
       expect(bufused).toBeGreaterThan(0);
+    });
+  });
+
+  describe('fork snapshots', () => {
+    it('preserves directory fd allocator state', () => {
+      const { wasi, view, bytes } = getImportsAndView(host, memory);
+      const pathStr = 'home/user';
+      bytes.set(new TextEncoder().encode(pathStr), 500);
+      expect(wasi.path_open(3, 0, 500, pathStr.length, WASI_OFLAGS_DIRECTORY, BigInt(0), BigInt(0), 0, 400))
+        .toBe(WASI_ESUCCESS);
+      const inheritedDirFd = view.getUint32(400, true);
+
+      const snapshot = host.snapshotForFork();
+      const childMemory = new WebAssembly.Memory({ initial: 1 });
+      const child = new WasiHost({
+        vfs,
+        args: ['program'],
+        env: {},
+        preopens: { '/': '/' },
+      });
+      child.setMemory(childMemory);
+      child.restoreForkSnapshot(snapshot);
+      const { wasi: childWasi, view: childView, bytes: childBytes } = getImportsAndView(child, childMemory);
+
+      childBytes.set(new TextEncoder().encode('home'), 500);
+      expect(childWasi.path_open(3, 0, 500, 4, WASI_OFLAGS_DIRECTORY, BigInt(0), BigInt(0), 0, 400))
+        .toBe(WASI_ESUCCESS);
+      const newDirFd = childView.getUint32(400, true);
+
+      expect(newDirFd).not.toBe(inheritedDirFd);
+      expect(newDirFd).toBeGreaterThan(inheritedDirFd);
     });
   });
 

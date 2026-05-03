@@ -165,6 +165,7 @@ describe('ProcessManager', () => {
       const st = vfs.stat('/usr/bin/hello');
       expect(st.type).toBe('file');
       expect(st.permissions & 0o111).toBeTruthy(); // executable
+      expect(st.permissions & 0o100000).toBeTruthy(); // shell tool stub
     });
 
     it('tool file contains the wasm path', () => {
@@ -206,10 +207,10 @@ describe('ProcessManager', () => {
       expect(result.stdout).toBe('foo\n');
     });
 
-    it('registered host stubs do not depend on S_TOOL mode bits', async () => {
+    it('registered host stubs resolve through their registry entry', async () => {
       await mgr.preloadModules();
       const st = vfs.stat('/usr/bin/hello');
-      expect(st.permissions & 0o100000).toBe(0);
+      expect(st.permissions & 0o100000).toBeTruthy();
       expect(mgr.resolveTool('hello')).toBe(resolve(FIXTURES, 'hello.wasm'));
     });
 

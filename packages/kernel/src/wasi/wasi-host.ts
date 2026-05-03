@@ -83,10 +83,19 @@ export interface WasiHostOptions {
   canSuspendPipeReads?: boolean;
 }
 
-interface PreopenEntry {
+export interface PreopenEntry {
   vfsPath: string;
   label: string;
   fd: number;
+}
+
+export interface WasiHostForkSnapshot {
+  fdTable: FdTable;
+  dirFds: Map<number, string>;
+  preopens: PreopenEntry[];
+  cwd: string;
+  canSuspendPipeReads: boolean;
+  nextDirFdCounter: number;
 }
 
 function bytesToBase64(data: Uint8Array): string {
@@ -204,6 +213,9 @@ export class WasiHost {
   private kernel?: ProcessKernel;
   private pid?: number;
   private canSuspendPipeReads = false;
+  private signalDeliverer: ((sig: number) => void) | null = null;
+  private pendingSignals: number[] = [];
+  private drainingSignals = false;
 
   constructor(options: WasiHostOptions) {
     this.vfs = options.vfs;
@@ -304,8 +316,61 @@ export class WasiHost {
     return this.ioFds;
   }
 
+  snapshotForFork(): WasiHostForkSnapshot {
+    return {
+      fdTable: this.fdTable.clone(),
+      dirFds: new Map(this.dirFds),
+      preopens: this.preopens.map((entry) => ({ ...entry })),
+      cwd: this.cwd,
+      canSuspendPipeReads: this.canSuspendPipeReads,
+      nextDirFdCounter: this._nextDirFdCounter,
+    };
+  }
+
+  restoreForkSnapshot(snapshot: WasiHostForkSnapshot): void {
+    this.fdTable = snapshot.fdTable;
+    this.dirFds = new Map(snapshot.dirFds);
+    this.preopens = snapshot.preopens.map((entry) => ({ ...entry }));
+    this.cwd = snapshot.cwd;
+    this.canSuspendPipeReads = snapshot.canSuspendPipeReads;
+    this._nextDirFdCounter = snapshot.nextDirFdCounter;
+  }
+
+  bindKernelFileTargets(): void {
+    if (!this.kernel || this.pid === undefined) return;
+    for (const fd of this.fdTable.openFds()) {
+      if (this.dirFds.has(fd)) continue;
+      this.kernel.replaceFdTarget(this.pid, fd, createVfsFileTarget(this.fdTable, fd));
+    }
+  }
+
   setCanSuspendPipeReads(enabled: boolean): void {
     this.canSuspendPipeReads = enabled;
+  }
+
+  setSignalDeliverer(deliverer: ((sig: number) => void) | null): void {
+    this.signalDeliverer = deliverer;
+  }
+
+  queueSignal(sig: number): boolean {
+    if (!this.signalDeliverer) return false;
+    this.pendingSignals.push(sig);
+    return true;
+  }
+
+  drainPendingSignals(): void {
+    if (!this.signalDeliverer || this.drainingSignals) return;
+    this.drainingSignals = true;
+    try {
+      while (this.pendingSignals.length > 0) {
+        const sig = this.pendingSignals.shift();
+        if (sig !== undefined) {
+          this.signalDeliverer(sig);
+        }
+      }
+    } finally {
+      this.drainingSignals = false;
+    }
   }
 
   /** Signal cancellation — next syscall check will throw WasiExitError. */
@@ -315,6 +380,7 @@ export class WasiHost {
 
   /** Throw WasiExitError(124) if cancelled or past deadline. */
   private checkDeadline(): void {
+    this.drainPendingSignals();
     if (this.cancelled || Date.now() > this.deadlineMs) {
       throw new WasiExitError(124);
     }
@@ -429,7 +495,7 @@ export class WasiHost {
         fd_fdstat_set_rights: this.fdNoOp.bind(this),
         fd_filestat_set_size: this.fdFilestatSetSize.bind(this),
         fd_filestat_set_times: this.fdNoOp.bind(this),
-        path_filestat_set_times: this.fdNoOp.bind(this),
+        path_filestat_set_times: this.pathFilestatSetTimes.bind(this),
         fd_pread: this.fdPread.bind(this),
         fd_pwrite: this.fdPwrite.bind(this),
         // Stubs that must remain ENOSYS (masking bugs or unimplemented semantics)
@@ -501,6 +567,10 @@ export class WasiHost {
     } catch {
       return false;
     }
+  }
+
+  resolveGuestPath(path: string): string {
+    return this.resolvePath(3, path);
   }
 
   // ---- Syscall implementations ----
@@ -842,12 +912,15 @@ export class WasiHost {
     if (this.ioFds.has(fd)) {
       if (this.kernel && this.pid !== undefined) {
         try {
-          return this.kernel.closeFd(this.pid, fd) ? WASI_ESUCCESS : WASI_EBADF;
+          if (!this.kernel.closeFd(this.pid, fd)) return WASI_EBADF;
+          this.ioFds.delete(fd);
+          return WASI_ESUCCESS;
         } catch (err) {
           return fdErrorToWasi(err);
         }
       }
-      return WASI_EBADF;
+      this.ioFds.delete(fd);
+      return WASI_ESUCCESS;
     }
 
     if (this.kernel && this.pid !== undefined) {
@@ -1150,7 +1223,7 @@ export class WasiHost {
         }
       }
 
-      const fd = this.fdTable.open(absPath, mode);
+      const fd = this.fdTable.open(absPath, mode, this.lowestAvailableFd());
       if (this.kernel && this.pid !== undefined) {
         this.kernel.setFdTarget(this.pid, fd, createVfsFileTarget(this.fdTable, fd));
       }
@@ -1163,6 +1236,14 @@ export class WasiHost {
       }
       return fdErrorToWasi(err);
     }
+  }
+
+  private lowestAvailableFd(): number {
+    let fd = 0;
+    while (this.ioFds.has(fd) || this.dirFds.has(fd) || this.fdTable.isOpen(fd)) {
+      fd++;
+    }
+    return fd;
   }
 
   private pathFilestatGet(
@@ -1179,6 +1260,34 @@ export class WasiHost {
       // flags bit 0 = SYMLINK_FOLLOW; when not set, use lstat
       const followSymlinks = (flags & 1) !== 0;
       return this.writeFilestat(bufPtr, absPath, followSymlinks);
+    } catch (err) {
+      if (err instanceof VfsError) {
+        return vfsErrnoToWasi(err.errno);
+      }
+      return fdErrorToWasi(err);
+    }
+  }
+
+  private pathFilestatSetTimes(
+    dirFd: number,
+    flags: number,
+    pathPtr: number,
+    pathLen: number,
+    _atim: bigint,
+    _mtim: bigint,
+    _fstflags: number,
+  ): number {
+    this.checkDeadline();
+    try {
+      const relativePath = this.readString(pathPtr, pathLen);
+      const absPath = this.resolvePath(dirFd, relativePath);
+      const followSymlinks = (flags & 1) !== 0;
+      if (followSymlinks) {
+        this.vfs.stat(absPath);
+      } else {
+        this.vfs.lstat(absPath);
+      }
+      return WASI_ESUCCESS;
     } catch (err) {
       if (err instanceof VfsError) {
         return vfsErrnoToWasi(err.errno);
@@ -1471,14 +1580,17 @@ export class WasiHost {
   private fdRenumber(fromFd: number, toFd: number): number {
     const ioTarget = this.ioFds.get(fromFd);
     if (ioTarget) {
-      this.ioFds.set(toFd, ioTarget);
+      if (fromFd === toFd) return WASI_ESUCCESS;
       if (this.kernel && this.pid !== undefined) {
         try {
           this.kernel.dup2(this.pid, fromFd, toFd);
+          this.kernel.closeFd(this.pid, fromFd);
         } catch {
           // The local ioFds map is authoritative for this WasiHost.
         }
       }
+      this.ioFds.delete(fromFd);
+      this.ioFds.set(toFd, ioTarget);
       return WASI_ESUCCESS;
     }
 

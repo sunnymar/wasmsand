@@ -11,6 +11,7 @@
 #include "codepod_runtime.h"
 #include "codepod_markers.h"
 
+#define CODEPOD_FCNTL_NO_REMAP
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -18,12 +19,29 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdarg.h>
 
 CODEPOD_DECLARE_MARKER(dup);
 CODEPOD_DECLARE_MARKER(dup3);
 
 CODEPOD_DEFINE_MARKER(dup,  0x64757020u) /* "dup " */
 CODEPOD_DEFINE_MARKER(dup3, 0x64757033u) /* "dup3" */
+
+static int codepod_fd_status_flags[65536];
+
+int codepod_fd_get_status_flags(int fd) {
+  if (fd < 0 || fd >= (int)(sizeof(codepod_fd_status_flags) / sizeof(codepod_fd_status_flags[0]))) {
+    return 0;
+  }
+  return codepod_fd_status_flags[fd];
+}
+
+void codepod_fd_set_status_flags(int fd, int flags) {
+  if (fd < 0 || fd >= (int)(sizeof(codepod_fd_status_flags) / sizeof(codepod_fd_status_flags[0]))) {
+    return;
+  }
+  codepod_fd_status_flags[fd] = flags;
+}
 
 int dup(int oldfd) {
   CODEPOD_MARKER_CALL(dup);
@@ -82,4 +100,79 @@ int dup3(int oldfd, int newfd, int flags) {
   /* O_CLOEXEC is a no-op in codepod (no exec()), so we drop the flag
    * and forward to dup2 — same renumber semantics. */
   return dup2(oldfd, newfd);
+}
+
+static int codepod_fcntl_impl(int fd, int cmd, va_list ap) {
+  if (
+    cmd == F_DUPFD
+#ifdef F_DUPFD_CLOEXEC
+    || cmd == F_DUPFD_CLOEXEC
+#endif
+  ) {
+      int arg = va_arg(ap, int);
+      if (fd < 0 || arg < 0) {
+        errno = EINVAL;
+        return -1;
+      }
+      int newfd = dup(fd);
+      if (newfd < 0) return -1;
+      if (newfd >= arg) return newfd;
+
+      int opened[64];
+      int opened_count = 0;
+      opened[opened_count++] = newfd;
+      while (newfd >= 0 && newfd < arg && opened_count < (int)(sizeof(opened) / sizeof(opened[0]))) {
+        newfd = dup(fd);
+        if (newfd < 0) break;
+        opened[opened_count++] = newfd;
+      }
+      for (int i = 0; i < opened_count; ++i) {
+        if (opened[i] != newfd) close(opened[i]);
+      }
+      if (newfd >= arg) return newfd;
+      if (newfd >= 0) close(newfd);
+      errno = EMFILE;
+      return -1;
+  }
+
+  switch (cmd) {
+    case F_GETFD:
+      return 0;
+    case F_SETFD:
+      return 0;
+    case F_GETFL:
+      return codepod_fd_get_status_flags(fd);
+    case F_SETFL: {
+      int flags = va_arg(ap, int);
+      codepod_fd_set_status_flags(fd, flags);
+      return 0;
+    }
+    default:
+      errno = EINVAL;
+      return -1;
+  }
+}
+
+int fcntl(int fd, int cmd, ...) {
+  va_list ap;
+  va_start(ap, cmd);
+  int result = codepod_fcntl_impl(fd, cmd, ap);
+  va_end(ap);
+  return result;
+}
+
+int codepod_fcntl(int fd, int cmd, ...) {
+  va_list ap;
+  va_start(ap, cmd);
+  int result = codepod_fcntl_impl(fd, cmd, ap);
+  va_end(ap);
+  return result;
+}
+
+int __wrap_fcntl(int fd, int cmd, ...) {
+  va_list ap;
+  va_start(ap, cmd);
+  int result = codepod_fcntl_impl(fd, cmd, ap);
+  va_end(ap);
+  return result;
 }

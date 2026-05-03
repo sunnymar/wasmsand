@@ -5,15 +5,16 @@ use std::path::PathBuf;
 /// CPCC_* surface).
 pub struct Env {
     pub archive: Option<PathBuf>,
-    pub setjmp_archive: Option<PathBuf>,
+    pub continuations_archive: Option<PathBuf>,
     pub include: Option<PathBuf>,
     pub skip_version_check: bool,
     pub preserve_pre_opt: Option<PathBuf>,
     pub wasm_opt: WasmOptMode,
-    /// CPCC_USE_SETJMP=1 opts this linked module into setjmp/longjmp support.
-    /// Setjmp is implemented through Asyncify, so this flag also makes cpcc
-    /// asyncify the output and mark the wasm with codepod.features.
-    pub use_setjmp: bool,
+    /// CPCC_USE_CONTINUATIONS=1 opts this linked module into continuation
+    /// support (setjmp/longjmp/fork). Continuations are implemented through
+    /// Asyncify, so this flag also makes cpcc asyncify the output and mark
+    /// the wasm with codepod.features.
+    pub use_continuations: bool,
     /// CPCC_MARKERS=1 enables instrumented mode: cpcc passes
     /// `-DCODEPOD_GUEST_COMPAT_MARKERS=1` to clang and forces
     /// `__codepod_guest_compat_marker_*` exports at link time.
@@ -34,14 +35,16 @@ impl Env {
             archive: std::env::var_os("CPCC_ARCHIVE")
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
-            setjmp_archive: std::env::var_os("CPCC_SETJMP_ARCHIVE")
+            continuations_archive: std::env::var_os("CPCC_CONTINUATIONS_ARCHIVE")
+                .or_else(|| std::env::var_os("CPCC_POSIX_CONTINUATION_ARCHIVE"))
+                .or_else(|| std::env::var_os("CPCC_SETJMP_ARCHIVE"))
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)
                 .or_else(|| {
                     let archive = std::env::var_os("CPCC_ARCHIVE")
                         .filter(|v| !v.is_empty())
                         .map(PathBuf::from)?;
-                    Some(archive.with_file_name("libcodepod_setjmp.a"))
+                    Some(archive.with_file_name("libcodepod_continuations.a"))
                 }),
             include: std::env::var_os("CPCC_INCLUDE")
                 .filter(|v| !v.is_empty())
@@ -58,7 +61,9 @@ impl Env {
             } else {
                 WasmOptMode::Default
             },
-            use_setjmp: std::env::var_os("CPCC_USE_SETJMP")
+            use_continuations: std::env::var_os("CPCC_USE_CONTINUATIONS")
+                .or_else(|| std::env::var_os("CPCC_USE_POSIX_CONTINUATIONS"))
+                .or_else(|| std::env::var_os("CPCC_USE_SETJMP"))
                 .map(|v| v != "0" && !v.is_empty())
                 .unwrap_or(false),
             // Off by default.  CI / production builds use structural

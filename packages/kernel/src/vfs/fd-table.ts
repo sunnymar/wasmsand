@@ -21,6 +21,7 @@ interface FdEntry {
   buffer: Uint8Array;
   offset: number;
   dirty: boolean;
+  refs: number;
   /**
    * Per-syscall stream callbacks for endless / device-style files
    * (/dev/urandom, /dev/zero, /dev/null, /dev/full).  When present,
@@ -51,8 +52,27 @@ export class FdTable {
     this.vfs = vfs;
   }
 
+  private allocateFd(preferredFd?: number): number {
+    if (preferredFd !== undefined) {
+      if (this.entries.has(preferredFd)) {
+        throw new Error(`EBADF: file descriptor already open ${preferredFd}`);
+      }
+      if (preferredFd >= this.nextFd) {
+        this.nextFd = preferredFd + 1;
+      }
+      return preferredFd;
+    }
+
+    let fd = FIRST_FD;
+    while (this.entries.has(fd)) fd++;
+    if (fd >= this.nextFd) {
+      this.nextFd = fd + 1;
+    }
+    return fd;
+  }
+
   /** Open a file and return its fd number. */
-  open(path: string, mode: OpenMode): number {
+  open(path: string, mode: OpenMode, preferredFd?: number): number {
     // Streaming providers (/dev/urandom, /dev/zero, /dev/null,
     // /dev/full) bypass the materialize-at-open path entirely:
     // every read/write per fd_read/fd_write syscall calls the
@@ -60,13 +80,14 @@ export class FdTable {
     // a Uint8Array.
     const stream = this.vfs.streamFile?.(path) ?? null;
     if (stream) {
-      const fd = this.nextFd++;
+      const fd = this.allocateFd(preferredFd);
       this.entries.set(fd, {
         path,
         mode,
         buffer: new Uint8Array(0),
         offset: 0,
         dirty: false,
+        refs: 1,
         streamRead: stream.read,
         streamWrite: stream.write,
       });
@@ -92,13 +113,14 @@ export class FdTable {
 
     const offset = mode === 'a' ? buffer.byteLength : 0;
 
-    const fd = this.nextFd++;
+    const fd = this.allocateFd(preferredFd);
     this.entries.set(fd, {
       path,
       mode,
       buffer,
       offset,
       dirty: mode === 'w' || mode === 'a',
+      refs: 1,
     });
 
     return fd;
@@ -207,12 +229,13 @@ export class FdTable {
   /** Close an fd, flushing buffered writes to the VFS. */
   close(fd: number): void {
     const entry = this.getEntry(fd);
+    entry.refs--;
+    this.entries.delete(fd);
+    if (entry.refs > 0) return;
 
     if (entry.dirty) {
       this.vfs.writeFile(entry.path, entry.buffer);
     }
-
-    this.entries.delete(fd);
   }
 
   /** Duplicate an fd, returning a new fd with independent offset. */
@@ -226,6 +249,7 @@ export class FdTable {
       buffer: entry.buffer,
       offset: 0,
       dirty: entry.dirty,
+      refs: 1,
     });
 
     return newFd;
@@ -263,19 +287,19 @@ export class FdTable {
     return this.entries.get(fd)?.path;
   }
 
-  /** Clone the entire fd table (for fork simulation). Returns a new independent table. */
+  /** Return the currently open fd numbers. */
+  openFds(): number[] {
+    return Array.from(this.entries.keys());
+  }
+
+  /** Clone the fd table for fork, sharing POSIX open file descriptions. */
   clone(): FdTable {
     const cloned = new FdTable(this.vfs);
     cloned.nextFd = this.nextFd;
 
     for (const [fd, entry] of this.entries) {
-      cloned.entries.set(fd, {
-        path: entry.path,
-        mode: entry.mode,
-        buffer: new Uint8Array(entry.buffer),
-        offset: entry.offset,
-        dirty: entry.dirty,
-      });
+      entry.refs++;
+      cloned.entries.set(fd, entry);
     }
 
     return cloned;

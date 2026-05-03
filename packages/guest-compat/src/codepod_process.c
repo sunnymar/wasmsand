@@ -78,11 +78,9 @@ int pclose(FILE *stream) {
  *
  * waitpid(pid > 0): blocks via host_waitpid until that specific
  *   child exits.  Honors WNOHANG by switching to host_waitpid_nohang.
- * waitpid(-1) / wait(): the host doesn't expose a "wait for any
- *   child" primitive yet, and the guest doesn't track its own spawn
- *   list.  We return ECHILD — POSIX-correct when there are no
- *   children to wait for.  Adding a host_wait_any import is the
- *   natural follow-up; track via codepod_runtime.h. */
+ * waitpid(-1) / wait(): waits for any child owned by the calling
+ *   sandbox process.  The host returns JSON `{"pid":N,"exit_code":M}`
+ *   so wait-any can return the actual reaped child PID. */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -118,6 +116,30 @@ static int waitpid_parse_exit(const char *json, size_t json_len, int *out) {
     return -1;
 }
 
+static int waitpid_parse_pid(const char *json, size_t json_len, int fallback, int *out) {
+    static const char needle[] = "\"pid\":";
+    size_t nlen = sizeof(needle) - 1;
+    for (size_t i = 0; i + nlen <= json_len; ++i) {
+        if (memcmp(json + i, needle, nlen) != 0) continue;
+        const char *p = json + i + nlen;
+        const char *end = json + json_len;
+        int sign = 1;
+        if (p < end && *p == '-') { sign = -1; ++p; }
+        int val = 0;
+        int saw = 0;
+        while (p < end && *p >= '0' && *p <= '9') {
+            val = val * 10 + (*p - '0');
+            saw = 1;
+            ++p;
+        }
+        if (!saw) return -1;
+        *out = sign * val;
+        return 0;
+    }
+    *out = fallback;
+    return 0;
+}
+
 /* Pack a kernel exit code into the POSIX wait status encoding so
  * WIFEXITED / WEXITSTATUS / WTERMSIG round-trip cleanly:
  *   - low byte = signal (0 if exited normally)
@@ -133,19 +155,31 @@ static int encode_wait_status(int kernel_exit) {
 
 pid_t waitpid(pid_t pid, int *wstatus, int options) {
     CODEPOD_MARKER_CALL(waitpid);
-    if (pid <= 0) {
-        /* Wait-any (-1) and process-group (0) are not yet routed.
-         * See header note above. */
-        errno = ECHILD;
-        return (pid_t)-1;
-    }
 
     int exit_code;
+    int waited_pid = (int)pid;
     if (options & WNOHANG) {
-        exit_code = codepod_host_waitpid_nohang((int)pid);
-        if (exit_code < 0) {
-            /* Still running: WNOHANG returns 0 with status untouched. */
+        char buf[64];
+        int n = codepod_host_waitpid_nohang((int)pid, (int)(intptr_t)buf, (int)sizeof(buf));
+        if (n == -1) {
+            /* No child has exited yet: WNOHANG returns 0 with status untouched. */
             return 0;
+        }
+        if (n <= 0 || (size_t)n > sizeof(buf)) {
+            errno = ECHILD;
+            return (pid_t)-1;
+        }
+        if (waitpid_parse_exit(buf, (size_t)n, &exit_code) != 0) {
+            errno = ECHILD;
+            return (pid_t)-1;
+        }
+        if (exit_code < 0) {
+            errno = ECHILD;
+            return (pid_t)-1;
+        }
+        if (waitpid_parse_pid(buf, (size_t)n, (int)pid, &waited_pid) != 0 || waited_pid < 0) {
+            errno = ECHILD;
+            return (pid_t)-1;
         }
     } else {
         char buf[64];
@@ -158,22 +192,23 @@ pid_t waitpid(pid_t pid, int *wstatus, int options) {
             errno = ECHILD;
             return (pid_t)-1;
         }
+        if (exit_code < 0) {
+            errno = ECHILD;
+            return (pid_t)-1;
+        }
+        if (waitpid_parse_pid(buf, (size_t)n, (int)pid, &waited_pid) != 0 || waited_pid < 0) {
+            errno = ECHILD;
+            return (pid_t)-1;
+        }
     }
 
     if (wstatus) *wstatus = encode_wait_status(exit_code);
-    return pid;
+    return (pid_t)waited_pid;
 }
 
 pid_t wait(int *wstatus) {
     CODEPOD_MARKER_CALL(wait);
-    /* wait() is waitpid(-1, ..., 0) — wait-any.  Not yet supported
-     * because the host has no "wait for any child" primitive and
-     * the guest doesn't track its own spawn list.  Tools that need
-     * to reap a specific posix_spawn'd child should use waitpid(pid)
-     * directly. */
-    (void)wstatus;
-    errno = ECHILD;
-    return (pid_t)-1;
+    return waitpid((pid_t)-1, wstatus, 0);
 }
 
 /* ── Process group / session / file mode mask ──
@@ -288,13 +323,13 @@ CODEPOD_DECLARE_MARKER(vfork);
 CODEPOD_DEFINE_MARKER(fork,  0x666f726bu) /* "fork" */
 CODEPOD_DEFINE_MARKER(vfork, 0x76666f72u) /* "vfor" */
 
-pid_t fork(void) {
+__attribute__((weak)) pid_t fork(void) {
     CODEPOD_MARKER_CALL(fork);
     errno = ENOSYS;
     return (pid_t)-1;
 }
 
-pid_t vfork(void) {
+__attribute__((weak)) pid_t vfork(void) {
     CODEPOD_MARKER_CALL(vfork);
     errno = ENOSYS;
     return (pid_t)-1;

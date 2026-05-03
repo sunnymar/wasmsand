@@ -8,12 +8,15 @@
  * Here it's a no-op; UTC is the only zone we model.
  */
 
+#include <errno.h>
 #include <time.h>
 
 #include "codepod_markers.h"
 
 CODEPOD_DECLARE_MARKER(tzset);
+CODEPOD_DECLARE_MARKER(clock_settime);
 CODEPOD_DEFINE_MARKER(tzset, 0x747a7374u) /* "tzst" */
+CODEPOD_DEFINE_MARKER(clock_settime, 0x6373746du) /* "cstm" */
 
 /* Mutable storage so callers that take addresses (e.g. `&tzname[0]`)
  * see consistent values.  The "GMT" string is the universal default
@@ -29,4 +32,12 @@ void tzset(void) {
   CODEPOD_MARKER_CALL(tzset);
   /* No-op: codepod is UTC-only; tzname/timezone/daylight stay at
    * their initialized values above. */
+}
+
+int clock_settime(clockid_t clockid, const struct timespec *tp) {
+  CODEPOD_MARKER_CALL(clock_settime);
+  (void)clockid;
+  (void)tp;
+  errno = ENOSYS;
+  return -1;
 }
