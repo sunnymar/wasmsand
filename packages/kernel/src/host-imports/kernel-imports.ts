@@ -485,7 +485,8 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
       if (typeof outPtr === 'number' && typeof outCap === 'number') {
         if (pid <= 0) {
           const result = opts.kernel.waitAnyChildNohang(callerPid);
-          if (!result) return -1;
+          if (result.state === 'running') return -1;
+          if (result.state === 'none') return -2;
           return writeJson(memory, outPtr, outCap, {
             pid: result.pid,
             exit_code: result.exitCode,

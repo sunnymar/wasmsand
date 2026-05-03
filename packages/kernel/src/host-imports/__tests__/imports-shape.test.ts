@@ -218,3 +218,30 @@ Deno.test("kernel host_waitpid_nohang reaps any exited child for pid -1", () => 
   ), -1);
   kernel.dispose();
 });
+
+Deno.test("kernel host_waitpid_nohang returns ECHILD for wait-any when no children remain", () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const kernel = new ProcessKernel();
+  const parentPid = kernel.allocPid();
+  const childPid = kernel.allocPid(parentPid, "child");
+  kernel.releaseProcess(childPid, 0);
+
+  const imports = createKernelImports({
+    memory,
+    kernel,
+    callerPid: parentPid,
+  });
+
+  const written = (imports.host_waitpid_nohang as (pid: number, outPtr: number, outCap: number) => number)(
+    -1,
+    4096,
+    1024,
+  );
+  assertEquals(readJson(memory, 4096, written), { pid: childPid, exit_code: 0 });
+  assertEquals((imports.host_waitpid_nohang as (pid: number, outPtr: number, outCap: number) => number)(
+    -1,
+    4096,
+    1024,
+  ), -2);
+  kernel.dispose();
+});

@@ -345,11 +345,18 @@ export class ProcessKernel {
     });
   }
 
-  waitAnyChildNohang(parentPid: number): { pid: number; exitCode: number } | null {
+  waitAnyChildNohang(parentPid: number):
+    | { state: 'exited'; pid: number; exitCode: number }
+    | { state: 'running' }
+    | { state: 'none' } {
     const exited = this.findExitedChild(parentPid);
-    if (!exited) return null;
-    this.reapProcess(exited.pid);
-    return { pid: exited.pid, exitCode: exited.exitCode };
+    if (exited) {
+      this.reapProcess(exited.pid);
+      return { state: 'exited', pid: exited.pid, exitCode: exited.exitCode };
+    }
+    return this.findRunningChildren(parentPid).length > 0
+      ? { state: 'running' }
+      : { state: 'none' };
   }
 
   waitpidNohang(pid: number, parentPid?: number): number {

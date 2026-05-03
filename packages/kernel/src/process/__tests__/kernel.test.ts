@@ -105,10 +105,22 @@ describe('ProcessKernel', () => {
     const exited = kernel.allocPid(parent, 'exited');
     kernel.releaseProcess(exited, 6);
 
-    expect(kernel.waitAnyChildNohang(parent)).toEqual({ pid: exited, exitCode: 6 });
+    expect(kernel.waitAnyChildNohang(parent)).toEqual({ state: 'exited', pid: exited, exitCode: 6 });
     expect(kernel.hasProcess(exited)).toBe(false);
-    expect(kernel.waitAnyChildNohang(parent)).toBeNull();
+    expect(kernel.waitAnyChildNohang(parent)).toEqual({ state: 'running' });
     expect(kernel.hasProcess(running)).toBe(true);
+    kernel.dispose();
+  });
+
+  it('waitAnyChildNohang distinguishes no children from running children', () => {
+    const kernel = new ProcessKernel();
+    const parent = kernel.allocPid();
+    expect(kernel.waitAnyChildNohang(parent)).toEqual({ state: 'none' });
+    const running = kernel.allocPid(parent, 'running');
+    expect(kernel.waitAnyChildNohang(parent)).toEqual({ state: 'running' });
+    kernel.releaseProcess(running, 0);
+    expect(kernel.waitAnyChildNohang(parent)).toEqual({ state: 'exited', pid: running, exitCode: 0 });
+    expect(kernel.waitAnyChildNohang(parent)).toEqual({ state: 'none' });
     kernel.dispose();
   });
 
