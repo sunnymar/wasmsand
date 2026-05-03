@@ -113,7 +113,7 @@ copy-fixtures: canaries
 clean:
 	rm -rf $(BUILD_DIR)
 
-RUST_CANARY_NAMES := dup2 getgroups affinity signal
+RUST_CANARY_NAMES := dup2 getgroups affinity signal pthread
 RUST_CANARY_PRE_OPT := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.pre-opt.wasm,$(RUST_CANARY_NAMES)))
 RUST_CANARY_WASM := $(addprefix $(BUILD_DIR)/rust/,$(addsuffix -canary.wasm,$(RUST_CANARY_NAMES)))
 RUST_STD_CANARY_NAMES := std-tempdir std-env-process std-paths std-fs std-file-lock std-thread std-process-status std-process-output std-process-env-cwd std-process-spawn-stdio std-process-child-stdout std-process-stdio-from std-net-connect std-net-stream std-net-peer-addr std-net-hostname std-net-shutdown std-net-try-clone std-net-socket-addr std-net-take-error std-net-nodelay std-net-peek std-net-nonblocking std-net-listener
@@ -127,7 +127,7 @@ rust-canaries: $(LIB) ensure-toolchain
 	CPCC_NO_WASM_OPT=1 \
 	CARGO_TARGET_DIR=$(REPO_ROOT)/target \
 	$(REPO_ROOT)/target/release/cargo-codepod codepod build --release \
-	  -p dup2-canary -p getgroups-canary -p affinity-canary -p signal-canary
+	  -p dup2-canary -p getgroups-canary -p affinity-canary -p signal-canary -p pthread-canary
 	@for n in $(RUST_CANARY_NAMES); do \
 	  cp $(REPO_ROOT)/target/wasm32-wasip1/release/$$n-canary.wasm $(BUILD_DIR)/rust/$$n-canary.wasm; \
 	done
