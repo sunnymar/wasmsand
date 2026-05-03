@@ -6,6 +6,7 @@
  */
 
 import { VFS } from './vfs/vfs.js';
+import { readFile } from 'node:fs/promises';
 import { OverlayVFS } from './vfs/overlay-vfs.js';
 import { NodeDirectoryRootProvider } from './vfs/node-directory-root-provider.js';
 import { CODEPOD_VERSION } from './version.js';
@@ -619,7 +620,7 @@ export class Sandbox {
     tools?: Array<{ name: string; path: string }>;
   } | undefined> {
     try {
-      const raw = await Deno.readTextFile(`${baseRoot}/etc/codepod/base-image.json`);
+      const raw = await readFile(`${baseRoot}/etc/codepod/base-image.json`, 'utf8');
       return JSON.parse(raw);
     } catch {
       return undefined;
