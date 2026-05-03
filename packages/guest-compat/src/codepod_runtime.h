@@ -142,6 +142,21 @@ int codepod_host_socket_option(int req_ptr, int req_len, int out_ptr, int out_ca
 __attribute__((import_module("codepod"), import_name("host_socket_close")))
 int codepod_host_socket_close(int req_ptr, int req_len);
 
+/* host_resolve_hostname(name_ptr, name_len, out_ptr, out_cap) -> i32
+ * Resolves a hostname to its first IPv4 address string (e.g. "93.184.216.34").
+ * Returns the number of bytes written to out_ptr on success (positive).
+ * Returns a negative EAI_* error code on failure (EAI_SYSTEM on browser or
+ * when no resolver is configured). Async — must be wrapped with
+ * WebAssembly.Suspending for JSPI (same pattern as host_network_fetch). */
+__attribute__((import_module("codepod"), import_name("host_resolve_hostname")))
+int codepod_host_resolve_hostname(int name_ptr, int name_len, int out_ptr, int out_cap);
+
+/* host_get_local_addr(out_ptr, out_cap) -> i32
+ * Writes the kernel-configured sandbox local IPv4 address string to out_ptr
+ * (e.g. "10.0.2.15"). Returns bytes written. Sync. */
+__attribute__((import_module("codepod"), import_name("host_get_local_addr")))
+int codepod_host_get_local_addr(int out_ptr, int out_cap);
+
 const char *codepod_netdb_host_for_addr(uint32_t addr_be);
 uint32_t codepod_netdb_addr_for_host(const char *host);
 int codepod_fd_get_status_flags(int fd);

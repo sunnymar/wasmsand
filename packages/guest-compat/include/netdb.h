@@ -1,11 +1,9 @@
 #ifndef CODEPOD_COMPAT_NETDB_H
 #define CODEPOD_COMPAT_NETDB_H
 
-/* wasi-libc has no <netdb.h>.  Codepod doesn't expose DNS to the
- * guest (sandbox networking goes through host_network_fetch, which
- * speaks HTTP/HTTPS, not DNS).  Declarations here; bodies live in
- * libcodepod_guest_compat (codepod_netdb.c) and return "host not
- * found" cleanly so callers can degrade gracefully. */
+/* wasi-libc has no <netdb.h>.  Codepod resolves hostnames to synthetic
+ * IPv4 addresses that socket/connect can map back to host names at the
+ * sandbox boundary. */
 
 #include <stddef.h>
 #include <sys/socket.h>
@@ -54,6 +52,70 @@ struct addrinfo {
 
 #ifndef AI_NUMERICHOST
 #define AI_NUMERICHOST 0x0004
+#endif
+
+#ifndef AI_NUMERICSERV
+#define AI_NUMERICSERV 0x0400
+#endif
+
+#ifndef AI_V4MAPPED
+#define AI_V4MAPPED 0
+#endif
+
+#ifndef AI_ALL
+#define AI_ALL 0
+#endif
+
+#ifndef AI_ADDRCONFIG
+#define AI_ADDRCONFIG 0
+#endif
+
+#ifndef EAI_BADFLAGS
+#define EAI_BADFLAGS -1
+#endif
+
+#ifndef EAI_NONAME
+#define EAI_NONAME -2
+#endif
+
+#ifndef EAI_AGAIN
+#define EAI_AGAIN -3
+#endif
+
+#ifndef EAI_FAIL
+#define EAI_FAIL -4
+#endif
+
+#ifndef EAI_NODATA
+#define EAI_NODATA EAI_NONAME
+#endif
+
+#ifndef EAI_FAMILY
+#define EAI_FAMILY -6
+#endif
+
+#ifndef EAI_SOCKTYPE
+#define EAI_SOCKTYPE -7
+#endif
+
+#ifndef EAI_SERVICE
+#define EAI_SERVICE -8
+#endif
+
+#ifndef EAI_ADDRFAMILY
+#define EAI_ADDRFAMILY -9
+#endif
+
+#ifndef EAI_MEMORY
+#define EAI_MEMORY -10
+#endif
+
+#ifndef EAI_SYSTEM
+#define EAI_SYSTEM -11
+#endif
+
+#ifndef EAI_OVERFLOW
+#define EAI_OVERFLOW -12
 #endif
 
 #ifndef NI_NUMERICHOST

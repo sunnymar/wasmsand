@@ -258,6 +258,13 @@ describe('Guest compatibility canaries', () => {
     sandbox = await Sandbox.create({
       wasmDir: FIXTURES,
       adapter: new NodeAdapter(),
+      dnsResolver: {
+        async resolve(hostname: string) {
+          if (hostname === 'example.com') return '93.184.216.34';
+          if (hostname === 'example.org') return '96.7.128.175';
+          return null;
+        },
+      },
     });
 
     const result = await sandbox.run('socket-canary');

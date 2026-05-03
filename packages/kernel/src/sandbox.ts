@@ -36,6 +36,7 @@ import { NetworkGateway } from './network/gateway.js';
 import type { NetworkPolicy } from './network/gateway.js';
 import { NetworkBridge, type NetworkBridgeLike } from './network/bridge.js';
 import type { SocketBackend, SocketListenPolicy } from './network/socket-backend.js';
+import { createDnsResolver, type DnsResolverLike } from './network/dns-resolver.js';
 import { getSocketShimSource, getSslShimSource, buildSiteCustomizeSource, getRequestsShimSource } from './network/socket-shim.js';
 import type { SecurityOptions, AuditEventHandler } from './security.js';
 import { CancelledError } from './security.js';
@@ -104,6 +105,15 @@ export interface SandboxOptions {
   socketBackend?: SocketBackend;
   /** Prepared policy surface for future bind/listen/accept support. */
   serverSockets?: SocketListenPolicy;
+  /**
+   * DNS resolver for guest getaddrinfo/gethostbyname.
+   * When absent and network is configured, createDnsResolver() auto-detects
+   * Deno.resolveDns or Node dns/promises at sandbox creation time.
+   * Returns EAI_SYSTEM in browser where no resolver is available.
+   */
+  dnsResolver?: DnsResolverLike;
+  /** Sandbox-local IPv4 address reported by getsockname(). Default: "10.0.2.15". */
+  socketLocalHost?: string;
   /** Security policy and limits. */
   security?: SecurityOptions;
   /** Persistence configuration. Default mode is 'ephemeral' (no persistence). */
@@ -149,6 +159,8 @@ interface SandboxParts {
   bridge?: NetworkBridgeLike;
   socketBackend?: SocketBackend;
   serverSockets?: SocketListenPolicy;
+  dnsResolver?: DnsResolverLike;
+  socketLocalHost?: string;
   networkPolicy?: NetworkPolicy;
   security?: SecurityOptions;
   workerExecutor?: WorkerExecutor;
@@ -179,6 +191,8 @@ export class Sandbox {
   private bridge: NetworkBridgeLike | null = null;
   private socketBackend: SocketBackend | undefined;
   private serverSockets: SocketListenPolicy | undefined;
+  private dnsResolver: DnsResolverLike | undefined;
+  private socketLocalHost: string | undefined;
   private networkPolicy: NetworkPolicy | undefined;
   private security: SecurityOptions | undefined;
   readonly sessionId: string;
@@ -207,6 +221,8 @@ export class Sandbox {
     this.bridge = parts.bridge ?? null;
     this.socketBackend = parts.socketBackend;
     this.serverSockets = parts.serverSockets;
+    this.dnsResolver = parts.dnsResolver;
+    this.socketLocalHost = parts.socketLocalHost;
     this.networkPolicy = parts.networkPolicy;
     this.security = parts.security;
     this.sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -260,6 +276,8 @@ export class Sandbox {
     const { bridge } = options.networkBridge
       ? { bridge: options.networkBridge }
       : await Sandbox.createNetworkBridge(options.network);
+    const dnsResolver = options.dnsResolver ??
+      (options.network ? (await createDnsResolver() ?? undefined) : undefined);
     const mgr = new ProcessManager(vfs, adapter, bridge, options.security?.toolAllowlist, moduleCache);
     const tools = options.baseRoot
       ? Sandbox.registerBaseRootTools(mgr, vfs)
@@ -333,6 +351,8 @@ export class Sandbox {
       bridge,
       socketBackend: options.socketBackend,
       serverSockets: options.serverSockets,
+      dnsResolver,
+      socketLocalHost: options.socketLocalHost,
       extensionRegistry,
       runCommandHandler: options.runCommandHandler,
       getSandbox: () => sandboxRef,
@@ -547,6 +567,8 @@ export class Sandbox {
       mgr, bridge, networkPolicy: options.network,
       socketBackend: options.socketBackend,
       serverSockets: options.serverSockets,
+      dnsResolver,
+      socketLocalHost: options.socketLocalHost,
       security: options.security, workerExecutor,
       extensionRegistry, storage: options.storage,
       bootArgv, bootImports: options.bootImports,
@@ -792,6 +814,8 @@ export class Sandbox {
     bridge?: NetworkBridgeLike;
     socketBackend?: SocketBackend;
     serverSockets?: SocketListenPolicy;
+    dnsResolver?: DnsResolverLike;
+    socketLocalHost?: string;
     extensionRegistry: ExtensionRegistry;
     runCommandHandler?: RunCommandHandler;
     getSandbox: () => Sandbox | undefined;
@@ -811,6 +835,8 @@ export class Sandbox {
       bridge,
       socketBackend,
       serverSockets,
+      dnsResolver,
+      socketLocalHost,
       extensionRegistry,
       runCommandHandler,
       getSandbox,
@@ -870,6 +896,8 @@ export class Sandbox {
           networkBridge: bridge,
           socketBackend,
           serverSockets,
+          dnsResolver,
+          socketLocalHost,
           extensionRegistry,
           nativeModules: mgr.nativeModules,
           threadsBackend,
@@ -1337,6 +1365,8 @@ export class Sandbox {
       bridge: this.bridge ?? undefined,
       socketBackend: this.socketBackend,
       serverSockets: this.serverSockets,
+      dnsResolver: this.dnsResolver,
+      socketLocalHost: this.socketLocalHost,
       extensionRegistry: this.extensionRegistry ?? new ExtensionRegistry(),
       runCommandHandler: this.runCommandHandler,
       getSandbox: () => this,
@@ -1551,6 +1581,8 @@ export class Sandbox {
       bridge,
       socketBackend: this.socketBackend,
       serverSockets: this.serverSockets,
+      dnsResolver: this.dnsResolver,
+      socketLocalHost: this.socketLocalHost,
       extensionRegistry: this.extensionRegistry ?? new ExtensionRegistry(),
       runCommandHandler: this.runCommandHandler,
       getSandbox: () => childRef,
@@ -1597,6 +1629,8 @@ export class Sandbox {
       mgr: childMgr, bridge, networkPolicy: this.networkPolicy,
       socketBackend: this.socketBackend,
       serverSockets: this.serverSockets,
+      dnsResolver: this.dnsResolver,
+      socketLocalHost: this.socketLocalHost,
       security: this.security, workerExecutor: childWorkerExecutor,
       extensionRegistry: this.extensionRegistry ?? undefined,
       storage: this.storage ?? undefined,

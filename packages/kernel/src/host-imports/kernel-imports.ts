@@ -18,6 +18,7 @@
  */
 
 import type { FetchRedirectMode, NetworkBridgeLike } from '../network/bridge.js';
+import type { DnsResolverLike } from '../network/dns-resolver.js';
 import type { SocketBackend, SocketListenPolicy, SocketPortMapping } from '../network/socket-backend.js';
 import { createLoopbackSocketBackend, createNetworkBridgeSocketBackend } from '../network/socket-backend.js';
 import type { ExtensionRegistry } from '../extension/registry.js';
@@ -53,6 +54,13 @@ export interface KernelImportsOptions {
 
   /** Fake sandbox-local IPv4 address reported by getsockname()/socket_addr(). */
   socketLocalHost?: string;
+
+  /**
+   * DNS resolver for guest getaddrinfo/gethostbyname (host_resolve_hostname).
+   * When absent, host_resolve_hostname returns EAI_SYSTEM (browser / no-network case).
+   * Use createDnsResolver() from network/dns-resolver.ts to get a runtime-appropriate impl.
+   */
+  dnsResolver?: DnsResolverLike;
 
   /** Prepared policy surface for future bind/listen/accept support. */
   serverSockets?: SocketListenPolicy;
@@ -587,6 +595,37 @@ export function createKernelImports(opts: KernelImportsOptions): Record<string, 
         const msg = e instanceof Error ? e.message : String(e);
         return writeJson(memory, outPtr, outCap, { error: msg });
       }
+    },
+
+    // host_resolve_hostname(name_ptr, name_len, out_ptr, out_cap) -> i32
+    // Resolves a hostname to its first IPv4 address string.
+    // Returns bytes written (positive) on success, or a negative EAI_* code.
+    // Async — wrapped with WebAssembly.Suspending for JSPI.
+    async host_resolve_hostname(namePtr: number, nameLen: number, outPtr: number, outCap: number): Promise<number> {
+      const EAI_NONAME = -2;
+      const EAI_SYSTEM = -11;
+      if (!opts.dnsResolver) return EAI_SYSTEM;
+      const name = readString(memory, namePtr, nameLen);
+      try {
+        const addr = await opts.dnsResolver.resolve(name);
+        if (!addr) return EAI_NONAME;
+        const bytes = new TextEncoder().encode(addr);
+        if (bytes.length >= outCap) return EAI_SYSTEM;
+        new Uint8Array(memory.buffer).set(bytes, outPtr);
+        return bytes.length;
+      } catch {
+        return EAI_SYSTEM;
+      }
+    },
+
+    // host_get_local_addr(out_ptr, out_cap) -> i32
+    // Writes the kernel-configured sandbox local IPv4 address to out_ptr.
+    // Returns bytes written. Sync.
+    host_get_local_addr(outPtr: number, outCap: number): number {
+      const bytes = new TextEncoder().encode(socketLocalHost);
+      if (bytes.length >= outCap) return -1;
+      new Uint8Array(memory.buffer).set(bytes, outPtr);
+      return bytes.length;
     },
 
     // ── Sockets (full mode only) ──

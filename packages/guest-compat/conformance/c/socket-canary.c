@@ -86,9 +86,47 @@ int main(void) {
 #ifndef AI_PASSIVE
 #error "AI_PASSIVE must be available for CPython-compatible socket headers"
 #endif
+#ifndef EAI_MEMORY
+#error "EAI_MEMORY must be available for coreutils-compatible netdb headers"
+#endif
 #ifndef SOMAXCONN
 #error "SOMAXCONN must be available for CPython-compatible socket headers"
 #endif
+  struct sockaddr_in *resolved = (struct sockaddr_in *)res->ai_addr;
+  uint32_t resolved_addr = ntohl(resolved->sin_addr.s_addr);
+  if (resolved_addr == 0 || resolved_addr == 0x7f000001u ||
+      ntohs(resolved->sin_port) != 80) {
+    emit("getaddrinfo_resolved_addr", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+  struct hostent *hostent = gethostbyname("example.com");
+  if (!hostent || hostent->h_addrtype != AF_INET || hostent->h_length != 4 ||
+      !hostent->h_addr_list || !hostent->h_addr_list[0] ||
+      memcmp(hostent->h_addr_list[0], &resolved->sin_addr.s_addr, 4) != 0) {
+    emit("gethostbyname_consistent_addr", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+  struct hostent *other_hostent = gethostbyname("example.org");
+  if (!other_hostent || !other_hostent->h_addr_list || !other_hostent->h_addr_list[0] ||
+      ntohl(*(uint32_t *)other_hostent->h_addr_list[0]) == 0) {
+    emit("gethostbyname_other_resolved_addr", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
+  char hostbuf[NI_MAXHOST];
+  char servbuf[NI_MAXSERV];
+  memset(hostbuf, 0, sizeof(hostbuf));
+  memset(servbuf, 0, sizeof(servbuf));
+  if (getnameinfo((struct sockaddr *)resolved, res->ai_addrlen,
+                  hostbuf, sizeof(hostbuf), servbuf, sizeof(servbuf), 0) != 0 ||
+      strcmp(hostbuf, "example.com") != 0 ||
+      strcmp(servbuf, "80") != 0) {
+    emit("getnameinfo_fake_addr", 1);
+    freeaddrinfo(res);
+    return 1;
+  }
   int socket_type = 0;
   socklen_t socket_type_len = sizeof(socket_type);
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_len) != 0 ||
